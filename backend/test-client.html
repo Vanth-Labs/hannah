@@ -1,0 +1,272 @@
+<h2 class="sr-only">Cliente de prueba para Hannah backend — audio, video, texto y WebSocket</h2>
+
+<div style="padding: 1rem 0; font-family: var(--font-sans);">
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+  <div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem;">
+    <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 8px;">Servidor</p>
+    <input id="serverUrl" type="text" value="http://localhost:3001" style="width: 100%; font-size: 13px; box-sizing: border-box;" />
+  </div>
+  <div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem;">
+    <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 8px;">Session ID</p>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <input id="sessionId" type="text" placeholder="(vacío)" style="flex: 1; font-size: 12px; font-family: var(--font-mono);" readonly />
+      <button id="btnSession" onclick="createSession()" style="white-space: nowrap; font-size: 13px; padding: 6px 12px;">Crear sesión</button>
+    </div>
+  </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+
+  <div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem;">
+    <p style="font-size: 13px; font-weight: 500; margin: 0 0 10px; color: var(--color-text-primary);"><i class="ti ti-microphone" aria-hidden="true" style="margin-right:6px;"></i>Audio (voz)</p>
+    <button id="btnRecord" onclick="toggleRecord()" style="width: 100%; margin-bottom: 8px; font-size: 13px;" disabled>Mantener para hablar</button>
+    <div id="audioStatus" style="font-size: 12px; color: var(--color-text-secondary); min-height: 18px;">Crea una sesión primero</div>
+    <audio id="audioOut" controls style="width: 100%; margin-top: 10px; display: none;"></audio>
+  </div>
+
+  <div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem;">
+    <p style="font-size: 13px; font-weight: 500; margin: 0 0 10px; color: var(--color-text-primary);"><i class="ti ti-keyboard" aria-hidden="true" style="margin-right:6px;"></i>Texto</p>
+    <textarea id="textInput" rows="3" placeholder="Escribe algo para Hannah..." style="width: 100%; font-size: 13px; resize: none; box-sizing: border-box;"></textarea>
+    <button onclick="sendText()" style="width: 100%; margin-top: 8px; font-size: 13px;" id="btnText" disabled>Enviar texto ↗</button>
+  </div>
+
+  <div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem;">
+    <p style="font-size: 13px; font-weight: 500; margin: 0 0 10px; color: var(--color-text-primary);"><i class="ti ti-camera" aria-hidden="true" style="margin-right:6px;"></i>Video (YOLO)</p>
+    <video id="videoFeed" autoplay muted style="width: 100%; border-radius: var(--border-radius-md); background: var(--color-background-secondary); min-height: 80px;"></video>
+    <div style="display: flex; gap: 6px; margin-top: 8px;">
+      <button onclick="startCamera()" style="flex: 1; font-size: 12px;" id="btnCamera">Activar cámara</button>
+      <button onclick="triggerYolo()" style="flex: 1; font-size: 12px;" id="btnYolo" disabled>Analizar escena</button>
+    </div>
+  </div>
+
+</div>
+
+<div style="background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+    <p style="font-size: 13px; font-weight: 500; margin: 0; color: var(--color-text-primary);"><i class="ti ti-terminal" aria-hidden="true" style="margin-right:6px;"></i>Log del pipeline</p>
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <span id="wsStatus" style="font-size: 12px; color: var(--color-text-secondary);">● desconectado</span>
+      <button onclick="clearLog()" style="font-size: 12px; padding: 4px 10px;">Limpiar</button>
+    </div>
+  </div>
+  <div id="logBox" style="font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 10px; height: 200px; overflow-y: auto; white-space: pre-wrap;"></div>
+</div>
+
+</div>
+
+<script>
+let ws = null;
+let sessionId = null;
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let cameraStream = null;
+let visionActive = false;
+let visionInterval = null;
+
+// ── Audio (FIX: AudioContext con cola chunk-por-chunk) ──────────────────────
+const audioCtx = new AudioContext();
+let audioQueue = [];
+let isPlaying = false;
+
+async function playChunk(base64wav) {
+    const binary = atob(base64wav);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    try {
+        const decoded = await audioCtx.decodeAudioData(bytes.buffer);
+        audioQueue.push(decoded);
+        if (!isPlaying) drainQueue();
+    } catch (e) {
+        console.warn('Chunk de audio inválido, ignorando', e);
+    }
+}
+
+function drainQueue() {
+    if (audioQueue.length === 0) { isPlaying = false; return; }
+    isPlaying = true;
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioQueue.shift();
+    source.connect(audioCtx.destination);
+    source.onended = drainQueue;
+    source.start();
+}
+// ───────────────────────────────────────────────────────────────────────────
+
+const serverUrl = () => document.getElementById('serverUrl').value.trim();
+
+function log(msg, type) {
+    const box = document.getElementById('logBox');
+    const ts = new Date().toLocaleTimeString();
+    const prefix = type === 'in' ? '← ' : type === 'out' ? '→ ' : type === 'err' ? '✖ ' : '  ';
+    box.textContent += `[${ts}] ${prefix}${msg}\n`;
+    box.scrollTop = box.scrollHeight;
+}
+
+function clearLog() { document.getElementById('logBox').textContent = ''; }
+
+async function createSession() {
+    try {
+        const res = await fetch(`${serverUrl()}/api/v1/session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+        });
+        const data = await res.json();
+        sessionId = data.sessionId;
+        document.getElementById('sessionId').value = sessionId;
+        log(`Sesión creada: ${sessionId}`, 'in');
+        connectWS();
+    } catch (e) {
+        log(`Error creando sesión: ${e.message}`, 'err');
+    }
+}
+
+function connectWS() {
+    const wsUrl = serverUrl().replace('http', 'ws') + `/ws?sessionId=${sessionId}`;
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+        document.getElementById('wsStatus').textContent = '● conectado';
+        document.getElementById('wsStatus').style.color = 'var(--color-text-success)';
+        document.getElementById('btnRecord').disabled = false;
+        document.getElementById('btnText').disabled = false;
+        log('WebSocket conectado', 'in');
+    };
+
+    ws.onclose = () => {
+        document.getElementById('wsStatus').textContent = '● desconectado';
+        document.getElementById('wsStatus').style.color = 'var(--color-text-secondary)';
+        log('WebSocket cerrado', 'err');
+    };
+
+    ws.onerror = () => log('WebSocket error', 'err');
+
+    // FIX: parsear el evento antes de usarlo
+    ws.onmessage = (event) => {
+        let msg;
+        try {
+            msg = JSON.parse(event.data);
+        } catch (e) {
+            log(`Mensaje no JSON: ${event.data}`, 'err');
+            return;
+        }
+        handleServerMessage(msg);
+    };
+}
+
+function handleServerMessage(msg) {
+    switch (msg.type) {
+        case 'user_transcript':
+            log(`Transcripción: "${msg.text}"`, 'in');
+            break;
+
+        // FIX: reproducir chunk inmediatamente en lugar de acumular
+        case 'audio_chunk':
+            log(`Audio chunk | texto: "${(msg.text || '').slice(0, 40)}..." | visemas: ${(msg.visemes || []).length}`, 'in');
+            if (msg.audio) playChunk(msg.audio);           // campo 'audio' del servidor
+            if (msg.audioBase64) playChunk(msg.audioBase64); // fallback alias
+            break;
+
+        case 'turn_complete':
+            log(`Turno completo | emoción: ${msg.emotion} | llm_ms: ${msg.metrics?.llm_ms}`, 'in');
+            document.getElementById('audioStatus').textContent = `Emoción: ${msg.emotion}`;
+            break;
+
+        case 'error':
+            log(`Error del servidor: ${msg.message}`, 'err');
+            break;
+
+        default:
+            log(JSON.stringify(msg), 'in');
+    }
+}
+
+async function toggleRecord() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) { log('WebSocket no conectado', 'err'); return; }
+
+    if (!isRecording) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            audioChunks = [];
+            ws.send(JSON.stringify({ command: 'SPEECH_START' }));
+            log('Grabando...', 'out');
+            document.getElementById('audioStatus').textContent = '🔴 Grabando...';
+            document.getElementById('btnRecord').textContent = 'Soltar para enviar';
+            mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+            mediaRecorder.start(100);
+            isRecording = true;
+        } catch (e) { log(`Error micrófono: ${e.message}`, 'err'); }
+    } else {
+        mediaRecorder.stop();
+        mediaRecorder.onstop = async () => {
+            const blob = new Blob(audioChunks, { type: 'audio/webm' });
+            const buffer = await blob.arrayBuffer();
+            ws.send(buffer);
+            ws.send(JSON.stringify({ command: 'SPEECH_END' }));
+            log(`Audio enviado (${(buffer.byteLength / 1024).toFixed(1)} KB)`, 'out');
+            document.getElementById('audioStatus').textContent = 'Procesando...';
+            document.getElementById('btnRecord').textContent = 'Mantener para hablar';
+        };
+        isRecording = false;
+    }
+}
+
+async function sendText() {
+    const text = document.getElementById('textInput').value.trim();
+    if (!text || !sessionId) return;
+    log(`Enviando texto: "${text}"`, 'out');
+    try {
+        const res = await fetch(`${serverUrl()}/api/v1/text`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId, text })
+        });
+        const data = await res.json();
+        log(`Respuesta: "${(data.response || '').slice(0, 80)}..."`, 'in');
+        log(`Emoción: ${data.emotion} | total_ms: ${data.latency?.total_ms}`, 'in');
+        if (data.audioBase64) playChunk(data.audioBase64);
+        document.getElementById('textInput').value = '';
+    } catch (e) { log(`Error: ${e.message}`, 'err'); }
+}
+
+async function startCamera() {
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        document.getElementById('videoFeed').srcObject = cameraStream;
+        document.getElementById('btnCamera').textContent = 'Cámara activa';
+        document.getElementById('btnYolo').disabled = false;
+        log('Cámara activada', 'in');
+    } catch (e) { log(`Error cámara: ${e.message}`, 'err'); }
+}
+
+function triggerYolo() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) { log('WebSocket no conectado', 'err'); return; }
+
+    if (!visionActive) {
+        ws.send(JSON.stringify({ command: 'VISION_START' }));
+        visionActive = true;
+        document.getElementById('btnYolo').textContent = 'Detener visión';
+        log('Loop de visión iniciado', 'out');
+
+        visionInterval = setInterval(() => {
+            const video = document.getElementById('videoFeed');
+            if (!video.videoWidth) return;
+            const canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 480;
+            canvas.getContext('2d').drawImage(video, 0, 0, 640, 480);
+            const frame = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+            ws.send(JSON.stringify({ command: 'VISION_FRAME', frame }));
+        }, 2000);
+    } else {
+        clearInterval(visionInterval);
+        ws.send(JSON.stringify({ command: 'VISION_STOP' }));
+        visionActive = false;
+        document.getElementById('btnYolo').textContent = 'Analizar escena';
+        log('Loop de visión detenido', 'out');
+    }
+}
+</script>

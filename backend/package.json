@@ -1,0 +1,44 @@
+{
+  "name": "hannah-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "sidecar:asr": "cd sidecar/asr && ../.venv/bin/python -m uvicorn main:app --port 8001 --reload",
+    "sidecar:tts": "cd sidecar/tts && ../.venv/bin/python -m uvicorn main:app --port 8002 --reload",
+    "sidecar:vision": "cd sidecar/vision && ../.venv/bin/python -m uvicorn main:app --port 8003 --reload",
+    "sidecar:motion": "cd sidecar/motion && ../../../.venv/bin/python -m uvicorn main:app --port 8004"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "transform": {}
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.98.0",
+    "axios": "^1.16.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "form-data": "^4.0.5",
+    "helmet": "^8.2.0",
+    "openai": "^6.39.0",
+    "uuid": "^14.0.0",
+    "winston": "^3.19.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.2.2"
+  }
+}
