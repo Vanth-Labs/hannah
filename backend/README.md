@@ -900,3 +900,16 @@ git push -u origin main
 ---
 
 _Last updated: July 2026 — Hannah v0.1 — Backend architecture document_
+
+## Setup / assets not included
+
+```bash
+npm install
+cp .env.example .env     # defaults to the local stack (Ollama + sidecars)
+npm start                # port 3001
+```
+
+Excluded from the repo (obtain locally):
+- Sidecar model weights: `sidecar/tts/kokoro-v1.0.onnx`, `voices-v1.0.bin`,
+  `sidecar/vision/yolov8n.pt`.
+- Python venvs (`sidecar/.venv`, and the motion sidecar's root venv), `node_modules`, `.env`.
