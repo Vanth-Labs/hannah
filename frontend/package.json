@@ -1,0 +1,25 @@
+{
+  "name": "hannah-frontend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
+    "@react-three/drei": "^9.109.2",
+    "@react-three/fiber": "^8.17.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.167.1",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/three": "^0.167.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0"
+  }
+}

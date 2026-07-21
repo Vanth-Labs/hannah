@@ -1,0 +1,239 @@
+// src/hooks/useWebSocket.js
+import { useEffect, useRef, useCallback } from 'react';
+import { useHannahStore } from '../store/hannahStore.js';
+
+const API_BASE = '';
+
+// Mapa de visemas del backend a morph targets de Ready Player Me / modelos estándar
+export const VISEME_MAP = {
+    'sil': 'viseme_sil',
+    'PP':  'viseme_PP',
+    'FF':  'viseme_FF',
+    'TH':  'viseme_TH',
+    'DD':  'viseme_DD',
+    'kk':  'viseme_kk',
+    'CH':  'viseme_CH',
+    'SS':  'viseme_SS',
+    'nn':  'viseme_nn',
+    'RR':  'viseme_RR',
+    'aa':  'viseme_aa',
+    'E':   'viseme_E',
+    'I':   'viseme_I',
+    'O':   'viseme_O',
+    'U':   'viseme_U',
+};
+
+export function useWebSocket() {
+    const ws = useRef(null);
+    const audioCtx = useRef(null);
+    const audioQueue = useRef([]);
+    const isPlaying = useRef(false);
+    const visemeSchedule = useRef([]);  // visemas pendientes de reproducir
+    const visemeTimer = useRef(null);
+
+    const {
+        setSession, setConnected, setEmotion,
+        setTranscript, setUserTranscript, addLog,
+    } = useHannahStore.getState();
+
+    // ── Audio: cola de chunks con AudioContext ──────────────────────────────
+    const getAudioCtx = () => {
+        if (!audioCtx.current || audioCtx.current.state === 'closed') {
+            audioCtx.current = new AudioContext();
+        }
+        if (audioCtx.current.state === 'suspended') {
+            audioCtx.current.resume();
+        }
+        return audioCtx.current;
+    };
+
+    // ── Visemas: programar morph targets cuando el chunk EMPIEZA a sonar ───
+    // El backend manda time_ms relativo al inicio de la oración.
+    const scheduleVisemes = (visemes) => {
+        if (!visemes?.length) return;
+
+        visemes.forEach(({ viseme, time_ms, weight }) => {
+            const id = setTimeout(() => {
+                useHannahStore.getState().setVisemes([{ viseme, weight: weight ?? 1.0 }]);
+                // Reset a silencio después de 120ms
+                setTimeout(() => {
+                    useHannahStore.getState().setVisemes([{ viseme: 'sil', weight: 0 }]);
+                }, 120);
+            }, time_ms || 0);
+            visemeSchedule.current.push(id);
+        });
+    };
+
+    // Decodifica los arrays float32 (little-endian) del sidecar de movimiento
+    const decodeMotion = (motion) => {
+        if (!motion?.poses_b64) return null;
+        const toF32 = (b64) => {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new Float32Array(bytes.buffer);
+        };
+        return {
+            fps: motion.fps || 30,
+            numFrames: motion.num_frames,
+            poses: toF32(motion.poses_b64),   // (T*165) axis-angle, 55 joints SMPL-X
+            trans: toF32(motion.trans_b64),   // (T*3)
+        };
+    };
+
+    const drainQueue = useCallback(() => {
+        if (audioQueue.current.length === 0) {
+            isPlaying.current = false;
+            useHannahStore.getState().setIsSpeaking(false);
+            return;
+        }
+        isPlaying.current = true;
+        useHannahStore.getState().setIsSpeaking(true);
+
+        const { buffer, visemes, motion, action } = audioQueue.current.shift();
+        const ctx = getAudioCtx();
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.onended = drainQueue;
+        scheduleVisemes(visemes);
+        // El movimiento (co-speech) arranca sincronizado con el inicio del audio.
+        if (motion) {
+            useHannahStore.getState().setCurrentMotion({ ...motion, startedAt: performance.now() });
+        }
+        // Gesto deliberado (Mixamo): se dispara junto al audio de su oración.
+        if (action) {
+            useHannahStore.getState().setGestureTrigger({ name: action, startedAt: performance.now() });
+        }
+        source.start();
+    }, []);
+
+    const playChunk = useCallback(async (base64wav, visemes, motion, action) => {
+        const ctx = getAudioCtx();
+        const binary = atob(base64wav);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+        try {
+            const decoded = await ctx.decodeAudioData(bytes.buffer);
+            audioQueue.current.push({
+                buffer: decoded,
+                visemes: visemes || [],
+                motion: decodeMotion(motion),
+                action: action || null,
+            });
+            if (!isPlaying.current) drainQueue();
+        } catch (e) {
+            console.warn('Chunk de audio inválido, ignorando:', e.message);
+        }
+    }, [drainQueue]);
+
+    const clearVisemeSchedule = () => {
+        visemeSchedule.current.forEach(clearTimeout);
+        visemeSchedule.current = [];
+        useHannahStore.getState().setVisemes([]);
+    };
+
+    // ── Handlers de mensajes del servidor ──────────────────────────────────
+    const handleMessage = useCallback((msg) => {
+        switch (msg.type) {
+            case 'user_transcript':
+                setUserTranscript(msg.text || '');
+                addLog(`[usuario] ${msg.text}`, 'user');
+                break;
+
+            case 'audio_chunk':
+                if (msg.text) setTranscript(msg.text);
+                if (msg.audio) playChunk(msg.audio, msg.visemes, msg.motion, msg.action);
+                else if (msg.audioBase64) playChunk(msg.audioBase64, msg.visemes, msg.motion, msg.action);
+                break;
+
+            case 'turn_complete':
+                if (msg.emotion) setEmotion(msg.emotion);
+                addLog(`[turno] emoción: ${msg.emotion} | llm ${msg.metrics?.llm_ms}ms`, 'info');
+                break;
+
+            case 'vision_started':
+                addLog('[visión] loop activo', 'vision');
+                break;
+
+            case 'error':
+                addLog(`[error] ${msg.message}`, 'error');
+                break;
+
+            default:
+                addLog(JSON.stringify(msg), 'debug');
+        }
+    }, [playChunk, setTranscript, setEmotion, setUserTranscript, addLog]);
+
+    // ── Iniciar sesión y WS ─────────────────────────────────────────────────
+    const connect = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/v1/session`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}',
+            });
+            const { sessionId } = await res.json();
+            setSession(sessionId);
+            addLog(`sesión: ${sessionId}`, 'info');
+
+	    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+	    const wsUrl = `${protocol}//${window.location.host}/ws?sessionId=${sessionId}`;
+            ws.current = new WebSocket(wsUrl);
+
+            ws.current.onopen = () => {
+                setConnected(true);
+                addLog('WebSocket conectado', 'info');
+            };
+
+            ws.current.onclose = () => {
+                setConnected(false);
+                addLog('WebSocket desconectado', 'error');
+            };
+
+            ws.current.onerror = () => addLog('WebSocket error', 'error');
+
+            ws.current.onmessage = (event) => {
+                try {
+                    handleMessage(JSON.parse(event.data));
+                } catch (e) {
+                    console.error('WS parse error:', e);
+                }
+            };
+        } catch (e) {
+            addLog(`Error conectando: ${e.message}`, 'error');
+        }
+    }, [handleMessage, setSession, setConnected, addLog]);
+
+    // ── API pública ─────────────────────────────────────────────────────────
+    const sendCommand = useCallback((payload) => {
+        if (ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.send(JSON.stringify(payload));
+        }
+    }, []);
+
+    const sendAudio = useCallback((buffer) => {
+        if (ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.send(buffer);
+        }
+    }, []);
+
+    // El texto del HUD viaja por el WebSocket: pasa por el orquestador completo
+    // (streaming por oración + visemas + gestos EMAGE), igual que la voz.
+    const sendText = useCallback((text) => {
+        addLog(`[texto] ${text}`, 'out');
+        sendCommand({ command: 'TEXT_INPUT', text });
+    }, [addLog, sendCommand]);
+
+    useEffect(() => {
+        connect();
+        return () => {
+            clearVisemeSchedule();
+            ws.current?.close();
+            audioCtx.current?.close();
+        };
+    }, []);
+
+    return { sendCommand, sendAudio, sendText, ws };
+}
