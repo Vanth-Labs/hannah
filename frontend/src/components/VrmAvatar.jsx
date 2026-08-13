@@ -17,10 +17,7 @@ const FLOOR_Y = -1.6;
 const _axis = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 const _rot = new THREE.Quaternion();
-// Temporales para auto-lookat (cabeza/ojos siguen la cámara).
-const _v = new THREE.Vector3();
-const _v2 = new THREE.Vector3();
-const _pq = new THREE.Quaternion();
+// Temporales para auto-lookat (cabeza/ojos siguen el cursor).
 const _look = new THREE.Quaternion();
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
@@ -271,16 +268,13 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             }
         }
 
-        // ── AUTO-LOOKAT: cabeza + ancla de ojos hacia la cámara ─────────
-        // Se aplica DESPUÉS de cuerpo/gesto (mezcla parcial, no los mata). El
-        // ancla de ojos que calcula aquí lo consume el bloque de Mirada abajo.
+        // ── AUTO-LOOKAT: cabeza + ojos siguen el CURSOR ─────────────────
+        // Se aplica DESPUÉS de cuerpo/gesto (mezcla parcial, no los mata).
+        // state.pointer es la posición del mouse en NDC: x,y ∈ [-1,1]
+        // (x: izq→der, y: abajo→arriba). yawSign/pitchSign corrigen el sentido.
         if (autoLookat && rig.head && rig.restQuat['15']) {
-            rig.head.getWorldPosition(_v);              // pos mundial de la cabeza
-            state.camera.getWorldPosition(_v2).sub(_v).normalize(); // dir a la cámara (mundo)
-            rig.head.parent.getWorldQuaternion(_pq).invert();
-            _v2.applyQuaternion(_pq);                   // dir en espacio local del padre
-            const yaw = THREE.MathUtils.clamp(Math.atan2(_v2.x, _v2.z) * LOOK.yawSign, -LOOK.headYaw, LOOK.headYaw);
-            const pitch = THREE.MathUtils.clamp(Math.atan2(_v2.y, Math.hypot(_v2.x, _v2.z)) * LOOK.pitchSign, -LOOK.headPitch, LOOK.headPitch);
+            const yaw = state.pointer.x * LOOK.headYaw * LOOK.yawSign;
+            const pitch = state.pointer.y * LOOK.headPitch * LOOK.pitchSign;
             _euler.set(pitch, yaw, 0);
             _look.setFromEuler(_euler);
             _rot.copy(rig.restQuat['15']).multiply(_look);   // rest · look
@@ -290,8 +284,8 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             rig.head.quaternion.slerp(_rot, w);
             // Ancla de ojos: fracción del mismo yaw/pitch (los ojos afinan).
             face.gazeAnchor.set(
-                THREE.MathUtils.clamp(yaw, -LOOK.eyeYaw, LOOK.eyeYaw),
-                THREE.MathUtils.clamp(pitch, -LOOK.eyePitch, LOOK.eyePitch),
+                THREE.MathUtils.clamp(state.pointer.x * LOOK.eyeYaw * LOOK.yawSign, -LOOK.eyeYaw, LOOK.eyeYaw),
+                THREE.MathUtils.clamp(state.pointer.y * LOOK.eyePitch * LOOK.pitchSign, -LOOK.eyePitch, LOOK.eyePitch),
             );
         } else {
             face.gazeAnchor.set(0, 0);
