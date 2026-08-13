@@ -17,6 +17,21 @@ const FLOOR_Y = -1.6;
 const _axis = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 const _rot = new THREE.Quaternion();
+// Temporales para auto-lookat (cabeza/ojos siguen la cámara).
+const _v = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _pq = new THREE.Quaternion();
+const _look = new THREE.Quaternion();
+const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+// Auto-lookat: límites y pesos (radianes). Ajustables si mira raro.
+// yawSign/pitchSign corrigen el eje "adelante" del hueso de cabeza si sale invertido.
+const LOOK = {
+    headYaw: 0.44, headPitch: 0.26,   // clamp cabeza (~25° / ~15°)
+    headWeight: 0.5,                  // mezcla sobre el co-speech (no lo mata)
+    eyeYaw: 0.22, eyePitch: 0.13,     // clamp ojos
+    yawSign: 1, pitchSign: 1,
+};
 
 // La pelvis se mantiene VERTICAL: nos quedamos solo con el giro alrededor del
 // eje Y (encaramiento a cámara) y descartamos la inclinación adelante/atrás.
@@ -143,6 +158,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         current: {}, blinkNext: 2 + Math.random() * 3, blinkT: -1,
         saccadeNext: 1 + Math.random() * 2,
         gaze: new THREE.Vector2(0, 0), gazeTarget: new THREE.Vector2(0, 0),
+        saccade: new THREE.Vector2(0, 0), gazeAnchor: new THREE.Vector2(0, 0),
     }).current;
 
     // Clips de gesto (Mixamo horneado). Se cargan una vez.
@@ -179,7 +195,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
     };
 
     useFrame((state, delta) => {
-        const { emotion, currentVisemes, isSpeaking, currentMotion, gestureTrigger } = useHannahStore.getState();
+        const { emotion, currentVisemes, isSpeaking, currentMotion, gestureTrigger, autoLookat } = useHannahStore.getState();
         const t = state.clock.getElapsedTime();
         const aFast = Math.min(1, 14 * delta);
         const aSlow = Math.min(1, 3 * delta);
@@ -255,6 +271,32 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             }
         }
 
+        // ── AUTO-LOOKAT: cabeza + ancla de ojos hacia la cámara ─────────
+        // Se aplica DESPUÉS de cuerpo/gesto (mezcla parcial, no los mata). El
+        // ancla de ojos que calcula aquí lo consume el bloque de Mirada abajo.
+        if (autoLookat && rig.head && rig.restQuat['15']) {
+            rig.head.getWorldPosition(_v);              // pos mundial de la cabeza
+            state.camera.getWorldPosition(_v2).sub(_v).normalize(); // dir a la cámara (mundo)
+            rig.head.parent.getWorldQuaternion(_pq).invert();
+            _v2.applyQuaternion(_pq);                   // dir en espacio local del padre
+            const yaw = THREE.MathUtils.clamp(Math.atan2(_v2.x, _v2.z) * LOOK.yawSign, -LOOK.headYaw, LOOK.headYaw);
+            const pitch = THREE.MathUtils.clamp(Math.atan2(_v2.y, Math.hypot(_v2.x, _v2.z)) * LOOK.pitchSign, -LOOK.headPitch, LOOK.headPitch);
+            _euler.set(pitch, yaw, 0);
+            _look.setFromEuler(_euler);
+            _rot.copy(rig.restQuat['15']).multiply(_look);   // rest · look
+            // Bajar el peso si un gesto mueve la cabeza (nod/shake) para no pelear.
+            const gName = gesture.current?.clip?.name;
+            const w = (gName === 'nod' || gName === 'shake_no') ? LOOK.headWeight * 0.3 : LOOK.headWeight;
+            rig.head.quaternion.slerp(_rot, w);
+            // Ancla de ojos: fracción del mismo yaw/pitch (los ojos afinan).
+            face.gazeAnchor.set(
+                THREE.MathUtils.clamp(yaw, -LOOK.eyeYaw, LOOK.eyeYaw),
+                THREE.MathUtils.clamp(pitch, -LOOK.eyePitch, LOOK.eyePitch),
+            );
+        } else {
+            face.gazeAnchor.set(0, 0);
+        }
+
         // ── CARA: emoción ───────────────────────────────────────────────
         const target = EMOTION_TO_FCL[emotion] || {};
         for (const key of ALL_EMOTION_FCL) lerpMorph(key, target[key] ?? 0, aSlow);
@@ -274,8 +316,13 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         else setMorph(BLINK_FCL, 0);
 
         // ── Mirada ──────────────────────────────────────────────────────
+        // gazeTarget = ancla (cámara, si autoLookat) + micro-saccade aleatorio.
         face.saccadeNext -= delta;
-        if (face.saccadeNext <= 0) { face.gazeTarget.set((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.08); face.saccadeNext = 1.2 + Math.random() * 2.5; }
+        if (face.saccadeNext <= 0) {
+            face.saccade.set((Math.random() - 0.5) * 0.06, (Math.random() - 0.5) * 0.04);
+            face.saccadeNext = 1.2 + Math.random() * 2.5;
+        }
+        face.gazeTarget.set(face.gazeAnchor.x + face.saccade.x, face.gazeAnchor.y + face.saccade.y);
         face.gaze.lerp(face.gazeTarget, aSlow);
         if (rig.leftEye && rig.eyeRestL) {
             _quat.setFromEuler(new THREE.Euler(face.gaze.y, face.gaze.x, 0));
