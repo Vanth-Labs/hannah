@@ -23,6 +23,9 @@ export const useHannahStore = create((set, get) => ({
     currentMotion: null,       // { fps, numFrames, poses: Float32Array, trans: Float32Array, startedAt }
     gestureTrigger: null,      // { name, startedAt } — gesto deliberado (Mixamo) sobre el co-speech
 
+    // Comportamiento del avatar (toggles de Settings)
+    autoLookat: true,          // la cabeza/ojos siguen a la cámara (Fase 3)
+
     // Log de pipeline
     logs: [],
 
@@ -40,6 +43,7 @@ export const useHannahStore = create((set, get) => ({
     setAvatarLoaded: (avatarLoaded) => set({ avatarLoaded }),
     setCurrentMotion: (currentMotion) => set({ currentMotion }),
     setGestureTrigger: (gestureTrigger) => set({ gestureTrigger }),
+    setAutoLookat: (autoLookat) => set({ autoLookat }),
 
     addLog: (msg, type = 'info') => set((state) => ({
         logs: [...state.logs.slice(-49), {

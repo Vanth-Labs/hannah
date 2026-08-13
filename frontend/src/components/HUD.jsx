@@ -1,6 +1,7 @@
 // src/components/HUD.jsx
 import { useRef, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
+import { SettingsPanel } from './SettingsPanel.jsx';
 
 const EMOTION_COLOR = {
     neutral:  '#7c8fa6',
@@ -13,6 +14,7 @@ const EMOTION_COLOR = {
 
 export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording }) {
     const [input, setInput] = useState('');
+    const [showSettings, setShowSettings] = useState(false);
     const { emotion, isSpeaking, visionActive, transcript, userTranscript, connected, logs,
         avatarMode, setAvatarMode } = useHannahStore();
 
@@ -70,10 +72,29 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
                 >
                     {avatarMode === 'vrm' ? '✿ anime' : '⚡ smpl-x'}
                 </button>
+                {/* Ajustes: trae tu propio modelo/API */}
+                <button
+                    onClick={() => setShowSettings(true)}
+                    title="Ajustes (modelo/API, voz, avatar)"
+                    style={{
+                        pointerEvents: 'auto',
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: '12px',
+                        padding: '4px 10px',
+                        color: 'rgba(255,255,255,0.6)',
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                    }}
+                >
+                    ⚙
+                </button>
                 <span style={{ fontFamily: "'Syne', sans-serif", letterSpacing: '0.2em', fontSize: '12px', color: 'rgba(255,255,255,0.15)' }}>
                     HANNAH
                 </span>
             </div>
+
+            {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
             {/* ── Transcript flotante ───────────────────────────────────── */}
             {(transcript || userTranscript) && (
