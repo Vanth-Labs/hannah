@@ -30,6 +30,36 @@ const LOOK = {
     yawSign: 1, pitchSign: 1,
 };
 
+// ── Idle procedural: micro-movimientos cuando NO habla (vida en reposo) ──
+// Respiración (pecho/columna) + balanceo lateral (peso de un pie a otro) +
+// deriva sutil de brazos, desfasados para que se vea orgánico. Radianes chicos.
+const TAU = Math.PI * 2;
+const IDLE = {
+    breath: 0.045, breathHz: 0.22,   // respiración (~1 cada 4.5 s)
+    sway: 0.03, swayHz: 0.12,        // balanceo (~1 cada 8 s)
+    armSway: 0.025,
+};
+const _idleE = new THREE.Euler();
+const _idleQ = new THREE.Quaternion();
+// Offset de idle por hueso (o null). Se multiplica sobre el reposo.
+function idleOffset(idx, t) {
+    const b = Math.sin(t * IDLE.breathHz * TAU);   // respiración
+    const s = Math.sin(t * IDLE.swayHz * TAU);     // balanceo
+    let x = 0, z = 0;
+    switch (idx) {
+        case '0':  z = s * IDLE.sway * 0.5; break;                         // pelvis: balanceo lateral
+        case '3':  x = b * IDLE.breath * 0.4; z = s * IDLE.sway; break;    // columna baja
+        case '6':  x = b * IDLE.breath * 0.7; z = s * IDLE.sway * 0.6; break; // pecho (respira más)
+        case '9':  x = b * IDLE.breath; break;                             // pecho alto
+        case '12': x = -b * IDLE.breath * 0.3; break;                      // cuello contrarresta
+        case '16': z = s * IDLE.armSway; break;                            // brazo L sigue el torso
+        case '17': z = s * IDLE.armSway; break;                            // brazo R
+        default: return null;
+    }
+    _idleE.set(x, 0, z);
+    return _idleQ.setFromEuler(_idleE);
+}
+
 // La pelvis se mantiene VERTICAL: nos quedamos solo con el giro alrededor del
 // eje Y (encaramiento a cámara) y descartamos la inclinación adelante/atrás.
 // El offset de pelvis traía un pitch de ~28° que ladeaba todo el cuerpo.
@@ -235,7 +265,10 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
                 else if (idx === '17') _quat.multiply(ABDUCT_R);
                 bone.quaternion.slerp(_quat, aBody);
             } else {
-                bone.quaternion.slerp(rig.restQuat[idx], Math.min(1, 4 * delta));
+                // Idle: reposo + micro-movimiento procedural (respiración/balanceo).
+                const off = idleOffset(idx, t);
+                const tq = off ? _quat.copy(rig.restQuat[idx]).multiply(off) : rig.restQuat[idx];
+                bone.quaternion.slerp(tq, Math.min(1, 4 * delta));
             }
         }
 
