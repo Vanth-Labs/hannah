@@ -7,6 +7,11 @@ import { config } from './config.js';
 import { logger } from './utils/logger.js';
 import { router as apiRouter } from './api/router.js';
 import { initWebSocketGateway } from './gateway/websocket.js';
+import { loadPersisted } from './state/settings.js';
+
+// Aplica la config de proveedores guardada por el usuario (data/settings.json)
+// por encima de los defaults de .env, antes de servir peticiones.
+loadPersisted();
 
 const app = express();
 

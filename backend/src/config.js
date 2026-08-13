@@ -60,6 +60,8 @@ At the end of each response, append an emotion tag on a new line in the format:
     provider: process.env.TTS_PROVIDER || 'kokoro',
     voiceId: process.env.ELEVENLABS_VOICE_ID || 'af_bella', // Doubles as the Kokoro voice ID (af_* = American English)
     sidecarUrl: process.env.TTS_SIDECAR_URL || 'http://127.0.0.1:8002',
+    apiKey: process.env.ELEVENLABS_API_KEY || '', // usado solo por el proveedor elevenlabs
+    model: process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2',
   },
   vision: {
     sidecarUrl: process.env.VISION_SIDECAR_URL || 'http://127.0.0.1:8003',

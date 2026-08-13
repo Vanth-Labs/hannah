@@ -15,15 +15,15 @@ export const synthesizeSpeechStream = async (text) => {
         return runKokoroLocalStream(text);
     }
 
-    // --- FALLBACK ELEVENLABS ANTERIOR (Por si decides volver) ---
+    // --- ELEVENLABS (proveedor cloud, configurable en Settings) ---
     const voiceId = config.tts.voiceId;
     const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`;
     try {
         const response = await axios({
             method: 'POST',
             url: url,
-            data: { text, model_id: 'eleven_multilingual_v2' },
-            headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
+            data: { text, model_id: config.tts.model || 'eleven_multilingual_v2' },
+            headers: { 'xi-api-key': config.tts.apiKey, 'Content-Type': 'application/json' },
             responseType: 'stream',
         });
         return { audioStream: response.data, format: 'mp3', sample_rate: 44100, tts_latency_ms: timer.stop() };

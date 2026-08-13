@@ -12,6 +12,9 @@ venv/
 # Variables de entorno
 .env
 
+# Config de proveedores guardada por el usuario (incluye API keys) — ver src/state/settings.js
+data/
+
 # Python (Caché global)
 **/__pycache__/
 *.pyc

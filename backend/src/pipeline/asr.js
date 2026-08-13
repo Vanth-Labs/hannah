@@ -67,7 +67,7 @@ const transcribeCloud = async (audioBuffer, mimeType, timer) => {
 
         const response = await openai.audio.transcriptions.create({
             file,
-            model: 'whisper-1',
+            model: config.asr.model || 'whisper-1',
             ...(config.asr.language ? { language: config.asr.language } : {}),
             temperature: 0.0,
         });

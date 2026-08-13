@@ -4,11 +4,22 @@ import { config } from '../config.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
 
-// Initialize Generic OpenAI-Compatible Client (Groq, Ollama, OpenRouter, or OpenAI)
-const genericOpenAI = new OpenAI({
-    apiKey: config.llm.apiKey,
-    baseURL: config.llm.baseUrl || undefined,
-});
+// Cliente OpenAI-compatible (Groq, Ollama, OpenRouter, OpenAI…) construido bajo
+// demanda y memoizado. Se reconstruye SOLO si cambian apiKey o baseUrl en runtime
+// (vía POST /settings), así el usuario puede cambiar de proveedor sin reiniciar.
+let _client = null;
+let _clientKey = '';
+const getLlmClient = () => {
+    const key = `${config.llm.apiKey}|${config.llm.baseUrl}`;
+    if (!_client || key !== _clientKey) {
+        _client = new OpenAI({
+            apiKey: config.llm.apiKey || 'not-needed', // Ollama/local ignoran la key
+            baseURL: config.llm.baseUrl || undefined,
+        });
+        _clientKey = key;
+    }
+    return _client;
+};
 
 /**
  * Agnostic Streaming Wrapper for Dialogue Engines
@@ -34,8 +45,8 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete) => {
             }))
         ];
 
-        const stream = await genericOpenAI.chat.completions.create({
-            model: config.llm.model, // Pulls whatever string you defined in .env (e.g., LLaMA)
+        const stream = await getLlmClient().chat.completions.create({
+            model: config.llm.model, // se lee por llamada: cambia sin reiniciar
             messages: formattedMessages,
             max_tokens: 400,
             stream: true,

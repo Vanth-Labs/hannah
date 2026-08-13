@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { getHealth } from './health.js';
 import { createSession, deleteSession } from './sessions.js';
+import { readSettings, writeSettings } from './settings.js';
 import { generateDialogueStream } from '../pipeline/llm.js';
 import { synthesizeSpeechStream } from '../pipeline/tts.js';
 import { generateVisemesFromText } from '../pipeline/lipsync.js';
@@ -11,6 +12,10 @@ const router = Router();
 router.get('/health', getHealth);
 router.post('/session', createSession);
 router.delete('/session/:id', deleteSession);
+
+// Config de proveedores (BYO model/API) — global, redactada al leer
+router.get('/settings', readSettings);
+router.post('/settings', writeSettings);
 
 // TESTING FALLBACK: Evaluates all internal Core AI modules working smoothly as a unified chain
 router.post('/text', async (req, res) => {
