@@ -71,9 +71,13 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete) => {
  * Pure helper: extracts the system-enforced [EMOTION:xx] tag and strips it from the text.
  * Exported for unit testing.
  */
+// Emociones que el rig de cara (retargetFace.js EMOTION_TO_FCL) sabe expresar.
+const EMOTIONS = ['neutral', 'happy', 'surprised', 'thinking', 'sad', 'angry', 'curious', 'alert'];
+
 export const parseLlmResponse = (rawResponse) => {
-    const emotionMatch = rawResponse.match(/\[EMOTION:(neutral|happy|surprised|thinking|sad)\]/i);
-    const emotion = emotionMatch ? emotionMatch[1].toLowerCase() : 'neutral';
+    const emotionMatch = rawResponse.match(/\[EMOTION:\s*([a-z]+)\s*\]/i);
+    const raw = emotionMatch ? emotionMatch[1].toLowerCase() : 'neutral';
+    const emotion = EMOTIONS.includes(raw) ? raw : 'neutral';   // desconocida -> neutral
 
     // Strip out the emotion text before sending to user/audio modules
     const text = rawResponse.replace(/\[EMOTION:.*?\]/gi, '').trim();

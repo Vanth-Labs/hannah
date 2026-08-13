@@ -54,7 +54,7 @@ Do NOT split the greeting and the tag into two sentences, or she will gesture-ta
 first and only wave at the end.
 
 At the end of each response, append an emotion tag on a new line in the format:
-[EMOTION:neutral|happy|surprised|thinking|sad]`,
+[EMOTION:neutral|happy|surprised|thinking|sad|angry|curious|alert]`,
   },
   tts: {
     provider: process.env.TTS_PROVIDER || 'kokoro',
