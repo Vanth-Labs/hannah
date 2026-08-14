@@ -3,12 +3,10 @@ import { useRef, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { SettingsPanel } from './SettingsPanel.jsx';
 import { TerminalPanel } from './TerminalPanel.jsx';
+import { isOverlay } from '../lib/overlay.js';
 
-// Modo overlay (compañera flotante): Tauri o el navegador en modo-app (?overlay=1).
-// En overlay: sin barra inferior ni subtítulos, cámara arriba, manos-libres siempre ON.
-export const isOverlay = typeof window !== 'undefined'
-    && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__
-        || new URLSearchParams(window.location.search).has('overlay'));
+// Re-export por compatibilidad (App lo importa desde aquí).
+export { isOverlay };
 
 const EMOTION_COLOR = {
     neutral:  '#7c8fa6',

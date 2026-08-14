@@ -10,6 +10,7 @@ import {
     EMOTION_TO_FCL, ALL_EMOTION_FCL, VISEME_TO_FCL, ALL_VISEME_FCL, BLINK_FCL,
 } from '../retarget/retargetFace.js';
 import { SMPLX_TO_VROID } from '../retarget/boneMap.js';
+import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
 import OFFSETS from '../retarget/retargetOffsets.json';
 import { buildSpringBones, updateSpringBones } from './springBones.js';
 
@@ -22,10 +23,7 @@ const _rot = new THREE.Quaternion();
 const _look = new THREE.Quaternion();
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
-// ¿Overlay? Entonces la mirada usa el cursor global (backend) en vez del puntero local.
-const IS_OVERLAY = typeof window !== 'undefined'
-    && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__
-        || new URLSearchParams(window.location.search).has('overlay'));
+// (IS_OVERLAY se importa arriba desde lib/overlay.js — mirada global cuando es overlay)
 
 // Auto-lookat: límites y pesos (radianes). Ajustables si mira raro.
 // yawSign/pitchSign corrigen el eje "adelante" del hueso de cabeza si sale invertido.

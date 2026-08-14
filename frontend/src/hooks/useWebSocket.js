@@ -2,13 +2,9 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { emitTerminalOut } from '../lib/terminalBus.js';
+import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
 
 const API_BASE = '';
-
-// ¿Overlay? Para activar la mirada global apenas abre el WS (robusto ante StrictMode).
-const IS_OVERLAY = typeof window !== 'undefined'
-    && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__
-        || new URLSearchParams(window.location.search).has('overlay'));
 
 // Mapa de visemas del backend a morph targets de Ready Player Me / modelos estándar
 export const VISEME_MAP = {
