@@ -121,18 +121,22 @@ export async function moveWindow(spec = '') {
   // ¿cambio de monitor? SOLO en specs de pantalla. Las esquinas (top-left, bottom-right…)
   // se quedan SIEMPRE en el monitor actual — el "left"/"right" de la esquina NO es el
   // monitor. (Antes "bottom-left" te mandaba al monitor izquierdo, ese era el bug.)
+  // Orden ESPACIAL izquierda->derecha (arriba->abajo), para que "pantalla 1/2/3" y
+  // "siguiente" sean intuitivos y no dependan del orden arbitrario de hyprctl.
+  const ordered = [...monitors].sort((a, b) => a.x - b.x || a.y - b.y);
   let target = cur;
   if (!cornerName) {
     if (/(next|other|another)[\s-]*(screen|monitor|pantalla)/.test(s) || s === 'next' || s === 'next-screen') {
-      const i = monitors.indexOf(cur);
-      target = monitors[(i + 1) % monitors.length];
+      const i = ordered.indexOf(cur);
+      target = ordered[(i + 1) % ordered.length];   // la siguiente hacia la derecha (con vuelta)
     } else {
-      const byName = monitors.find((m) => s.includes(m.name.toLowerCase()));
+      const byName = monitors.find((m) => s.includes(m.name.toLowerCase())
+        || s.includes(m.name.toLowerCase().replace(/-a?-?\d+$/, '')));   // "hdmi", "dp-2"…
       const mScreen = s.match(/(?:screen|monitor|pantalla)\s*(\d)/);
       if (byName) target = byName;
-      else if (mScreen) target = monitors[Math.min(monitors.length - 1, parseInt(mScreen[1], 10) - 1)] || cur;
-      else if (s.includes('left')) target = monitors.reduce((a, b) => (b.x < a.x ? b : a), monitors[0]);
-      else if (s.includes('right')) target = monitors.reduce((a, b) => (b.x > a.x ? b : a), monitors[0]);
+      else if (mScreen) target = ordered[Math.min(ordered.length - 1, parseInt(mScreen[1], 10) - 1)] || cur;
+      else if (s.includes('left')) target = ordered[0];                  // la más a la izquierda
+      else if (s.includes('right')) target = ordered[ordered.length - 1]; // la más a la derecha
     }
   }
 
