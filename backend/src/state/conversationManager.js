@@ -2,10 +2,16 @@
 import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
+import { memoryStore } from './memoryStore.js';
+import { summarizeConversation } from '../pipeline/llm.js';
+
+// Cuántos turnos sin resumir acumular antes de plegar en la memoria de largo plazo.
+const SUMMARY_THRESHOLD = 12;
 
 class ConversationManager {
   constructor() {
     this.sessions = new Map();
+    this._summarizing = false;   // lock para no lanzar resúmenes en paralelo
     // Run a periodic garbage collector every 5 minutes to clear stale sessions
     this.cleanupInterval = setInterval(() => this.cleanupExpiredSessions(), 5 * 60 * 1000);
   }
@@ -15,11 +21,15 @@ class ConversationManager {
    */
   createSession() {
     const sessionId = uuidv4();
+    // Precargar la ventana con los últimos turnos persistidos: continuidad entre
+    // sesiones/reinicios (app self-hosted de un usuario). El resumen de largo plazo
+    // se inyecta aparte en el system prompt (llm.js).
+    const preloaded = memoryStore.recentTurns(config.llm.contextTurns);
     const sessionData = {
       sessionId,
       createdAt: new Date(),
       lastActivityAt: new Date(),
-      turns: [],
+      turns: preloaded,
       emotion: 'neutral',
       language: 'es' // Default language avatar speaks
     };
@@ -64,13 +74,38 @@ class ConversationManager {
 
     session.turns.push({ role, content });
 
+    // Persistir en la memoria de largo plazo (SQLite) antes de recortar la ventana.
+    memoryStore.appendTurn(role, content);
+
     // Evict older turns if we cross our architectural budget constraint
     if (session.turns.length > config.llm.contextTurns) {
-      session.turns.shift(); // Drops oldest turn
+      session.turns.shift(); // Drops oldest turn (sigue en SQLite / resumen)
     }
 
     session.lastActivityAt = new Date();
+    // Plegar en el resumen de largo plazo cuando se acumulan turnos (en background).
+    this.maybeSummarize();
     return true;
+  }
+
+  /**
+   * Actualiza el resumen de largo plazo en background cuando hay suficientes turnos
+   * nuevos sin resumir. Fire-and-forget con lock para no solaparse.
+   */
+  async maybeSummarize() {
+    if (this._summarizing) return;
+    const { mark, maxId, rows } = memoryStore.unsummarized();
+    if (rows.length < SUMMARY_THRESHOLD) return;
+    this._summarizing = true;
+    try {
+      const updated = await summarizeConversation(memoryStore.getSummary(), rows);
+      memoryStore.setSummary(updated, maxId);
+      logger.info('Memoria de largo plazo actualizada', { folded: rows.length, sinceId: mark });
+    } catch (error) {
+      logger.error('maybeSummarize falló', { message: error.message });
+    } finally {
+      this._summarizing = false;
+    }
   }
 
   /**
@@ -124,6 +159,7 @@ class ConversationManager {
    */
   dispose() {
     clearInterval(this.cleanupInterval);
+    memoryStore.close();
   }
 }
 

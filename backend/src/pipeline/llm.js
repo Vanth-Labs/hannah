@@ -1,6 +1,7 @@
 // src/pipeline/llm.js
 import { OpenAI } from 'openai';
 import { config } from '../config.js';
+import { memoryStore } from '../state/memoryStore.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
 
@@ -36,8 +37,12 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete, signal) =
     let accumulatedResponse = '';
 
     try {
-        // System prompt = persona (editable por el usuario) + protocolo fijo de tags.
-        const systemPrompt = `${config.llm.persona}\n\n${config.llm.protocol}`;
+        // System prompt = persona (editable) + memoria de largo plazo + protocolo fijo.
+        const summary = memoryStore.getSummary();
+        const memorySection = summary
+            ? `\n\n[What you remember about the user and past conversations]\n${summary}`
+            : '';
+        const systemPrompt = `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}`;
         const formattedMessages = [
             { role: 'system', content: systemPrompt },
             ...history.map(turn => ({
@@ -71,6 +76,33 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete, signal) =
         }
         logger.error('OpenAI-compatible stream engine runtime error', { message: error.message });
         if (onComplete) onComplete({ error: 'llm_failed', message: error.message });
+    }
+};
+
+/**
+ * Resume la conversación en una memoria de largo plazo concisa (no-streaming).
+ * Toma el resumen previo + los turnos nuevos y devuelve la memoria actualizada.
+ */
+export const summarizeConversation = async (oldSummary, turns) => {
+    const convo = turns
+        .map((t) => `${t.role === 'assistant' ? 'Hannah' : 'User'}: ${t.content}`)
+        .join('\n');
+    const sys = 'You maintain a concise long-term memory for the AI avatar Hannah. '
+        + 'Update the memory with DURABLE facts about the user (name, preferences, ongoing '
+        + 'topics, plans, promises) and key context. Keep it short (max ~1000 chars), third '
+        + 'person, terse, drop stale trivia and small talk. Output ONLY the updated memory text.';
+    const user = `Current memory:\n${oldSummary || '(empty)'}\n\nNew conversation to fold in:\n${convo}`;
+    try {
+        const res = await getLlmClient().chat.completions.create({
+            model: config.llm.model,
+            messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+            max_tokens: 400,
+            stream: false,
+        });
+        return res.choices[0]?.message?.content?.trim() || oldSummary;
+    } catch (error) {
+        logger.error('Resumen de memoria falló', { message: error.message });
+        return oldSummary;
     }
 };
 
