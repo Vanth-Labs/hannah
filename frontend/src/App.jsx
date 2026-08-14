@@ -1,11 +1,15 @@
 // src/App.jsx
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { Scene } from './components/Scene.jsx';
-import { HUD } from './components/HUD.jsx';
+import { HUD, isOverlay } from './components/HUD.jsx';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { useVision } from './hooks/useVision.js';
 import { useVoiceActivity } from './hooks/useVoiceActivity.js';
 import { useHannahStore } from './store/hannahStore.js';
+
+// ¿Corriendo dentro de la app de escritorio (Tauri)? -> overlay transparente.
+const isTauri = typeof window !== 'undefined'
+    && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__);
 
 // ── Fondo: gradiente oscuro con sutil vignette ──────────────────────────────
 const BG = () => (
@@ -41,9 +45,28 @@ const AvatarLoadingHint = () => {
 export default function App() {
     const { sendCommand, sendAudio, sendText, stopPlayback } = useWebSocket();
     const { videoRef, startVision, stopVision } = useVision(sendCommand);
-    const { visionActive, connected, handsFree } = useHannahStore();
+    const { visionActive, connected, handsFree, setHandsFree } = useHannahStore();
 
     const [isRecording, setIsRecording] = useState(false);
+
+    // En modo overlay, manos-libres siempre ON (sin botón de mic).
+    useEffect(() => {
+        if (isOverlay) setHandsFree(true);
+    }, [setHandsFree]);
+
+    // En overlay, pedir al backend la mirada global (sigue el cursor por el escritorio).
+    useEffect(() => {
+        if (isOverlay && connected) sendCommand({ command: 'GAZE_ON' });
+    }, [connected, sendCommand]);
+
+    // En overlay, la cámara (visión) arranca sola: que Hannah te vea por defecto.
+    const visionStarted = useRef(false);
+    useEffect(() => {
+        if (isOverlay && connected && !visionStarted.current) {
+            visionStarted.current = true;
+            startVision();
+        }
+    }, [connected, startVision]);
 
     // Barge-in: cortar a Hannah y avisar al backend que aborte el turno en curso.
     const bargeIn = useCallback(() => {

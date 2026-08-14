@@ -43,7 +43,16 @@ export function useVoiceActivity({ enabled, onUtterance, onInterrupt }) {
                     baseAssetPath: '/vad/',
                     onnxWASMBasePath: '/vad/',
                     model: 'v5',
-                    // umbrales por defecto de Silero v5 funcionan bien; ajustables si hace falta
+                    // Ajustes de robustez:
+                    // - umbral algo más sensible para captar el inicio de tu voz
+                    positiveSpeechThreshold: 0.45,
+                    negativeSpeechThreshold: 0.30,
+                    // - esperar más antes de dar por terminada la frase (no cortar en pausas)
+                    redemptionFrames: 16,
+                    // - exigir varios frames de voz -> ignora blips cortos de ruido de fondo
+                    minSpeechFrames: 4,
+                    // - capturar el arranque de la palabra (que el ASR no pierda la primera sílaba)
+                    preSpeechPadFrames: 4,
                     onSpeechStart: () => {
                         if (useHannahStore.getState().isSpeaking) cbInterrupt.current?.();
                     },

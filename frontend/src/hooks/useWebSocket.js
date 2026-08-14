@@ -178,12 +178,20 @@ export function useWebSocket() {
                 addLog(`[error] ${msg.message}`, 'error');
                 break;
 
+            case 'gaze':
+                // mirada global (cursor Hyprland). Frecuente: sin log.
+                useHannahStore.getState().setOverlayGaze({ x: msg.x, y: msg.y });
+                break;
+
             default:
                 addLog(JSON.stringify(msg), 'debug');
         }
     }, [playChunk, setTranscript, setEmotion, setUserTranscript, addLog]);
 
     // ── Iniciar sesión y WS ─────────────────────────────────────────────────
+    const reconnectRef = useRef(null);
+    const unmountedRef = useRef(false);
+    const connectRef = useRef(null);
     const connect = useCallback(async () => {
         try {
             const res = await fetch(`${API_BASE}/api/v1/session`, {
@@ -206,7 +214,12 @@ export function useWebSocket() {
 
             ws.current.onclose = () => {
                 setConnected(false);
-                addLog('WebSocket desconectado', 'error');
+                addLog('WebSocket desconectado, reintentando...', 'error');
+                // Auto-reconexión (compañera siempre-encendida: sobrevive reinicios del backend).
+                if (!unmountedRef.current) {
+                    clearTimeout(reconnectRef.current);
+                    reconnectRef.current = setTimeout(() => connectRef.current?.(), 1500);
+                }
             };
 
             ws.current.onerror = () => addLog('WebSocket error', 'error');
@@ -244,8 +257,12 @@ export function useWebSocket() {
     }, [addLog, sendCommand]);
 
     useEffect(() => {
+        connectRef.current = connect;
+        unmountedRef.current = false;
         connect();
         return () => {
+            unmountedRef.current = true;
+            clearTimeout(reconnectRef.current);
             clearVisemeSchedule();
             ws.current?.close();
             audioCtx.current?.close();

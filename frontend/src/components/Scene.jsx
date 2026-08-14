@@ -53,7 +53,7 @@ export function Scene({ avatarUrl }) {
     const avatarMode = useHannahStore(s => s.avatarMode);
     return (
         <Canvas
-            camera={{ position: [0, 0.3, 2.2], fov: 38, near: 0.1, far: 100 }}
+            camera={{ position: [0, 0.15, 2.15], fov: 36, near: 0.1, far: 100 }}
             gl={{
                 antialias: true,
                 toneMapping: THREE.ACESFilmicToneMapping,
@@ -66,10 +66,6 @@ export function Scene({ avatarUrl }) {
             <Lights />
             <Floor />
 
-            {/* Ejes de referencia: rejilla del suelo + eje vertical (debug de postura) */}
-            <gridHelper args={[6, 24, '#3a4a63', '#1c2637']} position={[0, -1.6, 0]} />
-            <axesHelper args={[1.2]} position={[0, -1.6, 0]} />
-
             <Suspense fallback={null}>
                 {avatarMode === 'vrm' && <VrmAvatar url="/avatar.glb" />}
                 {avatarMode === 'smplx' && <SmplxAvatar url="/smplx_avatar.glb" />}
@@ -79,7 +75,7 @@ export function Scene({ avatarUrl }) {
 
             {/* Permitir rotar la cámara para desarrollo — quitar en prod */}
             <OrbitControls
-                target={[0, 0.1, 0]}
+                target={[0, -0.05, 0]}
                 minDistance={1}
                 maxDistance={5}
                 enablePan={false}

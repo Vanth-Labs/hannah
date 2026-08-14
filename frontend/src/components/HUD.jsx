@@ -3,6 +3,12 @@ import { useRef, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { SettingsPanel } from './SettingsPanel.jsx';
 
+// Modo overlay (compañera flotante): Tauri o el navegador en modo-app (?overlay=1).
+// En overlay: sin barra inferior ni subtítulos, cámara arriba, manos-libres siempre ON.
+export const isOverlay = typeof window !== 'undefined'
+    && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__
+        || new URLSearchParams(window.location.search).has('overlay'));
+
 const EMOTION_COLOR = {
     neutral:  '#7c8fa6',
     happy:    '#f5c842',
@@ -54,43 +60,57 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
                     <span style={{ color: '#6ee7b7' }}>● yolo</span>
                 )}
                 <div style={{ flex: 1 }} />
-                {/* Toggle avatar: SMPL-X (gestos EMAGE) ⇄ RPM (lipsync) */}
-                <button
-                    onClick={() => setAvatarMode(avatarMode === 'vrm' ? 'smplx' : 'vrm')}
-                    style={{
-                        pointerEvents: 'auto',
-                        background: 'rgba(255,255,255,0.06)',
-                        border: '1px solid rgba(255,255,255,0.15)',
-                        borderRadius: '12px',
-                        padding: '4px 12px',
-                        color: avatarMode === 'smplx' ? '#f5c842' : '#7ab8e8',
-                        fontFamily: "'DM Mono', monospace",
-                        fontSize: '11px',
-                        cursor: 'pointer',
-                        letterSpacing: '0.08em',
-                    }}
-                >
-                    {avatarMode === 'vrm' ? '✿ anime' : '⚡ smpl-x'}
-                </button>
-                {/* Manos-libres (VAD): hablarle sin botón + interrumpirla */}
+                {/* Mic on/off (manos-libres): apaga la escucha */}
                 <button
                     onClick={() => setHandsFree(!handsFree)}
-                    title="Manos libres: habla sin botón y puedes interrumpirla"
+                    title={handsFree ? 'Micrófono activo (click para silenciar)' : 'Micrófono silenciado'}
                     style={{
                         pointerEvents: 'auto',
-                        background: handsFree ? 'rgba(110,231,183,0.12)' : 'rgba(255,255,255,0.06)',
-                        border: `1px solid ${handsFree ? 'rgba(110,231,183,0.4)' : 'rgba(255,255,255,0.15)'}`,
-                        borderRadius: '12px',
-                        padding: '4px 10px',
-                        color: handsFree ? '#6ee7b7' : 'rgba(255,255,255,0.5)',
-                        fontFamily: "'DM Mono', monospace",
-                        fontSize: '11px',
-                        cursor: 'pointer',
-                        letterSpacing: '0.06em',
+                        width: '30px', height: '30px', borderRadius: '50%',
+                        background: handsFree ? 'rgba(110,231,183,0.12)' : 'rgba(248,113,113,0.12)',
+                        border: `1px solid ${handsFree ? 'rgba(110,231,183,0.4)' : 'rgba(248,113,113,0.4)'}`,
+                        color: handsFree ? '#6ee7b7' : '#f87171',
+                        fontSize: '14px', cursor: 'pointer',
                     }}
                 >
-                    {handsFree ? '🎧 manos-libres' : '🎧 off'}
+                    {handsFree ? '🎙' : '🔇'}
                 </button>
+                {/* Cámara/visión (arriba en overlay) */}
+                <button
+                    onClick={onToggleVision}
+                    title="Que Hannah te vea por la cámara"
+                    style={{
+                        pointerEvents: 'auto',
+                        width: '30px', height: '30px', borderRadius: '50%',
+                        background: visionActive ? 'rgba(110,231,183,0.12)' : 'rgba(255,255,255,0.06)',
+                        border: `1px solid ${visionActive ? 'rgba(110,231,183,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                        color: visionActive ? '#6ee7b7' : 'rgba(255,255,255,0.5)',
+                        fontSize: '14px', cursor: 'pointer',
+                    }}
+                >
+                    👁
+                </button>
+                {/* Manos-libres (VAD): en overlay va siempre ON (sin botón). */}
+                {!isOverlay && (
+                    <button
+                        onClick={() => setHandsFree(!handsFree)}
+                        title="Manos libres: habla sin botón y puedes interrumpirla"
+                        style={{
+                            pointerEvents: 'auto',
+                            background: handsFree ? 'rgba(110,231,183,0.12)' : 'rgba(255,255,255,0.06)',
+                            border: `1px solid ${handsFree ? 'rgba(110,231,183,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                            borderRadius: '12px',
+                            padding: '4px 10px',
+                            color: handsFree ? '#6ee7b7' : 'rgba(255,255,255,0.5)',
+                            fontFamily: "'DM Mono', monospace",
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                            letterSpacing: '0.06em',
+                        }}
+                    >
+                        {handsFree ? '🎧 manos-libres' : '🎧 off'}
+                    </button>
+                )}
                 {/* Ajustes: trae tu propio modelo/API */}
                 <button
                     onClick={() => setShowSettings(true)}
@@ -115,8 +135,8 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
 
             {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
-            {/* ── Transcript flotante ───────────────────────────────────── */}
-            {(transcript || userTranscript) && (
+            {/* ── Transcript flotante (oculto en modo overlay) ── */}
+            {!isOverlay && (transcript || userTranscript) && (
                 <div style={{
                     position: 'fixed', bottom: '120px', left: '50%',
                     transform: 'translateX(-50%)',
@@ -150,7 +170,8 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
                 </div>
             )}
 
-            {/* ── Controles abajo ───────────────────────────────────────── */}
+            {/* ── Controles abajo (ocultos en modo overlay) ───────────────── */}
+            {!isOverlay && (
             <div style={{
                 position: 'fixed', bottom: 0, left: 0, right: 0,
                 padding: '20px 24px',
@@ -241,6 +262,7 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
                     👁
                 </button>
             </div>
+            )}
 
             <style>{`
                 @keyframes pulse {

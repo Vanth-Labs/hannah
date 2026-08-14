@@ -22,6 +22,11 @@ const _rot = new THREE.Quaternion();
 const _look = new THREE.Quaternion();
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
+// ¿Overlay? Entonces la mirada usa el cursor global (backend) en vez del puntero local.
+const IS_OVERLAY = typeof window !== 'undefined'
+    && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__
+        || new URLSearchParams(window.location.search).has('overlay'));
+
 // Auto-lookat: límites y pesos (radianes). Ajustables si mira raro.
 // yawSign/pitchSign corrigen el eje "adelante" del hueso de cabeza si sale invertido.
 const LOOK = {
@@ -190,6 +195,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         saccadeNext: 1 + Math.random() * 2,
         gaze: new THREE.Vector2(0, 0), gazeTarget: new THREE.Vector2(0, 0),
         saccade: new THREE.Vector2(0, 0), gazeAnchor: new THREE.Vector2(0, 0),
+        oGaze: new THREE.Vector2(0, 0),   // mirada global suavizada (overlay)
     }).current;
 
     // Clips de gesto (Mixamo horneado). Se cargan una vez.
@@ -226,7 +232,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
     };
 
     useFrame((state, delta) => {
-        const { emotion, currentVisemes, isSpeaking, currentMotion, gestureTrigger, autoLookat } = useHannahStore.getState();
+        const { emotion, currentVisemes, isSpeaking, currentMotion, gestureTrigger, autoLookat, overlayGaze } = useHannahStore.getState();
         const t = state.clock.getElapsedTime();
         const aFast = Math.min(1, 14 * delta);
         const aSlow = Math.min(1, 3 * delta);
@@ -309,9 +315,18 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         // Se aplica DESPUÉS de cuerpo/gesto (mezcla parcial, no los mata).
         // state.pointer es la posición del mouse en NDC: x,y ∈ [-1,1]
         // (x: izq→der, y: abajo→arriba). yawSign/pitchSign corrigen el sentido.
+        // En overlay la mirada viene del cursor GLOBAL (backend/Hyprland); en la web,
+        // del puntero dentro del canvas. En overlay se suaviza (el backend manda a ~12Hz).
+        let px, py;
+        if (IS_OVERLAY) {
+            face.oGaze.lerp(overlayGaze, Math.min(1, 8 * delta));
+            px = face.oGaze.x; py = face.oGaze.y;
+        } else {
+            px = state.pointer.x; py = state.pointer.y;
+        }
         if (autoLookat && rig.head && rig.restQuat['15']) {
-            const yaw = state.pointer.x * LOOK.headYaw * LOOK.yawSign;
-            const pitch = state.pointer.y * LOOK.headPitch * LOOK.pitchSign;
+            const yaw = px * LOOK.headYaw * LOOK.yawSign;
+            const pitch = py * LOOK.headPitch * LOOK.pitchSign;
             _euler.set(pitch, yaw, 0);
             _look.setFromEuler(_euler);
             _rot.copy(rig.restQuat['15']).multiply(_look);   // rest · look
@@ -321,8 +336,8 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             rig.head.quaternion.slerp(_rot, w);
             // Ancla de ojos: fracción del mismo yaw/pitch (los ojos afinan).
             face.gazeAnchor.set(
-                THREE.MathUtils.clamp(state.pointer.x * LOOK.eyeYaw * LOOK.yawSign, -LOOK.eyeYaw, LOOK.eyeYaw),
-                THREE.MathUtils.clamp(state.pointer.y * LOOK.eyePitch * LOOK.pitchSign, -LOOK.eyePitch, LOOK.eyePitch),
+                THREE.MathUtils.clamp(px * LOOK.eyeYaw * LOOK.yawSign, -LOOK.eyeYaw, LOOK.eyeYaw),
+                THREE.MathUtils.clamp(py * LOOK.eyePitch * LOOK.pitchSign, -LOOK.eyePitch, LOOK.eyePitch),
             );
         } else {
             face.gazeAnchor.set(0, 0);
