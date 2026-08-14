@@ -154,9 +154,11 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
         if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
         handleOpenIntent(asrResult.transcript, ctx);                    // "abre X" (sin resultado)
         handleCloseIntent(asrResult.transcript, ctx);                   // "cierra X" (sin resultado)
-        // Skills con `phrases` (deterministas) tienen prioridad; si no, intents de datos.
-        const dataResult = (await resolveSkillPhrase(asrResult.transcript, ctx))
-            || (await resolveDataAction(asrResult.transcript, ctx));    // "ejecuta/busca/lee X" (con resultado)
+        // trustModel ON -> el modelo maneja skills/comandos por tags (no capa determinista).
+        // OFF -> skills con `phrases` primero, si no intents de datos ("ejecuta/busca/lee X").
+        const dataResult = config.skills.trustModel ? null
+            : ((await resolveSkillPhrase(asrResult.transcript, ctx))
+                || (await resolveDataAction(asrResult.transcript, ctx)));
         const turnText = dataResult
             ? `${asrResult.transcript}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
             : asrResult.transcript;
@@ -222,7 +224,8 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
         if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
         handleOpenIntent(text, ctx);
         handleCloseIntent(text, ctx);
-        const dataResult = (await resolveSkillPhrase(text, ctx)) || (await resolveDataAction(text, ctx));
+        const dataResult = config.skills.trustModel ? null
+            : ((await resolveSkillPhrase(text, ctx)) || (await resolveDataAction(text, ctx)));
         const turnText = dataResult
             ? `${text}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
             : text;

@@ -60,6 +60,17 @@ Ejemplo: "hacé ping a google.com" -> arg = google.com
    `phrases`, la skill se ejecuta sí o sí, sin depender del modelo. Lo que sigue a la frase
    es el `{arg}`. Útil para que ande parejo hasta en modelos chicos.
 
+## ¿Quién dispara las skills? (frases vs modelo)
+
+En ⚙ Ajustes → Skills hay un toggle **"Dejar que el modelo decida"**:
+
+- **Apagado (default)** — DETERMINISTA: las `phrases` y el parseo del backend disparan. Fiable
+  en **cualquier** modelo (hasta el 7B local), pero solo hace lo pre-definido y puede arrastrar
+  ruido de la voz.
+- **Encendido** — CONFIÁS EN EL MODELO: se apaga la capa determinista; el modelo decide y llena
+  los argumentos (más inteligente, y puede hacer cosas **no** pre-definidas usando `[RUN:]`/
+  `[SKILL:]`). Requiere un modelo capaz (Claude/GPT/Groq-70b); con el 7B local falla más.
+
 ## Seguridad
 
 La acción `run` pasa por el mismo guard que el resto: comandos destructivos (`rm -rf`, `dd`,

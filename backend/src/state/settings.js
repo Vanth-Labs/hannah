@@ -18,6 +18,7 @@ const ALLOWED = {
   llm: ['provider', 'model', 'apiKey', 'baseUrl', 'persona'],
   asr: ['provider', 'model', 'apiKey', 'language', 'sidecarUrl'],
   tts: ['provider', 'model', 'apiKey', 'voiceId', 'sidecarUrl'],
+  skills: ['trustModel'],
 };
 
 // Campos que en blanco NO se sobreescriben (conservan el valor actual).

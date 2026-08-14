@@ -133,6 +133,16 @@ At the end of each response, append an emotion tag on a new line in the format:
     cmdAllowlist: (process.env.TOOLS_CMD_ALLOWLIST || 'echo,ls,date,uptime,df -h,free -h,whoami')
       .split(',').map((s) => s.trim()).filter(Boolean),
   },
+  skills: {
+    // Quién dispara las acciones/skills:
+    //  false (default) -> DETERMINISTA: las frases (phrases) y el parseo del backend
+    //    disparan; fiable en cualquier modelo, pero solo hace lo que está pre-definido y
+    //    puede meter ruido de la voz (p.ej. mayúsculas).
+    //  true -> CONFÍA EN EL MODELO: se apaga la capa determinista y el modelo decide y
+    //    llena los args (más inteligente, puede hacer cosas no pre-definidas vía [RUN:]/
+    //    [SKILL:]); requiere un modelo capaz (Claude/GPT/Groq-70b; el 7B local falla más).
+    trustModel: process.env.SKILLS_TRUST_MODEL === 'true',
+  },
   session: {
     ttl: parseInt(process.env.SESSION_TTL_MINUTES || '30', 10),
   },
