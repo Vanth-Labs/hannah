@@ -180,12 +180,14 @@ export const summarizeConversation = async (oldSummary, turns) => {
 const EMOTIONS = ['neutral', 'happy', 'surprised', 'thinking', 'sad', 'angry', 'curious', 'alert'];
 
 export const parseLlmResponse = (rawResponse) => {
-    const emotionMatch = rawResponse.match(/\[EMOTION:\s*([a-z]+)\s*\]/i);
+    // llama3.1:8b a veces omite los corchetes -> aceptar [EMOTION:x], (EMOTION:x),
+    // *EMOTION:x* o EMOTION:x pelado.
+    const emotionMatch = rawResponse.match(/[[(*]?\s*EMOTION\s*:\s*([a-z]+)\s*[\])*]?/i);
     const raw = emotionMatch ? emotionMatch[1].toLowerCase() : 'neutral';
     const emotion = EMOTIONS.includes(raw) ? raw : 'neutral';   // desconocida -> neutral
 
-    // Strip out the emotion text before sending to user/audio modules
-    const text = rawResponse.replace(/\[EMOTION:.*?\]/gi, '').trim();
+    // Quitar la etiqueta (con o sin delimitadores) antes de mandar a texto/audio.
+    const text = rawResponse.replace(/[[(*]?\s*EMOTION\s*:[^\])*\n]*[\])*]?/gi, '').trim();
 
     return { text, emotion };
 };

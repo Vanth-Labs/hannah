@@ -59,8 +59,8 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     // en el subtítulo, oírse en el TTS ni condicionar el co-speech. Incluye variantes
     // sin cerrar (streaming parcial) para que nunca se filtre un corchete suelto.
     const text = rawText
-        .replace(/[[(*]\s*(MOTION|EMOTION|MOVE):[^\])*\n]*[\])*]/gi, '') // delimitada completa
-        .replace(/[[(*]\s*(MOTION|EMOTION|MOVE):[^\])*\n]*/gi, '')       // sin cerrar (streaming parcial)
+        // con o sin corchetes (llama3.1:8b a veces los omite), cerrada o no
+        .replace(/[[(*]?\s*(MOTION|EMOTION|MOVE)\s*:[^\])*\n]*[\])*]?/gi, '')
         .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final
         .replace(/\s+/g, ' ')
         .trim();
