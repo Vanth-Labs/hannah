@@ -7,12 +7,12 @@ import { logger } from '../utils/logger.js';
 /**
  * Sintetiza texto a audio usando ElevenLabs (Cloud) o Kokoro (Sidecar Local)
  */
-export const synthesizeSpeechStream = async (text) => {
+export const synthesizeSpeechStream = async (text, signal) => {
     const timer = startTimer();
     const provider = config.tts.provider.toLowerCase();
 
     if (provider === 'kokoro') {
-        return runKokoroLocalStream(text);
+        return runKokoroLocalStream(text, signal);
     }
 
     // --- ELEVENLABS (proveedor cloud, configurable en Settings) ---
@@ -25,6 +25,7 @@ export const synthesizeSpeechStream = async (text) => {
             data: { text, model_id: config.tts.model || 'eleven_multilingual_v2' },
             headers: { 'xi-api-key': config.tts.apiKey, 'Content-Type': 'application/json' },
             responseType: 'stream',
+            signal,
         });
         return { audioStream: response.data, format: 'mp3', sample_rate: 44100, tts_latency_ms: timer.stop() };
     } catch (error) {
@@ -35,7 +36,7 @@ export const synthesizeSpeechStream = async (text) => {
 /**
  * Conexión directa con el Sidecar de Python ejecutando Kokoro
  */
-const runKokoroLocalStream = async (text) => {
+const runKokoroLocalStream = async (text, signal) => {
     const timer = startTimer();
     const sidecarUrl = config.tts.sidecarUrl;
     const voice = config.tts.voiceId || 'af_bella';
@@ -50,6 +51,7 @@ const runKokoroLocalStream = async (text) => {
                 speed: 1.0
             },
             responseType: 'stream',
+            signal,
         });
 
         return {

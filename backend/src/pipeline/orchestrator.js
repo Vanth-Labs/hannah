@@ -40,7 +40,8 @@ const collectStream = (stream) =>
  * El audio de la oración se envía como UN solo mensaje con el WAV completo:
  * el frontend decodifica con decodeAudioData, que necesita el archivo entero.
  */
-const processAndSendSegment = async (rawText, sendCallback, sessionId = '') => {
+const processAndSendSegment = async (rawText, sendCallback, sessionId = '', signal) => {
+    if (signal?.aborted) return;
     // Director de gestos: MOTION:acción marca un gesto DELIBERADO. Esa oración
     // se genera en modo acción (el cuerpo hace SOLO la acción, sin co-speech), y las
     // siguientes oraciones reanudan el co-speech — los dos modos nunca se mezclan.
@@ -62,11 +63,12 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '') => {
     if (text.length < 2) return;
 
     try {
-        const ttsResult = await synthesizeSpeechStream(text);
+        const ttsResult = await synthesizeSpeechStream(text, signal);
         if (ttsResult.error) return;
 
         const lipsyncResult = generateVisemesFromText(text);
         const audioBuffer = await collectStream(ttsResult.audioStream);
+        if (signal?.aborted) return;   // no enviar audio de un turno ya interrumpido
 
         const message = {
             type: 'audio_chunk',
@@ -110,6 +112,7 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '') => {
             }
         }
 
+        if (signal?.aborted) return;
         sendCallback(message);
     } catch (err) {
         logger.error('Error procesando segmento del orquestador', { message: err.message });
@@ -119,7 +122,7 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '') => {
 /**
  * Orquesta un turno completo de conversación desde audio entrante hasta streaming de respuesta.
  */
-export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment) => {
+export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, signal) => {
     try {
         // 1. Validar la sesión
         const session = conversationManager.getSession(sessionId);
@@ -128,6 +131,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment) 
         // 2. ASR: Transcribir el audio del usuario
         logger.info('Iniciando transcripción ASR...', { sessionId });
         const asrResult = await transcribeAudio(audioBuffer);
+        if (signal?.aborted) return;   // el usuario ya interrumpió
         if (asrResult.error || !asrResult.transcript.trim()) {
             throw new Error(asrResult.message || 'No se detectó voz clara en el audio');
         }
@@ -140,7 +144,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment) 
 
         // 3. LLM: Ejecutar el flujo del modelo pasándole el historial de turnos actual
         const updatedSession = conversationManager.getSession(sessionId);
-        await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment);
+        await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal);
 
     } catch (error) {
         logger.error('Fallo crítico en el Orquestador (Voz)', { message: error.message });
@@ -183,14 +187,14 @@ export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegm
  * A diferencia de processTextTurn (inyecciones de sistema/visión), el texto
  * SÍ se guarda en el historial de la conversación.
  */
-export const processUserTextTurn = async (sessionId, text, onStreamSegment) => {
+export const processUserTextTurn = async (sessionId, text, onStreamSegment, signal) => {
     try {
         const session = conversationManager.getSession(sessionId);
         if (!session) throw new Error('La sesión no existe o ha expirado');
 
         conversationManager.addTurn(sessionId, 'user', text);
         const updatedSession = conversationManager.getSession(sessionId);
-        await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment);
+        await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal);
     } catch (error) {
         logger.error('Fallo crítico en el Orquestador (Texto usuario)', { message: error.message });
         onStreamSegment({ type: 'error', message: error.message });
@@ -202,19 +206,24 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment) => {
  * Los segmentos se encadenan en una promesa secuencial: las oraciones llegan al cliente
  * en el orden hablado y turn_complete se emite solo cuando el último audio ya salió.
  */
-const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment) => {
+const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal) => {
     let sentenceBuffer = '';
     let segmentChain = Promise.resolve();
     logger.info('Despertando cerebro LLM...', { model: config.llm.model });
 
     const enqueueSegment = (text) => {
-        segmentChain = segmentChain.then(() => processAndSendSegment(text, onStreamSegment, sessionId));
+        // Barge-in: si el turno fue abortado, no sintetizar/enviar más oraciones.
+        segmentChain = segmentChain.then(() => {
+            if (signal?.aborted) return;
+            return processAndSendSegment(text, onStreamSegment, sessionId, signal);
+        });
     };
 
     await generateDialogueStream(
         turnsInput,
         // Callback por cada token generado
         (token) => {
+            if (signal?.aborted) return;
             sentenceBuffer += token;
 
             if (/[.!?]\s*$/.test(sentenceBuffer) && sentenceBuffer.trim().length > 10) {
@@ -224,7 +233,9 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment) => {
         },
         // Callback al finalizar el flujo por completo
         (finalLlmResult) => {
-            if (finalLlmResult.error) return;
+            // Si el usuario interrumpió, cortar en seco: no guardar respuesta parcial
+            // ni emitir turn_complete.
+            if (signal?.aborted || finalLlmResult.error) return;
 
             if (sentenceBuffer.trim().length > 0) {
                 enqueueSegment(sentenceBuffer.trim());
@@ -236,13 +247,15 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment) => {
 
             // Cerrar ciclo de transmisión en el frontend cuando el último segmento ya fue enviado
             segmentChain = segmentChain.then(() => {
+                if (signal?.aborted) return;
                 onStreamSegment({
                     type: 'turn_complete',
                     emotion: finalLlmResult.emotion,
                     metrics: { llm_ms: finalLlmResult.duration_ms }
                 });
             });
-        }
+        },
+        signal
     );
 
     // No devolver el control hasta que todos los segmentos pendientes hayan salido

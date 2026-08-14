@@ -24,14 +24,14 @@ const getLlmClient = () => {
 /**
  * Agnostic Streaming Wrapper for Dialogue Engines
  */
-export const generateDialogueStream = async (history, onToken, onComplete) => {
-    return runOpenAICompatibleStream(history, onToken, onComplete);
+export const generateDialogueStream = async (history, onToken, onComplete, signal) => {
+    return runOpenAICompatibleStream(history, onToken, onComplete, signal);
 };
 
 /**
  * Path: Generic OpenAI-Compatible Stream Connection (LLaMA, Groq, local Ollama)
  */
-const runOpenAICompatibleStream = async (history, onToken, onComplete) => {
+const runOpenAICompatibleStream = async (history, onToken, onComplete, signal) => {
     const timer = startTimer();
     let accumulatedResponse = '';
 
@@ -51,9 +51,10 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete) => {
             messages: formattedMessages,
             max_tokens: 400,
             stream: true,
-        });
+        }, { signal });   // barge-in: abortar la generación al instante
 
         for await (const chunk of stream) {
+            if (signal?.aborted) break;
             const token = chunk.choices[0]?.delta?.content || '';
             if (token) {
                 accumulatedResponse += token;
@@ -63,6 +64,11 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete) => {
 
         finalizeLlmTurn(accumulatedResponse, timer.stop(), onComplete);
     } catch (error) {
+        // Abort por barge-in: no es un error real, no notificar al cliente.
+        if (signal?.aborted || error.name === 'APIUserAbortError' || error.name === 'AbortError') {
+            logger.info('LLM stream abortado (barge-in)');
+            return;
+        }
         logger.error('OpenAI-compatible stream engine runtime error', { message: error.message });
         if (onComplete) onComplete({ error: 'llm_failed', message: error.message });
     }

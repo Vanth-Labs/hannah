@@ -32,6 +32,13 @@ export const initWebSocketGateway = (httpServer) => {
 
         let audioChunks = [];
 
+        // Barge-in: un AbortController por turno en curso. INTERRUPT lo aborta para
+        // que Hannah deje de generar/hablar al instante cuando el usuario retoma.
+        let currentTurn = null;
+        const abortCurrentTurn = () => {
+            if (currentTurn) { currentTurn.abort(); currentTurn = null; }
+        };
+
         const safeSend = (payload) => {
             if (ws.readyState === ws.OPEN) {
                 ws.send(JSON.stringify(payload));
@@ -70,8 +77,16 @@ export const initWebSocketGateway = (httpServer) => {
 
             try {
                 switch (action) {
+                    case 'INTERRUPT':
+                        // El usuario empezó a hablar sobre Hannah: abortar su turno en curso.
+                        logger.info('INTERRUPT: abortando turno en curso', { sessionId });
+                        abortCurrentTurn();
+                        break;
+
                     case 'SPEECH_START':
                         logger.info('Usuario empezó a hablar, limpiando buffers...', { sessionId });
+                        // Si Hannah aún hablaba, cortar (barge-in por voz).
+                        abortCurrentTurn();
                         audioChunks = [];
                         break;
 
@@ -83,7 +98,8 @@ export const initWebSocketGateway = (httpServer) => {
                         }
                         const completeAudioBuffer = Buffer.concat(audioChunks);
                         audioChunks = [];
-                        await processVoiceTurn(sessionId, completeAudioBuffer, safeSend);
+                        currentTurn = new AbortController();
+                        await processVoiceTurn(sessionId, completeAudioBuffer, safeSend, currentTurn.signal);
                         break;
                     }
 
@@ -93,7 +109,9 @@ export const initWebSocketGateway = (httpServer) => {
                             safeSend({ type: 'error', message: 'Texto vacío' });
                             break;
                         }
-                        await processUserTextTurn(sessionId, text, safeSend);
+                        abortCurrentTurn();
+                        currentTurn = new AbortController();
+                        await processUserTextTurn(sessionId, text, safeSend, currentTurn.signal);
                         break;
                     }
 
@@ -144,6 +162,7 @@ export const initWebSocketGateway = (httpServer) => {
 
         ws.on('close', () => {
             logger.info('Conexión WebSocket cerrada por el cliente', { sessionId });
+            abortCurrentTurn();
             audioChunks = [];
             stopVisionLoop(sessionId);
         });
