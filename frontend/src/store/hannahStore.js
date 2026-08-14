@@ -26,6 +26,7 @@ export const useHannahStore = create((set, get) => ({
     // Comportamiento del avatar (toggles de Settings)
     autoLookat: true,          // la cabeza/ojos siguen a la cámara (Fase 3)
     overlayGaze: { x: 0, y: 0 }, // dirección de mirada global (cursor Hyprland) en overlay
+    pendingConfirm: null,      // { id, command } — comando destructivo esperando tu OK
     handsFree: false,          // conversación manos-libres por VAD (Fase B) + barge-in
 
     // Log de pipeline
@@ -48,6 +49,7 @@ export const useHannahStore = create((set, get) => ({
     setAutoLookat: (autoLookat) => set({ autoLookat }),
     setHandsFree: (handsFree) => set({ handsFree }),
     setOverlayGaze: (overlayGaze) => set({ overlayGaze }),
+    setPendingConfirm: (pendingConfirm) => set({ pendingConfirm }),
 
     addLog: (msg, type = 'info') => set((state) => ({
         logs: [...state.logs.slice(-49), {

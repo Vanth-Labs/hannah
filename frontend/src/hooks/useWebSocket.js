@@ -1,6 +1,7 @@
 // src/hooks/useWebSocket.js
 import { useEffect, useRef, useCallback } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
+import { emitTerminalOut } from '../lib/terminalBus.js';
 
 const API_BASE = '';
 
@@ -186,6 +187,14 @@ export function useWebSocket() {
             case 'gaze':
                 // mirada global (cursor Hyprland). Frecuente: sin log.
                 useHannahStore.getState().setOverlayGaze({ x: msg.x, y: msg.y });
+                break;
+
+            case 'terminal_out':
+                emitTerminalOut(msg.data);
+                break;
+
+            case 'confirm_command':
+                useHannahStore.getState().setPendingConfirm({ id: msg.id, command: msg.command });
                 break;
 
             default:

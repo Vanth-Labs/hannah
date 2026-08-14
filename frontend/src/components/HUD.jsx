@@ -2,6 +2,7 @@
 import { useRef, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { SettingsPanel } from './SettingsPanel.jsx';
+import { TerminalPanel } from './TerminalPanel.jsx';
 
 // Modo overlay (compañera flotante): Tauri o el navegador en modo-app (?overlay=1).
 // En overlay: sin barra inferior ni subtítulos, cámara arriba, manos-libres siempre ON.
@@ -18,11 +19,23 @@ const EMOTION_COLOR = {
     sad:      '#93c5fd',
 };
 
-export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording }) {
+export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, sendCommand }) {
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
+    const [showTerminal, setShowTerminal] = useState(false);
     const { emotion, isSpeaking, visionActive, transcript, userTranscript, connected, logs,
-        avatarMode, setAvatarMode, handsFree, setHandsFree } = useHannahStore();
+        avatarMode, setAvatarMode, handsFree, setHandsFree, pendingConfirm, setPendingConfirm } = useHannahStore();
+
+    const toggleTerminal = () => {
+        setShowTerminal((v) => {
+            if (!v) sendCommand?.({ command: 'TERMINAL_START' });
+            return !v;
+        });
+    };
+    const answerConfirm = (approved) => {
+        if (pendingConfirm) sendCommand?.({ command: 'CONFIRM_COMMAND', id: pendingConfirm.id, approved });
+        setPendingConfirm(null);
+    };
 
     const handleSend = () => {
         if (!input.trim()) return;
@@ -111,6 +124,21 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
                         {handsFree ? '🎧 manos-libres' : '🎧 off'}
                     </button>
                 )}
+                {/* Terminal: panel de shell real que Hannah y tú comparten */}
+                <button
+                    onClick={toggleTerminal}
+                    title="Terminal (Hannah puede correr comandos)"
+                    style={{
+                        pointerEvents: 'auto',
+                        width: '30px', height: '30px', borderRadius: '50%',
+                        background: showTerminal ? 'rgba(122,184,232,0.15)' : 'rgba(255,255,255,0.06)',
+                        border: `1px solid ${showTerminal ? 'rgba(122,184,232,0.5)' : 'rgba(255,255,255,0.15)'}`,
+                        color: showTerminal ? '#7ab8e8' : 'rgba(255,255,255,0.6)',
+                        fontSize: '13px', cursor: 'pointer',
+                    }}
+                >
+                    ⌨
+                </button>
                 {/* Ajustes: trae tu propio modelo/API */}
                 <button
                     onClick={() => setShowSettings(true)}
@@ -134,6 +162,46 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
             </div>
 
             {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+
+            {showTerminal && (
+                <TerminalPanel
+                    onInput={(d) => sendCommand?.({ command: 'TERMINAL_IN', data: d })}
+                    onResize={(cols, rows) => sendCommand?.({ command: 'TERMINAL_RESIZE', cols, rows })}
+                    onClose={() => setShowTerminal(false)}
+                />
+            )}
+
+            {/* Confirmación de comando destructivo */}
+            {pendingConfirm && (
+                <div style={{
+                    position: 'fixed', inset: 0, zIndex: 40, display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.55)',
+                }}>
+                    <div style={{
+                        width: 'min(440px, 90%)', background: 'rgba(14,18,26,0.98)',
+                        border: '1px solid rgba(248,113,113,0.4)', borderRadius: '14px', padding: '20px',
+                        fontFamily: "'DM Mono', monospace", color: 'rgba(255,255,255,0.85)',
+                    }}>
+                        <div style={{ color: '#f87171', fontSize: '12px', letterSpacing: '0.1em', marginBottom: '10px' }}>
+                            ⚠ COMANDO DESTRUCTIVO — ¿lo autorizas?
+                        </div>
+                        <pre style={{
+                            background: 'rgba(0,0,0,0.4)', padding: '10px 12px', borderRadius: '8px',
+                            fontSize: '13px', color: '#fca5a5', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0 0 16px',
+                        }}>{pendingConfirm.command}</pre>
+                        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                            <button onClick={() => answerConfirm(false)} style={{
+                                pointerEvents: 'auto', padding: '8px 16px', borderRadius: '10px', cursor: 'pointer',
+                                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.8)',
+                            }}>Rechazar</button>
+                            <button onClick={() => answerConfirm(true)} style={{
+                                pointerEvents: 'auto', padding: '8px 16px', borderRadius: '10px', cursor: 'pointer',
+                                background: 'rgba(248,113,113,0.2)', border: '1px solid rgba(248,113,113,0.6)', color: '#fca5a5',
+                            }}>Ejecutar</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ── Transcript flotante (oculto en modo overlay) ── */}
             {!isOverlay && (transcript || userTranscript) && (
