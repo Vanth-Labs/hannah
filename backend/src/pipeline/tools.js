@@ -226,11 +226,43 @@ export async function handleCloseIntent(text, ctx) {
 export async function resolveDataAction(text, ctx) {
   const t = text || '';
   let m;
-  // Ejecutar comando: "corre/ejecuta [el comando] X"
-  if ((m = t.match(/(?:^|\s)(?:corr[eé]|ejecut[aá]|run)\s+(?:el\s+comando\s+|the\s+command\s+)?(.+)/i))) {
-    const cmd = m[1].trim().replace(/[.,;]+$/, '');
+
+  // ── EJECUTAR COMANDOS EN LA TERMINAL (determinista; es lo que más falla si se deja
+  // al LLM). Tres capas de más a menos fiable: backticks -> frase conocida -> verbo. ──
+  const runAndReport = async (raw) => {
+    const cmd = (raw || '').trim().replace(/^["'`]+|["'`]+$/g, '').replace(/[.?!]+$/, '').trim();
+    if (!cmd) return null;
     const r = await runTool('run_command', { command: cmd }, ctx);
+    // Toast en la UI: ves el comando y su salida real SIN abrir la terminal.
+    ctx?.send?.({ type: 'command_run', command: cmd, output: String(r).slice(0, 1200) });
     return `[Salida real de "${cmd}"]:\n${r}`;
+  };
+  // Verbos imperativos de "correr" (voseo/tú/infinitivo/enclítico + EN). Preciso a
+  // propósito: excluye "hace" (calor/tiempo) y "tira"/"correo" para no correr basura.
+  const RUN_VERBS = 'corr[eé]r?(?:me|lo)?|ejecut[aá]r?(?:me|lo)?|lanz[aá]r?|tir[aá]r|run|exec(?:ute)?|haz|hac[eé]lo|hac[é]';
+  const RUN_HINT = new RegExp(`\\b(?:${RUN_VERBS})\\b`, 'i');
+
+  // 1) Comando entre backticks/comillas + intención de correr -> lo más fiable.
+  const quoted = t.match(/`([^`]+)`/) || t.match(/'([^']{2,})'/) || t.match(/"([^"]{2,})"/);
+  if (quoted && RUN_HINT.test(t)) return runAndReport(quoted[1]);
+
+  // 2) Lenguaje natural -> comando (frases comunes, alta precisión). Ampliable.
+  const NL_CMD = [
+    [/\b(?:list[aá]|lista(?:me)?|mostrame|muestra|ver)\b[^.]*\b(?:archivos?|carpeta|directorio|contenido)\b/i, 'ls -la'],
+    [/\b(?:qu[eé]\s+)?(?:kernel|n[uú]cleo)\b/i, 'uname -r'],
+    [/\bespacio\b[^.]*\b(?:disco|libre)\b|\bdisco\b[^.]*\bespacio\b/i, 'df -h'],
+    [/\b(?:memoria|ram)\b[^.]*\b(?:uso|libre|cu[aá]nt|queda)/i, 'free -h'],
+    [/\bd[oó]nde estoy\b|\b(?:carpeta|directorio)\s+actual\b|\bpwd\b/i, 'pwd'],
+    [/\bqui[eé]n soy\b|\bwhoami\b|\bmi usuario\b/i, 'whoami'],
+    [/\buptime\b|\bcu[aá]nto\b[^.]*\b(?:encendid|prendid|arriba)/i, 'uptime'],
+    [/\b(?:mi\s+)?ip\b/i, 'ip -brief addr'],
+    [/\bprocesos\b[^.]*\b(?:corriendo|activos|abiertos|pesad)/i, 'ps aux --sort=-%cpu | head -15'],
+  ];
+  for (const [re, cmd] of NL_CMD) if (re.test(t)) return runAndReport(cmd);
+
+  // 3) Verbo explícito + comando: "corré/ejecutá/hacé [un] <cmd>"
+  if ((m = t.match(new RegExp(`(?:^|\\s)(?:${RUN_VERBS})\\s+(?:el\\s+comando\\s+|the\\s+command\\s+|una?\\s+|a\\s+)?(.+)`, 'i')))) {
+    return runAndReport(m[1]);
   }
   // Leer una URL: "lee (la url) X"
   if ((m = t.match(/(?:^|\s)(?:lee|leé|read|abre y lee)\s+(?:la\s+(?:url|p[aá]gina|web)\s+|the\s+)?(\S+\.\S+\S*)/i))) {
