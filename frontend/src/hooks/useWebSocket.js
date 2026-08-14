@@ -4,6 +4,11 @@ import { useHannahStore } from '../store/hannahStore.js';
 
 const API_BASE = '';
 
+// ¿Overlay? Para activar la mirada global apenas abre el WS (robusto ante StrictMode).
+const IS_OVERLAY = typeof window !== 'undefined'
+    && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__
+        || new URLSearchParams(window.location.search).has('overlay'));
+
 // Mapa de visemas del backend a morph targets de Ready Player Me / modelos estándar
 export const VISEME_MAP = {
     'sil': 'viseme_sil',
@@ -210,6 +215,8 @@ export function useWebSocket() {
             ws.current.onopen = () => {
                 setConnected(true);
                 addLog('WebSocket conectado', 'info');
+                // En overlay: activar la mirada global en este mismo socket (garantizado abierto).
+                if (IS_OVERLAY) ws.current.send(JSON.stringify({ command: 'GAZE_ON' }));
             };
 
             ws.current.onclose = () => {
@@ -233,6 +240,11 @@ export function useWebSocket() {
             };
         } catch (e) {
             addLog(`Error conectando: ${e.message}`, 'error');
+            // Si falla el connect (backend aún caído), reintentar -> reconexión robusta.
+            if (!unmountedRef.current) {
+                clearTimeout(reconnectRef.current);
+                reconnectRef.current = setTimeout(() => connectRef.current?.(), 1500);
+            }
         }
     }, [handleMessage, setSession, setConnected, addLog]);
 
