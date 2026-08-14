@@ -11,6 +11,7 @@ import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
 import { runCommand, requestConfirm } from './terminal.js';
 import { closeWindows } from './desktop/index.js';
+import { getShortcuts } from '../state/shortcuts.js';
 
 // Comandos DESTRUCTIVOS que requieren confirmación del usuario (lo demás corre libre).
 const DANGER = /\brm\s+-[a-z]*[rf]|\brm\s+\S*\s*\/(?:\s|$|\*)|\bmkfs|\bdd\s+.*\bof=|:\(\)\s*\{\s*:|>\s*\/dev\/(?!null)|\bchmod\s+-R\s+0|\b(shutdown|reboot|poweroff|halt|fdisk|wipefs|userdel|mkswap)\b|\bgit\s+.*--force|\bmv\s+\S+\s+\/\s*$/i;
@@ -171,29 +172,24 @@ const TOOLS = {
 };
 
 // Detecta "abre/ábreme X" (ES/EN) y lo abre de forma DETERMINISTA (no depende de que el
-// LLM emita [BROWSE:]/[OPEN:]). Devuelve true si lo manejó.
-const SITES = {
-  youtube: 'youtube.com', wikipedia: 'wikipedia.org', google: 'google.com', gmail: 'mail.google.com',
-  github: 'github.com', twitter: 'twitter.com', reddit: 'reddit.com', chatgpt: 'chatgpt.com',
-  whatsapp: 'web.whatsapp.com', spotify: 'open.spotify.com', netflix: 'netflix.com', maps: 'maps.google.com',
-};
-const APP_KEYS = ['navegador', 'browser', 'firefox', 'chrome', 'terminal', 'consola', 'code', 'vscode', 'archivos', 'files'];
+// LLM emita [BROWSE:]/[OPEN:]). Los mapas de sitios/apps vienen de shortcuts.js (editable
+// por el usuario en el panel ⚙ / data/shortcuts.json). Devuelve true si lo manejó.
 export async function handleOpenIntent(text, ctx) {
   const s = (text || '').toLowerCase();
   const m = s.match(/(?:^|\s)(?:[aá]bre(?:me|la|lo)?|abrir|open)\s+(?:me\s+|el\s+|la\s+|una?\s+)?(.+)/);
   if (!m) return false;
   const target = m[1].trim().replace(/\s+en (?:el|mi) navegador.*$/, '').replace(/[.,!?¿¡]+$/, '').trim();
   if (!target) return false;
+  const { sites, apps } = getShortcuts();
   const hasDomain = /\.[a-z]{2,}(?:\/|$|\s)/.test(target);
-  // App conocida (sin dominio) -> open_app.
-  const app = APP_KEYS.find((a) => target.includes(a));
-  if (app && !hasDomain) {
-    await runTool('open_app', { name: (app === 'navegador' || app === 'browser') ? 'browser' : (app === 'consola' ? 'terminal' : app) }, ctx);
-    return true;
+  // App conocida (sin dominio) -> open_app (busca la clave hablada más larga que coincida).
+  if (!hasDomain) {
+    const appKey = Object.keys(apps).filter((a) => target.includes(a)).sort((a, b) => b.length - a.length)[0];
+    if (appKey) { await runTool('open_app', { name: apps[appKey] }, ctx); return true; }
   }
   // Sitio conocido o dominio explícito -> open_url.
-  const siteKey = Object.keys(SITES).find((k) => target.includes(k));
-  const url = siteKey ? SITES[siteKey] : (hasDomain ? target.replace(/\s+/g, '') : null);
+  const siteKey = Object.keys(sites).filter((k) => target.includes(k)).sort((a, b) => b.length - a.length)[0];
+  const url = siteKey ? sites[siteKey] : (hasDomain ? target.replace(/\s+/g, '') : null);
   if (url) { await runTool('open_url', { url }, ctx); return true; }
   return false;
 }
