@@ -168,7 +168,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
 
         // 3. LLM: Ejecutar el flujo del modelo pasándole el historial de turnos actual
         const updatedSession = conversationManager.getSession(sessionId);
-        await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal);
+        await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal, { noActions: !!dataResult });
 
     } catch (error) {
         logger.error('Fallo crítico en el Orquestador (Voz)', { message: error.message });
@@ -229,7 +229,7 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
         conversationManager.addTurn(sessionId, 'user', turnText);
 
         const updatedSession = conversationManager.getSession(sessionId);
-        await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal);
+        await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal, { noActions: !!dataResult });
     } catch (error) {
         logger.error('Fallo crítico en el Orquestador (Texto usuario)', { message: error.message });
         onStreamSegment({ type: 'error', message: error.message });
@@ -241,7 +241,7 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
  * Los segmentos se encadenan en una promesa secuencial: las oraciones llegan al cliente
  * en el orden hablado y turn_complete se emite solo cuando el último audio ya salió.
  */
-const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal) => {
+const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal, opts = {}) => {
     let sentenceBuffer = '';
     let segmentChain = Promise.resolve();
     logger.info('Despertando cerebro LLM...', { model: config.llm.model });
@@ -291,7 +291,9 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
             });
         },
         signal,
-        { sessionId, send: onStreamSegment }   // ctx para tools: sessionId (look_now) + send (confirm_command)
+        // ctx para tools: sessionId (look_now) + send (confirm_command). noActions: si una acción
+        // determinista ya corrió, el LLM SOLO narra (no re-ejecuta con tags -> evita doble ssh/comando).
+        { sessionId, send: onStreamSegment, noActions: opts.noActions }
     );
 
     // No devolver el control hasta que todos los segmentos pendientes hayan salido

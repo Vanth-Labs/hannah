@@ -44,13 +44,14 @@ const getLlmClient = () => {
 };
 
 // System prompt = persona + memoria (resumen + recall vectorial) + protocolo.
-async function buildSystemPrompt(history) {
+async function buildSystemPrompt(history, withActions = true) {
     const summary = memoryStore.getSummary();
     const recalled = await recallContext(history);
     let memorySection = '';
     if (summary) memorySection += `\n\n[What you remember about the user and past conversations]\n${summary}`;
     if (recalled) memorySection += `\n\n[Relevant things from earlier conversations]\n${recalled}`;
-    return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}${skillsPromptSection()}`;
+    const skillsSection = withActions ? skillsPromptSection() : '';
+    return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}${skillsSection}`;
 }
 
 /**
@@ -59,7 +60,11 @@ async function buildSystemPrompt(history) {
 export const generateDialogueStream = async (history, onToken, onComplete, signal, ctx = {}) => {
     const timer = startTimer();
     try {
-        const systemPrompt = await buildSystemPrompt(history);
+        // Si una acción determinista ya corrió (ctx.noActions), el LLM SOLO narra el
+        // resultado: sin loop de tags (evita doble ejecución, p.ej. ssh dos veces) y sin
+        // índice de skills en el prompt (no lo tienta a re-actuar).
+        const useActions = config.tools.enabled && !ctx.noActions;
+        const systemPrompt = await buildSystemPrompt(history, useActions);
         const messages = [
             { role: 'system', content: systemPrompt },
             ...history.map((turn) => ({
@@ -67,8 +72,7 @@ export const generateDialogueStream = async (history, onToken, onComplete, signa
                 content: turn.content,
             })),
         ];
-        // Con tools ON: loop de acciones por tags (determinista). Sin tools: streaming directo.
-        const text = config.tools.enabled
+        const text = useActions
             ? await generateWithActions(messages, onToken, signal, ctx)
             : await streamAnswer(messages, onToken, signal);
         if (text === null) return;   // abortado (barge-in)

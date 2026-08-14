@@ -167,9 +167,11 @@ async function execSkill(skill, arg, ctx) {
     // (así corrige si la voz falló el host/usuario). Sin argumento -> corre directo.
     const autorun = !/\{[^}]*\}/.test(skill.action.template);
     ctx?.send?.({ type: 'open_terminal', command, run: autorun });
+    // IMPORTANTE: instrucción tajante — el modelo NO debe simular la salida/sesión (qwen tiende
+    // a inventar un login ssh completo). Solo un aviso corto.
     return autorun
-      ? `[Abrí la terminal y ejecuté "${command}"]`
-      : `[Escribí "${command}" en la terminal; el usuario lo revisa y le da Enter]`;
+      ? `La terminal ya está abierta y corriendo "${command}". Decí en UNA frase corta que lo abriste. PROHIBIDO inventar o mostrar salida, banner o login.`
+      : `Abriste la terminal y dejaste ESCRITO (sin ejecutar) el comando "${command}". Decí en UNA frase corta que lo escribiste y que el usuario lo revise y apriete Enter. PROHIBIDO inventar o simular cualquier salida, sesión, login o banner.`;
   }
   return null;
 }
