@@ -4,7 +4,7 @@ import { generateDialogueStream } from './llm.js';
 import { synthesizeSpeechStream } from './tts.js';
 import { generateVisemesFromText } from './lipsync.js';
 import { generateMotion, generateMotionFromText } from './motion.js';
-import { moveWindow } from './windowControl.js';
+import { moveWindow, parseMoveIntent } from './windowControl.js';
 import { conversationManager } from '../state/conversationManager.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -144,6 +144,10 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
         // Guardar lo que dijo el usuario en la memoria in-memory de la sesión
         conversationManager.addTurn(sessionId, 'user', asrResult.transcript);
 
+        // Comando de movimiento de ventana (determinista, no depende del LLM).
+        const moveSpec = parseMoveIntent(asrResult.transcript);
+        if (moveSpec) moveWindow(moveSpec);
+
         // Avisarle al cliente qué fue lo que entendimos
         onStreamSegment({ type: 'user_transcript', text: asrResult.transcript });
 
@@ -198,6 +202,11 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
         if (!session) throw new Error('La sesión no existe o ha expirado');
 
         conversationManager.addTurn(sessionId, 'user', text);
+
+        // Comando de movimiento de ventana (determinista, no depende del LLM).
+        const moveSpec = parseMoveIntent(text);
+        if (moveSpec) moveWindow(moveSpec);
+
         const updatedSession = conversationManager.getSession(sessionId);
         await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal);
     } catch (error) {

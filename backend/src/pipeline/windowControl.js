@@ -67,6 +67,43 @@ function cornerXY(m, corner, [w, h]) {
   }
 }
 
+// Detecta un comando de movimiento en lo que dijo el usuario (ES/EN) y devuelve un
+// spec canónico para moveWindow(), o null. Determinista -> no depende de que el LLM
+// acierte el [MOVE:]. Ejemplos: "ponte en pantalla completa", "vete a la esquina de
+// abajo a la izquierda", "pásate a la otra pantalla", "hazte pequeña", "ve al centro".
+export function parseMoveIntent(text) {
+  const s = (text || '').toLowerCase();
+  // ¿hay intención de mover/redimensionar la ventana?
+  const hasVerb = /\b(mu[eé]vete|mu[eé]vase|vete|ve|ponte|p[oó]nte|colócate|ub[ií]cate|ll[eé]vate|and[aá]te|p[aá]sate|regr[eé]sate|mueve|ponla|hazte|agr[aá]ndate|ach[ií]cate|minim|maxim|move|go|put yourself|resize)\b/.test(s);
+  const hasScreenNoun = /(pantalla completa|full ?screen|otra pantalla|otro monitor|siguiente pantalla|next screen|esquina|corner|widget|centro|al medio|en medio)/.test(s);
+  if (!hasVerb && !hasScreenNoun) return null;
+
+  // pantalla completa / llenar
+  if (/(pantalla completa|full ?screen|maxim|toda la pantalla|ll[eé]nala|agr[aá]ndate|hazte grande)/.test(s)) {
+    return /(otra|otro|siguiente|next)/.test(s) ? 'next-screen full' : 'fullscreen';
+  }
+  // cambiar de pantalla/monitor
+  if (/(otra pantalla|otro monitor|siguiente pantalla|next screen|cambia de pantalla|p[aá]sate de pantalla|de pantalla)/.test(s)) {
+    return 'next-screen full';
+  }
+  // centro
+  if (/(centro|en medio|al medio|center)/.test(s)) return 'center';
+
+  // esquinas (widget) por dirección
+  const vert = /(abajo|inferior|de abajo|bottom|baja)/.test(s) ? 'bottom'
+    : (/(arriba|superior|de arriba|top|sube)/.test(s) ? 'top' : '');
+  const horz = /(izquierda|izq\b|left)/.test(s) ? 'left'
+    : (/(derecha|der\b|right)/.test(s) ? 'right' : '');
+  if (vert && horz) return `${vert}-${horz}`;
+  if (vert) return `${vert}-right`;
+  // solo lado -> esa pantalla (con varios monitores, "a la izquierda" = monitor izquierdo)
+  if (horz && /(pantalla|monitor|lado|mu[eé]vete|vete|p[aá]sate)/.test(s)) return `${horz} screen full`;
+  if (horz) return `top-${horz}`;
+  // pequeña/widget/esquina sin dirección -> esquina por defecto
+  if (/(pequeñ|chica|chiquit|widget|esquina|rinc[oó]n|ach[ií]cate|minim)/.test(s)) return 'top-right';
+  return null;
+}
+
 // Interpreta el spec del tag [MOVE:spec] y mueve la ventana. Ejemplos de spec:
 // "top-right", "bottom-left", "center", "next-screen", "screen 2", "left-monitor".
 export async function moveWindow(spec = '') {
