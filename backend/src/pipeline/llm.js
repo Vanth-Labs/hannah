@@ -101,10 +101,10 @@ async function streamAnswer(messages, onToken, signal) {
 // el backend lo ejecuta y le realimenta el resultado. Ver el protocolo en config.js.
 const ACTION_TOOL = {
     run: ['run_command', 'command'], search: ['web_search', 'query'], fetch: ['fetch_url', 'url'],
-    browse: ['open_url', 'url'], weather: ['get_weather', 'location'], look: ['look_now', null],
+    browse: ['open_url', 'url'], close: ['close_window', 'target'], weather: ['get_weather', 'location'], look: ['look_now', null],
     time: ['get_datetime', null], open: ['open_app', 'name'], recall: ['recall_memory', 'query'],
 };
-const ACTION_RE = /\[\s*(RUN|SEARCH|FETCH|BROWSE|WEATHER|LOOK|TIME|OPEN|RECALL)\b\s*(?::\s*([^\]\n]*))?\]/gi;
+const ACTION_RE = /\[\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|RECALL)\b\s*(?::\s*([^\]\n]*))?\]/gi;
 
 function parseActions(text) {
     const acts = []; let m; ACTION_RE.lastIndex = 0;

@@ -73,6 +73,7 @@ the result to continue with. When you need to act or you lack info, emit the tag
   search the web        -> [SEARCH: query]
   read a web page       -> [FETCH: url]     (you read it; no window opens)
   OPEN a page in the browser (visible for the user) -> [BROWSE: url]
+  CLOSE a window/app (browser, terminal, a page) -> [CLOSE: what]
   weather               -> [WEATHER: place]
   look through camera   -> [LOOK]
   date / time           -> [TIME]
@@ -119,7 +120,7 @@ At the end of each response, append an emotion tag on a new line in the format:
     // Set chico ayuda al 8B (se confunde con muchas tools). recall_memory se omite:
     // el recall vectorial ya se inyecta automático en cada prompt.
     names: (process.env.TOOLS
-      || 'get_datetime,look_now,get_weather,fetch_url,web_search,open_url,open_app,run_command')
+      || 'get_datetime,look_now,get_weather,fetch_url,web_search,open_url,close_window,open_app,run_command')
       .split(',').map((s) => s.trim()).filter(Boolean),
     // SEGURIDAD: run_command SOLO si systemControl=true (default OFF), y con allowlist.
     systemControl: process.env.TOOLS_SYSTEM_CONTROL === 'true',

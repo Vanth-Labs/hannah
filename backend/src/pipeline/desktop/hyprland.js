@@ -33,6 +33,20 @@ export async function findWindow() {
   return w ? { id: w.address, at: w.at, size: w.size, name: w.title } : null;
 }
 
+// Cierra las ventanas cuyo título/clase incluya alguno de los términos. Nunca cierra a
+// Hannah. Devuelve cuántas cerró.
+export async function close(queries) {
+  const clients = await hypr('clients');
+  if (!clients) return 0;
+  let n = 0;
+  for (const w of clients) {
+    if ((w.title || '').startsWith('Hannah')) continue;
+    const hay = `${w.title || ''} ${w.class || ''} ${w.initialClass || ''} ${w.initialTitle || ''}`.toLowerCase();
+    if (queries.some((q) => q && hay.includes(q))) { await sh(`hyprctl dispatch closewindow "address:${w.address}"`); n++; }
+  }
+  return n;
+}
+
 export async function place(win, x, y, w, h) {
   await sh(`hyprctl dispatch setfloating "address:${win.id}"`);
   await sh(`hyprctl dispatch resizewindowpixel "exact ${w} ${h},address:${win.id}"`);

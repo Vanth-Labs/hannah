@@ -20,3 +20,4 @@ export async function getMonitors() { return (await adapter())?.getMonitors() ??
 export async function getCursor() { return (await adapter())?.getCursor() ?? null; }
 export async function findWindow() { return (await adapter())?.findWindow() ?? null; }
 export async function place(win, x, y, w, h) { return (await adapter())?.place(win, x, y, w, h) ?? false; }
+export async function closeWindows(queries) { return (await adapter())?.close?.(queries) ?? 0; }

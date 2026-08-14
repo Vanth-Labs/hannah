@@ -40,6 +40,20 @@ export async function findWindow() {
   return { id, at: [+gx[1], +gy[1]], size: [+gw[1], +gh[1]], name: 'Hannah' };
 }
 
+// Cierra ventanas cuyo título/clase incluya alguno de los términos. Nunca cierra a Hannah.
+export async function close(queries) {
+  const out = await sh('wmctrl -l -x');   // "id  desk  clase.Clase  host  título"
+  if (!out) return 0;
+  let n = 0;
+  for (const line of out.split('\n')) {
+    if (!line.trim() || /\bHannah\b/.test(line)) continue;
+    const id = line.split(/\s+/)[0];
+    const hay = line.toLowerCase();
+    if (queries.some((q) => q && hay.includes(q))) { await sh(`wmctrl -i -c ${id}`); n++; }
+  }
+  return n;
+}
+
 export async function place(win, x, y, w, h) {
   await sh(`xdotool windowsize ${win.id} ${w} ${h}`);
   await sh(`xdotool windowmove ${win.id} ${x} ${y}`);

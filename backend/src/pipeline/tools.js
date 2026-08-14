@@ -10,6 +10,7 @@ import { getLastFrame } from '../state/frameStore.js';
 import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
 import { runCommand, requestConfirm } from './terminal.js';
+import { closeWindows } from './desktop/index.js';
 
 // Comandos DESTRUCTIVOS que requieren confirmación del usuario (lo demás corre libre).
 const DANGER = /\brm\s+-[a-z]*[rf]|\brm\s+\S*\s*\/(?:\s|$|\*)|\bmkfs|\bdd\s+.*\bof=|:\(\)\s*\{\s*:|>\s*\/dev\/(?!null)|\bchmod\s+-R\s+0|\b(shutdown|reboot|poweroff|halt|fdisk|wipefs|userdel|mkswap)\b|\bgit\s+.*--force|\bmv\s+\S+\s+\/\s*$/i;
@@ -91,6 +92,19 @@ const TOOLS = {
       const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open';
       exec(`${opener} "${u}"`, (e) => { if (e) logger.error('open_url exec', { message: e.message }); });
       return `opening ${u} in the browser`;
+    },
+  },
+
+  close_window: {
+    schema: fn('close_window', 'Close desktop windows matching a name (a browser, an app, a page title). Never closes Hannah herself.',
+      { target: { type: 'string', description: 'app or window to close, e.g. "browser", "youtube", "terminal"' } }, ['target']),
+    handler: async ({ target }) => {
+      const t = (target || '').toLowerCase().trim();
+      if (!t) return 'no window specified';
+      const aliasKey = Object.keys(CLOSE_ALIAS).find((k) => t.includes(k));
+      const queries = aliasKey ? CLOSE_ALIAS[aliasKey] : [t];
+      const n = await closeWindows(queries.filter(Boolean));
+      return n ? `closed ${n} window(s) matching "${target}"` : `no window matching "${target}" was open`;
     },
   },
 
@@ -182,6 +196,32 @@ export async function handleOpenIntent(text, ctx) {
   const url = siteKey ? SITES[siteKey] : (hasDomain ? target.replace(/\s+/g, '') : null);
   if (url) { await runTool('open_url', { url }, ctx); return true; }
   return false;
+}
+
+// Detecta "cierra/cerrar X" (ES/EN) y cierra las ventanas que coincidan, DETERMINISTA vía
+// el compositor (hyprctl/wmctrl). Nunca cierra a Hannah. Devuelve true si lo manejó.
+// Alias -> qué buscar en título/clase de la ventana. "navegador" cubre varios navegadores.
+const CLOSE_ALIAS = {
+  navegador: ['zen', 'firefox', 'chrom', 'brave', 'vivaldi', 'librewolf'],
+  browser: ['zen', 'firefox', 'chrom', 'brave', 'vivaldi', 'librewolf'],
+  terminal: ['kitty', 'foot', 'alacritty', 'konsole', 'gnome-terminal', 'wezterm', 'st-256'],
+  consola: ['kitty', 'foot', 'alacritty', 'konsole', 'gnome-terminal', 'wezterm', 'st-256'],
+  editor: ['code', 'zed', 'sublime', 'gedit'],
+  code: ['code'], vscode: ['code'], archivos: ['nautilus', 'dolphin', 'thunar', 'nemo'], files: ['nautilus', 'dolphin', 'thunar', 'nemo'],
+};
+export async function handleCloseIntent(text, ctx) {
+  const s = (text || '').toLowerCase();
+  const m = s.match(/(?:^|\s)(?:ci[eé]rr[aae]|cerr[aá]r?|close)(?:me|te|la|lo|las|los)?\s+(?:el\s+|la\s+|los\s+|las\s+|una?\s+|esta\s+|ese\s+|the\s+)?(.+)/);
+  if (!m) return false;
+  const target = m[1].trim().replace(/\s+(?:por favor|please|ahora|ya)\s*$/i, '').replace(/[.,!?¿¡]+$/, '').trim();
+  if (!target) return false;
+  // "cierra esto / la ventana / esta ventana" -> ventana enfocada (no implementado por nombre): ignorar.
+  if (/^(esto|eso|la ventana|esta ventana|esa ventana|window)$/.test(target)) return false;
+  const aliasKey = Object.keys(CLOSE_ALIAS).find((k) => target.includes(k));
+  const queries = aliasKey ? CLOSE_ALIAS[aliasKey] : [target.replace(/\s+ventana.*$/, '').trim()];
+  const n = await closeWindows(queries.filter(Boolean));
+  ctx?.send?.({ type: 'window_close', target, closed: n });
+  return true;   // manejado aunque n===0 (no había esa ventana), para no alucinar
 }
 
 // Intents de DATOS deterministas: "ejecuta X", "busca X", "lee la url X". Ejecuta la
