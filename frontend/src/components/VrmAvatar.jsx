@@ -11,6 +11,7 @@ import {
 } from '../retarget/retargetFace.js';
 import { SMPLX_TO_VROID } from '../retarget/boneMap.js';
 import OFFSETS from '../retarget/retargetOffsets.json';
+import { buildSpringBones, updateSpringBones } from './springBones.js';
 
 const FLOOR_Y = -1.6;
 
@@ -180,6 +181,9 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             eyeRestR: byName['J_Adj_R_FaceEye']?.quaternion.clone(),
         };
     }, [scene]);
+
+    // Spring bones (pelo/falda/busto): cadenas J_Sec_* con física ligera de inercia.
+    const springs = useMemo(() => buildSpringBones(scene), [scene]);
 
     const face = useRef({
         current: {}, blinkNext: 2 + Math.random() * 3, blinkT: -1,
@@ -362,6 +366,9 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         // ── Vida en reposo ──────────────────────────────────────────────
         if (rig.chest) rig.chest.position.y = (rig.chest.userData._baseY ??= rig.chest.position.y) + Math.sin(t * 1.6) * 0.008;
         if (group.current) group.current.position.y = rig.baseY + Math.sin(t * 0.8) * 0.004;
+
+        // ── Física: spring bones (pelo/falda/busto) reaccionan al movimiento ─
+        if (springs.length) updateSpringBones(springs, delta);
     });
 
     // El encaramiento a cámara se hace en la raíz (pelvis), no aquí — así el
