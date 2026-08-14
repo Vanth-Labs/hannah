@@ -232,10 +232,12 @@ export async function resolveDataAction(text, ctx) {
   const runAndReport = async (raw) => {
     const cmd = (raw || '').trim().replace(/^["'`]+|["'`]+$/g, '').replace(/[.?!]+$/, '').trim();
     if (!cmd) return null;
-    const r = await runTool('run_command', { command: cmd }, ctx);
+    let r = await runTool('run_command', { command: cmd }, ctx);
+    // Quitar las líneas de prompt del shell que se cuelan (p.ej. "(base) [user@host ~]$ cmd").
+    r = String(r).split('\n').filter((l) => !/^\(?[\w.@-]*\)?\s*\[[^\]]*\]\s*[$#]/.test(l)).join('\n').trim();
     // Toast en la UI: ves el comando y su salida real SIN abrir la terminal.
-    ctx?.send?.({ type: 'command_run', command: cmd, output: String(r).slice(0, 1200) });
-    return `[Salida real de "${cmd}"]:\n${r}`;
+    ctx?.send?.({ type: 'command_run', command: cmd, output: r.slice(0, 1200) });
+    return `[Salida real de "${cmd}"]:\n${r || '(sin salida)'}`;
   };
   // Verbos imperativos de "correr" (voseo/tú/infinitivo/enclítico + EN). Preciso a
   // propósito: excluye "hace" (calor/tiempo) y "tira"/"correo" para no correr basura.
@@ -245,6 +247,18 @@ export async function resolveDataAction(text, ctx) {
   // 1) Comando entre backticks/comillas + intención de correr -> lo más fiable.
   const quoted = t.match(/`([^`]+)`/) || t.match(/'([^']{2,})'/) || t.match(/"([^"]{2,})"/);
   if (quoted && RUN_HINT.test(t)) return runAndReport(quoted[1]);
+
+  // 1.5) Leer/mostrar un ARCHIVO local -> cat. ANTES que "ls" y que "lee <url>", para que
+  // "cat X", "mostrame el archivo X", "leé /ruta/x.txt" no se confundan con listar carpeta
+  // ni con una URL. Extrae SOLO la ruta (ignora relleno como "del archivo").
+  {
+    // Raíces + sufijo libre (sin \b final: matchea "mostrame", "leéme", acentos, etc.).
+    const wantsRead = /(?:^|\s)cat\b/i.test(t)
+      || /\b(?:le[eé]|leer|read|mostr|muestr|ense[ñn]|imprim)\w*/i.test(t);
+    const isUrl = /https?:\/\//i.test(t) || /\b[\w-]+\.(?:com|org|net|io|dev|gg|tv|co|app|ai)\b/i.test(t);
+    const fileTok = t.match(/((?:~|\.{0,2})\/[^\s"'`]+|[^\s"'`/]+\.[A-Za-z0-9]{1,5})/);
+    if (wantsRead && !isUrl && fileTok) return runAndReport(`cat ${fileTok[1]}`);
+  }
 
   // 2) Lenguaje natural -> comando (frases comunes, alta precisión). Ampliable.
   const NL_CMD = [
