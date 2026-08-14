@@ -217,6 +217,97 @@ function ShortcutsSection() {
     );
 }
 
+// ── Skills (estilo Claude Code): lista las skills y edita el SKILL.md crudo. Model-agnóstico:
+// el modelo lee el índice y decide; el backend ejecuta. GET/POST/DELETE /api/v1/skills.
+const NEW_SKILL_TPL = `---
+name: mi-skill
+description: qué hace, en una línea
+run: echo hola {arg}
+phrases: ["frase que la dispara"]
+---
+Cuándo usarla y un ejemplo (esto lo lee el modelo).
+`;
+
+function SkillsSection() {
+    const [skills, setSkills] = useState([]);
+    const [editing, setEditing] = useState(null);   // null | { name, content, isNew }
+    const [status, setStatus] = useState('cargando…');
+
+    const load = () => fetch('/api/v1/skills').then((r) => r.json())
+        .then((d) => { setSkills(d.skills || []); setStatus(''); })
+        .catch(() => setStatus('backend no disponible'));
+    useEffect(() => { load(); }, []);
+
+    const save = async () => {
+        const name = (editing.name || '').trim();
+        if (!name || !editing.content.trim()) { setStatus('faltan nombre/contenido'); return; }
+        setStatus('guardando…');
+        try {
+            await fetch('/api/v1/skills', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, content: editing.content }),
+            });
+            setEditing(null); setStatus('guardado ✓'); load();
+        } catch { setStatus('error al guardar'); }
+    };
+    const del = async (name) => {
+        setStatus('borrando…');
+        try { await fetch(`/api/v1/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }); setStatus(''); load(); }
+        catch { setStatus('error al borrar'); }
+    };
+
+    const chip = { fontSize: '8px', padding: '1px 5px', borderRadius: '6px', marginLeft: '6px' };
+    const smallBtn = { ...S.preset, marginTop: 0, marginRight: '4px', padding: '2px 7px' };
+
+    if (editing) {
+        return (
+            <div style={S.sec}>
+                <div style={S.secTitle}>{editing.isNew ? 'Nueva skill' : `Editar: ${editing.name}`}</div>
+                {editing.isNew && (
+                    <input style={{ ...S.input, marginBottom: '6px' }} placeholder="nombre (ej. deploy)"
+                        value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                )}
+                <textarea
+                    style={{ ...S.input, minHeight: '180px', resize: 'vertical', lineHeight: 1.4, whiteSpace: 'pre', fontSize: '11px' }}
+                    value={editing.content} onChange={(e) => setEditing({ ...editing, content: e.target.value })} />
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                    <button style={S.save} onClick={save}>Guardar skill</button>
+                    <button style={S.close} onClick={() => setEditing(null)}>Cancelar</button>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div style={S.sec}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={S.secTitle}>Skills (capacidades)</div>
+                <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>{status}</span>
+            </div>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)', marginBottom: '6px' }}>
+                Habilidades que Hannah puede usar (cualquier modelo). El backend las ejecuta.
+            </div>
+            {skills.map((s) => (
+                <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>
+                            {s.name}
+                            <span style={{ ...chip, background: s.source === 'user' ? 'rgba(110,231,183,0.15)' : 'rgba(255,255,255,0.08)', color: s.source === 'user' ? '#6ee7b7' : 'rgba(255,255,255,0.4)' }}>
+                                {s.source === 'user' ? 'tuya' : 'incluida'}
+                            </span>
+                        </div>
+                        <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.description || s.action}</div>
+                    </div>
+                    <button style={smallBtn} onClick={() => setEditing({ name: s.name, content: s.content, isNew: false })}>✎</button>
+                    <button style={{ ...smallBtn, background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171' }} onClick={() => del(s.name)}>✕</button>
+                </div>
+            ))}
+            <button style={{ ...S.preset, marginTop: '10px', display: 'inline-block' }}
+                onClick={() => setEditing({ name: '', content: NEW_SKILL_TPL, isNew: true })}>+ nueva skill</button>
+        </div>
+    );
+}
+
 export function SettingsPanel({ onClose }) {
     const { autoLookat, setAutoLookat } = useHannahStore();
     const [form, setForm] = useState({ llm: {}, tts: {}, asr: {} });
@@ -334,6 +425,8 @@ export function SettingsPanel({ onClose }) {
 
                 {/* Atajos de voz para abrir apps/páginas (editable, con defaults) */}
                 <ShortcutsSection />
+
+                <SkillsSection />
 
                 {/* Toggle de comportamiento (solo frontend) */}
                 <div style={S.sec}>
