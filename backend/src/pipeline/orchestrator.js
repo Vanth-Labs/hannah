@@ -61,7 +61,7 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     const text = rawText
         // con o sin corchetes (llama3.1:8b a veces los omite), cerrada o no
         // Acciones: SIEMPRE con corchete (son palabras comunes; jamás estripar "look"/"time" sueltos).
-        .replace(/[[(*]\s*(RUN|SEARCH|FETCH|WEATHER|LOOK|TIME|OPEN|RECALL)\b\s*:?[^\])*\n]*[\])*]/gi, '')
+        .replace(/[[(*]\s*(RUN|SEARCH|FETCH|BROWSE|WEATHER|LOOK|TIME|OPEN|RECALL)\b\s*:?[^\])*\n]*[\])*]/gi, '')
         // Gestos/emoción/mover: con o sin corchete (el 8B a veces los omite).
         .replace(/[[(*]?\s*(MOTION|EMOTION|MOVE)\s*:[^\])*\n]*[\])*]?/gi, '')
         .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final

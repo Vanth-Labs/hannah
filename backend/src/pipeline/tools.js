@@ -83,6 +83,17 @@ const TOOLS = {
     },
   },
 
+  open_url: {
+    schema: fn('open_url', 'Open a URL in the default browser (a VISIBLE window, to show the user a page).',
+      { url: { type: 'string', description: 'the URL to open' } }, ['url']),
+    handler: async ({ url }) => {
+      const u = /^https?:\/\//i.test(url || '') ? url : `https://${url}`;
+      const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open';
+      exec(`${opener} "${u}"`, (e) => { if (e) logger.error('open_url exec', { message: e.message }); });
+      return `opening ${u} in the browser`;
+    },
+  },
+
   web_search: {
     schema: fn('web_search', 'Search the web and return the top results (title, snippet, url).',
       { query: { type: 'string', description: 'what to search for' } }, ['query']),
