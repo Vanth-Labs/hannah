@@ -5,13 +5,37 @@ import { processTextTurn } from './orchestrator.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
+// Prompt del VLM: observar en primera persona (a la persona y el entorno), no hacer
+// un "caption". Frase corta, centrada en qué hace la persona y lo notable.
+const VLM_PROMPT = 'You are looking through your own eyes (a webcam) at the person you '
+    + 'are chatting with and their surroundings. In ONE short sentence, note what the '
+    + 'person is doing and anything notable or new. Be specific about the person.';
+
 // Describe la escena con el proveedor activo: VLM local (rico) o YOLO (etiquetas).
 export async function describeScene(frameBase64) {
     if (config.vision.provider === 'vlm') {
-        return describeFrame(frameBase64);
+        return describeFrame(frameBase64, VLM_PROMPT);
     }
     const vision = await analyzeFrame(frameBase64);
     return vision?.summary || '';
+}
+
+// ── Perillas de frecuencia de la visión (cuánto habla sobre lo que ve) ──────
+// REACT_IF_SIMILARITY_BELOW: reacciona solo si la escena cambió lo suficiente
+//   (más BAJO = exige más cambio = habla MENOS). MIN_GAP_MS: tiempo mínimo entre
+//   comentarios (más ALTO = habla MENOS).
+const REACT_IF_SIMILARITY_BELOW = 0.45;
+const MIN_GAP_MS = 25000;
+
+// Solapamiento de palabras entre dos descripciones (0..1). Sirve para NO reaccionar
+// cuando la escena no cambió (evita que narre lo mismo una y otra vez).
+function similarity(a, b) {
+    const norm = (s) => new Set(String(s).toLowerCase().match(/[a-záéíóúñ]{4,}/g) || []);
+    const A = norm(a), B = norm(b);
+    if (!A.size || !B.size) return 0;
+    let inter = 0;
+    for (const w of A) if (B.has(w)) inter++;
+    return inter / Math.min(A.size, B.size);
 }
 
 const sessions = new Map();
@@ -23,6 +47,8 @@ export function startVisionLoop(sessionId, send) {
         lastFrame: null,
         isProcessing: false,   // ← CLAVE: evita llamadas solapadas
         interval: null,
+        lastReacted: '',       // última escena que disparó una reacción
+        lastReactAt: 0,        // timestamp de la última reacción hablada
     };
 
     state.interval = setInterval(async () => {
@@ -33,14 +59,28 @@ export function startVisionLoop(sessionId, send) {
             const summary = await describeScene(state.lastFrame);
             if (!summary) return;
 
-            const prompt = `[VISIÓN]: ${summary}. Reacciona brevemente (1-2 frases), como si lo estuvieras viendo ahora mismo.`;
+            // La visión es AWARENESS continua, no un caption por frame: solo habla
+            // la primera vez (te nota) o cuando la escena cambia lo suficiente y pasó
+            // un mínimo de tiempo. Si no, se queda callada (sigue "viéndote").
+            const changed = similarity(summary, state.lastReacted) < REACT_IF_SIMILARITY_BELOW;
+            const enoughGap = Date.now() - state.lastReactAt > MIN_GAP_MS;
+            if (state.lastReacted && !(changed && enoughGap)) return;
+
+            state.lastReacted = summary;
+            state.lastReactAt = Date.now();
+
+            const prompt = `[YOUR EYES] Right now, through your camera, you can see: "${summary}". `
+                + `The person in front of you is who you are chatting with — you can SEE them. `
+                + `If there's something natural and worth saying, say ONE short casual line directly `
+                + `TO them (second person, like a friend who just noticed something). Do NOT narrate `
+                + `or describe the image like a caption.`;
             await processTextTurn(sessionId, prompt, send);
         } catch (err) {
             logger.error('Vision loop error', { message: err.message });
         } finally {
             state.isProcessing = false;
         }
-    }, 4000); // cada 4s, no 2s
+    }, 4000);
 
     sessions.set(sessionId, state);
     logger.info('Vision loop started', { sessionId });
