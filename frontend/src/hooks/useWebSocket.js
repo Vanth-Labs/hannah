@@ -206,6 +206,24 @@ export function useWebSocket() {
                 useHannahStore.getState().setCommandRun({ command: msg.command, output: msg.output, at: Date.now() });
                 break;
 
+            case 'open_terminal': {
+                // Skill de acción `terminal` (ssh/interactivo): abrir el panel split y escribir
+                // el comando. Delay para que xterm monte y quede attacheado antes del output.
+                useHannahStore.getState().setTerminalOpen(true);
+                const w = ws.current;
+                if (w?.readyState === WebSocket.OPEN) {
+                    w.send(JSON.stringify({ command: 'TERMINAL_START' }));
+                    if (msg.command) {
+                        setTimeout(() => {
+                            if (ws.current?.readyState === WebSocket.OPEN) {
+                                ws.current.send(JSON.stringify({ command: 'TERMINAL_IN', data: `${msg.command}\n` }));
+                            }
+                        }, 350);
+                    }
+                }
+                break;
+            }
+
             default:
                 addLog(JSON.stringify(msg), 'debug');
         }
