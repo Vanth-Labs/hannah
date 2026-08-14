@@ -8,6 +8,10 @@ const path = require('path');
 const http = require('http');
 const fs = require('fs');
 
+// El sandbox de Chromium en AppImage necesita SUID; para una app local de confianza
+// lo desactivamos así el usuario no tiene que pasar --no-sandbox.
+app.commandLine.appendSwitch('no-sandbox');
+
 const DEV = !!process.env.HANNAH_DEV;   // cargar el Vite dev server
 const DEV_URL = 'http://localhost:5173/?overlay=1';
 const COMPACT = { w: 400, h: 620 };
