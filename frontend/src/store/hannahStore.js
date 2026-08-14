@@ -28,6 +28,7 @@ export const useHannahStore = create((set, get) => ({
     overlayGaze: { x: 0, y: 0 }, // dirección de mirada global (cursor Hyprland) en overlay
     pendingConfirm: null,      // { id, command } — comando destructivo esperando tu OK
     commandRun: null,          // { command, output, at } — último comando ejecutado (toast, sin abrir terminal)
+    terminalOpen: false,       // terminal abierta -> la ventana se divide (avatar arriba, terminal abajo)
     handsFree: false,          // conversación manos-libres por VAD (Fase B) + barge-in
 
     // Log de pipeline
@@ -52,6 +53,7 @@ export const useHannahStore = create((set, get) => ({
     setOverlayGaze: (overlayGaze) => set({ overlayGaze }),
     setPendingConfirm: (pendingConfirm) => set({ pendingConfirm }),
     setCommandRun: (commandRun) => set({ commandRun }),
+    setTerminalOpen: (terminalOpen) => set({ terminalOpen }),
 
     addLog: (msg, type = 'info') => set((state) => ({
         logs: [...state.logs.slice(-49), {

@@ -73,16 +73,14 @@ function CommandToast({ run, onClose }) {
 export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, sendCommand }) {
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
-    const [showTerminal, setShowTerminal] = useState(false);
     const { emotion, isSpeaking, visionActive, transcript, userTranscript, connected, logs,
         avatarMode, setAvatarMode, handsFree, setHandsFree, pendingConfirm, setPendingConfirm,
-        commandRun, setCommandRun } = useHannahStore();
+        commandRun, setCommandRun, terminalOpen, setTerminalOpen } = useHannahStore();
 
     const toggleTerminal = () => {
-        setShowTerminal((v) => {
-            if (!v) sendCommand?.({ command: 'TERMINAL_START' });
-            return !v;
-        });
+        const next = !terminalOpen;
+        if (next) sendCommand?.({ command: 'TERMINAL_START' });
+        setTerminalOpen(next);
     };
     const answerConfirm = (approved) => {
         if (pendingConfirm) sendCommand?.({ command: 'CONFIRM_COMMAND', id: pendingConfirm.id, approved });
@@ -120,7 +118,7 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
             <div style={{
                 position: 'fixed', zIndex: 31,
                 ...(isOverlay
-                    ? { bottom: showTerminal ? 'calc(42% + 14px)' : '20px', left: '50%', transform: 'translateX(-50%)', transition: 'bottom 0.18s' }
+                    ? { bottom: terminalOpen ? 'calc(40% + 14px)' : '20px', left: '50%', transform: 'translateX(-50%)', transition: 'bottom 0.18s' }
                     : { top: '14px', right: '18px' }),
                 display: 'flex', alignItems: 'center', gap: '8px',
                 padding: '7px 9px', borderRadius: '999px',
@@ -134,7 +132,7 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
                 </IconBtn>
                 <IconBtn onClick={onToggleVision} active={visionActive} activeColor="#6ee7b7"
                     title="Que Hannah te vea por la cámara">👁</IconBtn>
-                <IconBtn onClick={toggleTerminal} active={showTerminal} activeColor="#7ab8e8"
+                <IconBtn onClick={toggleTerminal} active={terminalOpen} activeColor="#7ab8e8"
                     title="Terminal (Hannah puede correr comandos)">⌨</IconBtn>
                 <IconBtn onClick={() => setShowSettings(true)}
                     title="Ajustes (modelo/API, voz, atajos)">⚙</IconBtn>
@@ -144,11 +142,11 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
 
             {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
-            {showTerminal && (
+            {terminalOpen && (
                 <TerminalPanel
                     onInput={(d) => sendCommand?.({ command: 'TERMINAL_IN', data: d })}
                     onResize={(cols, rows) => sendCommand?.({ command: 'TERMINAL_RESIZE', cols, rows })}
-                    onClose={() => setShowTerminal(false)}
+                    onClose={() => setTerminalOpen(false)}
                 />
             )}
 

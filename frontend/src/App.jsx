@@ -45,7 +45,7 @@ const AvatarLoadingHint = () => {
 export default function App() {
     const { sendCommand, sendAudio, sendText, stopPlayback } = useWebSocket();
     const { videoRef, startVision, stopVision } = useVision(sendCommand);
-    const { visionActive, connected, handsFree, setHandsFree } = useHannahStore();
+    const { visionActive, connected, handsFree, setHandsFree, terminalOpen } = useHannahStore();
 
     const [isRecording, setIsRecording] = useState(false);
 
@@ -151,8 +151,12 @@ export default function App() {
                 playsInline
             />
 
-            {/* Canvas 3D */}
-            <div style={{ position: 'fixed', inset: 0, zIndex: 1 }}>
+            {/* Canvas 3D — al abrir la terminal, se encoge al 60% superior (split:
+                Hannah arriba, terminal abajo) en vez de que la terminal la tape. */}
+            <div style={{
+                position: 'fixed', top: 0, left: 0, right: 0,
+                bottom: terminalOpen ? '40%' : 0, zIndex: 1, transition: 'bottom 0.18s',
+            }}>
                 <Scene avatarUrl={avatarUrl} />
             </div>
 

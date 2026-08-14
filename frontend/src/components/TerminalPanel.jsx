@@ -33,7 +33,7 @@ export function TerminalPanel({ onInput, onResize, onClose }) {
 
     return (
         <div style={{
-            position: 'fixed', left: 0, right: 0, bottom: 0, height: '42%', zIndex: 30,
+            position: 'fixed', left: 0, right: 0, bottom: 0, height: '40%', zIndex: 30,
             background: '#080b12', borderTop: '1px solid rgba(255,255,255,0.15)',
             display: 'flex', flexDirection: 'column', boxShadow: '0 -8px 24px rgba(0,0,0,0.5)',
         }}>
