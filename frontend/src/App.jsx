@@ -54,10 +54,17 @@ export default function App() {
         if (isOverlay) setHandsFree(true);
     }, [setHandsFree]);
 
-    // En overlay, pedir al backend la mirada global (sigue el cursor por el escritorio).
+    // En overlay-navegador, pedir al backend la mirada global (sigue el cursor).
     useEffect(() => {
-        if (isOverlay && connected) sendCommand({ command: 'GAZE_ON' });
+        if (isOverlay && connected && !window.__HANNAH_DESKTOP__) sendCommand({ command: 'GAZE_ON' });
     }, [connected, sendCommand]);
+
+    // En Electron, la mirada global la empuja el proceso main (cursor del OS).
+    useEffect(() => {
+        if (window.__HANNAH_DESKTOP__) {
+            window.__HANNAH_DESKTOP__.onGaze((g) => useHannahStore.getState().setOverlayGaze(g));
+        }
+    }, []);
 
     // En overlay, la cámara (visión) arranca sola: que Hannah te vea por defecto.
     const visionStarted = useRef(false);

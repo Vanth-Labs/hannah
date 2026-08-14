@@ -4,7 +4,9 @@ import { useHannahStore } from '../store/hannahStore.js';
 import { emitTerminalOut } from '../lib/terminalBus.js';
 import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
 
-const API_BASE = '';
+// En la app Electron no hay proxy Vite: hablar con el backend por URL absoluta.
+const DESKTOP = typeof window !== 'undefined' ? window.__HANNAH_DESKTOP__ : null;
+const API_BASE = DESKTOP ? DESKTOP.backendBase : '';
 
 // Mapa de visemas del backend a morph targets de Ready Player Me / modelos estándar
 export const VISEME_MAP = {
@@ -189,6 +191,11 @@ export function useWebSocket() {
                 emitTerminalOut(msg.data);
                 break;
 
+            case 'window_move':
+                // En Electron, el proceso main mueve la ventana (cross-platform).
+                if (DESKTOP) DESKTOP.moveWindow(msg.spec);
+                break;
+
             case 'confirm_command':
                 useHannahStore.getState().setPendingConfirm({ id: msg.id, command: msg.command });
                 break;
@@ -214,14 +221,17 @@ export function useWebSocket() {
             addLog(`sesión: ${sessionId}`, 'info');
 
 	    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-	    const wsUrl = `${protocol}//${window.location.host}/ws?sessionId=${sessionId}`;
+	    const wsUrl = DESKTOP
+	        ? `ws://localhost:3001/ws?sessionId=${sessionId}`
+	        : `${protocol}//${window.location.host}/ws?sessionId=${sessionId}`;
             ws.current = new WebSocket(wsUrl);
 
             ws.current.onopen = () => {
                 setConnected(true);
                 addLog('WebSocket conectado', 'info');
-                // En overlay: activar la mirada global en este mismo socket (garantizado abierto).
-                if (IS_OVERLAY) ws.current.send(JSON.stringify({ command: 'GAZE_ON' }));
+                // En overlay-navegador: activar la mirada global del backend (Hyprland/X11).
+                // En Electron la mirada la provee el proceso main (IPC), no el backend.
+                if (IS_OVERLAY && !DESKTOP) ws.current.send(JSON.stringify({ command: 'GAZE_ON' }));
             };
 
             ws.current.onclose = () => {
