@@ -39,8 +39,8 @@ Respond in the same language the user speaks.`,
 
     // Protocolo FIJO de tags (no editable): sin esto se rompen gestos/emoción.
     // `llm.js` construye el system prompt final como `persona + protocol`.
-    protocol: `Reply ALWAYS in Spanish (español rioplatense/neutro). Never use any other
-language or script (no English words, no Chinese/CJK characters). No emojis.
+    protocol: `Reply ALWAYS in English. Never use any other language or script
+(no Spanish, no Chinese/CJK characters). No emojis.
 
 Your body already gestures naturally while you speak — never describe that.
 ONLY when a deliberate physical gesture genuinely fits the moment, mark it inline
@@ -85,7 +85,7 @@ At the end of each response, append an emotion tag on a new line in the format:
   },
   tts: {
     provider: process.env.TTS_PROVIDER || 'kokoro',
-    voiceId: process.env.ELEVENLABS_VOICE_ID || 'ef_dora', // Doubles as the Kokoro voice ID. Hannah habla español -> voz española por defecto (ef_dora ♀; em_alex/em_santa ♂). Prefijo de voz = idioma (a=en-us, e=es, ...).
+    voiceId: process.env.ELEVENLABS_VOICE_ID || 'af_heart', // Kokoro voice ID. Hannah habla inglés -> voz inglesa (af_heart ♀). El prefijo define el idioma (a=en-us, e=es, ...). Cambiable en el panel ⚙.
     sidecarUrl: process.env.TTS_SIDECAR_URL || 'http://127.0.0.1:8002',
     apiKey: process.env.ELEVENLABS_API_KEY || '', // usado solo por el proveedor elevenlabs
     model: process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2',
