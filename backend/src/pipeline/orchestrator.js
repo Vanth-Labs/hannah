@@ -255,7 +255,8 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
                 });
             });
         },
-        signal
+        signal,
+        { sessionId }   // ctx para las tools (p.ej. look_now usa el frame de la sesión)
     );
 
     // No devolver el control hasta que todos los segmentos pendientes hayan salido

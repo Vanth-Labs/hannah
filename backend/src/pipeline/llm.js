@@ -3,6 +3,7 @@ import { OpenAI } from 'openai';
 import { config } from '../config.js';
 import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
+import { toolSchemas, runTool } from './tools.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
 
@@ -41,55 +42,39 @@ const getLlmClient = () => {
     return _client;
 };
 
-/**
- * Agnostic Streaming Wrapper for Dialogue Engines
- */
-export const generateDialogueStream = async (history, onToken, onComplete, signal) => {
-    return runOpenAICompatibleStream(history, onToken, onComplete, signal);
-};
+// System prompt = persona + memoria (resumen + recall vectorial) + protocolo.
+async function buildSystemPrompt(history) {
+    const summary = memoryStore.getSummary();
+    const recalled = await recallContext(history);
+    let memorySection = '';
+    if (summary) memorySection += `\n\n[What you remember about the user and past conversations]\n${summary}`;
+    if (recalled) memorySection += `\n\n[Relevant things from earlier conversations]\n${recalled}`;
+    return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}`;
+}
 
 /**
- * Path: Generic OpenAI-Compatible Stream Connection (LLaMA, Groq, local Ollama)
+ * Streaming wrapper. `ctx` (p.ej. { sessionId }) se pasa a las tools que lo necesitan.
  */
-const runOpenAICompatibleStream = async (history, onToken, onComplete, signal) => {
+export const generateDialogueStream = async (history, onToken, onComplete, signal, ctx = {}) => {
     const timer = startTimer();
-    let accumulatedResponse = '';
-
     try {
-        // System prompt = persona + memoria (resumen rodante + recall vectorial) + protocolo.
-        const summary = memoryStore.getSummary();
-        const recalled = await recallContext(history);
-        let memorySection = '';
-        if (summary) memorySection += `\n\n[What you remember about the user and past conversations]\n${summary}`;
-        if (recalled) memorySection += `\n\n[Relevant things from earlier conversations]\n${recalled}`;
-        const systemPrompt = `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}`;
-        const formattedMessages = [
+        const systemPrompt = await buildSystemPrompt(history);
+        const messages = [
             { role: 'system', content: systemPrompt },
-            ...history.map(turn => ({
+            ...history.map((turn) => ({
                 role: turn.role === 'assistant' ? 'assistant' : 'user',
-                content: turn.content
-            }))
+                content: turn.content,
+            })),
         ];
-
-        const stream = await getLlmClient().chat.completions.create({
-            model: config.llm.model, // se lee por llamada: cambia sin reiniciar
-            messages: formattedMessages,
-            max_tokens: 400,
-            stream: true,
-        }, { signal });   // barge-in: abortar la generación al instante
-
-        for await (const chunk of stream) {
-            if (signal?.aborted) break;
-            const token = chunk.choices[0]?.delta?.content || '';
-            if (token) {
-                accumulatedResponse += token;
-                if (onToken) onToken(token);
-            }
-        }
-
-        finalizeLlmTurn(accumulatedResponse, timer.stop(), onComplete);
+        // Con tools: pasada de decisión NO-streaming (Ollama solo devuelve tool_calls
+        // sin streaming), y streaming solo para la respuesta hablada. Sin tools: el
+        // streaming original (más snappy).
+        const text = toolSchemas().length
+            ? await generateWithTools(messages, onToken, signal, ctx)
+            : await streamAnswer(messages, onToken, signal);
+        if (text === null) return;   // abortado (barge-in)
+        finalizeLlmTurn(text, timer.stop(), onComplete);
     } catch (error) {
-        // Abort por barge-in: no es un error real, no notificar al cliente.
         if (signal?.aborted || error.name === 'APIUserAbortError' || error.name === 'AbortError') {
             logger.info('LLM stream abortado (barge-in)');
             return;
@@ -98,6 +83,67 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete, signal) =
         if (onComplete) onComplete({ error: 'llm_failed', message: error.message });
     }
 };
+
+// Streamea una respuesta (sin tools) por la ruta token→onToken. Devuelve el texto
+// acumulado, o null si se abortó (barge-in).
+async function streamAnswer(messages, onToken, signal) {
+    const stream = await getLlmClient().chat.completions.create(
+        { model: config.llm.model, messages, max_tokens: 400, stream: true }, { signal });
+    let content = '';
+    for await (const chunk of stream) {
+        if (signal?.aborted) return null;
+        const tok = chunk.choices[0]?.delta?.content || '';
+        if (tok) { content += tok; if (onToken) onToken(tok); }
+    }
+    return content;
+}
+
+// Loop de tool-calling: pasada NO-streaming con tools; si el modelo pide tools, las
+// ejecuta, apenda los resultados y repite; cuando ya no pide tools, la respuesta
+// hablada se STREAMEA. Cap de profundidad. Devuelve el texto final o null si se abortó.
+async function generateWithTools(messages, onToken, signal, ctx) {
+    for (let depth = 0; depth < 3; depth++) {
+        const tools = toolSchemas();
+        const resp = await getLlmClient().chat.completions.create(
+            { model: config.llm.model, messages, max_tokens: 400, stream: false, ...(tools.length ? { tools } : {}) },
+            { signal });
+        if (signal?.aborted) return null;
+        const msg = resp.choices[0]?.message || {};
+
+        if (msg.tool_calls?.length) {
+            messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
+            for (const tc of msg.tool_calls) {
+                let args = {};
+                try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { /* sin args */ }
+                const result = await runTool(tc.function?.name, args, ctx);
+                messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
+            }
+            // Tras ejecutar tools, generar la respuesta hablada. El protocolo verboso
+            // de gestos ahoga al modelo 8B en el follow-up -> system SLIM (persona +
+            // instrucción corta; conserva el tag de emoción, no el menú de gestos). Se
+            // hace NO-streaming (más fiable con 8B) y se emite el texto por onToken.
+            messages[0] = {
+                role: 'system',
+                content: `${config.llm.persona}\n\nUse the tool results to answer the user `
+                    + `conversationally and briefly (1-2 sentences). End with an emotion tag like `
+                    + `[EMOTION:neutral|happy|surprised|thinking|sad|angry|curious|alert].`,
+            };
+            const done = await getLlmClient().chat.completions.create(
+                { model: config.llm.model, messages, max_tokens: 300, stream: false }, { signal });
+            if (signal?.aborted) return null;
+            const answer = done.choices[0]?.message?.content || '';
+            if (onToken && answer) onToken(answer);
+            return answer;
+        }
+
+        // Sin tool_calls: este mensaje ES la respuesta. Emitirla por onToken.
+        const text = msg.content || '';
+        if (onToken && text) onToken(text);
+        return text;
+    }
+    // Profundidad agotada: forzar respuesta final hablada.
+    return streamAnswer(messages, onToken, signal);
+}
 
 /**
  * Resume la conversación en una memoria de largo plazo concisa (no-streaming).

@@ -4,6 +4,7 @@ import { describeFrame } from './vlm.js';
 import { processTextTurn } from './orchestrator.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
+import { pushFrame as storePushFrame, getLastFrame as storeGetFrame, clearFrame } from '../state/frameStore.js';
 
 // Prompt del VLM: observar en primera persona (a la persona y el entorno), no hacer
 // un "caption". Frase corta, centrada en qué hace la persona y lo notable.
@@ -44,7 +45,6 @@ export function startVisionLoop(sessionId, send) {
     if (sessions.has(sessionId)) return;
 
     const state = {
-        lastFrame: null,
         isProcessing: false,   // ← CLAVE: evita llamadas solapadas
         interval: null,
         lastReacted: '',       // última escena que disparó una reacción
@@ -52,11 +52,12 @@ export function startVisionLoop(sessionId, send) {
     };
 
     state.interval = setInterval(async () => {
-        if (!state.lastFrame || state.isProcessing) return;
+        const frame = storeGetFrame(sessionId);
+        if (!frame || state.isProcessing) return;
 
         state.isProcessing = true;
         try {
-            const summary = await describeScene(state.lastFrame);
+            const summary = await describeScene(frame);
             if (!summary) return;
 
             // La visión es AWARENESS continua, no un caption por frame: solo habla
@@ -87,12 +88,11 @@ export function startVisionLoop(sessionId, send) {
 }
 
 export function pushFrame(sessionId, frameBase64) {
-    const state = sessions.get(sessionId);
-    if (state) state.lastFrame = frameBase64;
+    storePushFrame(sessionId, frameBase64);
 }
 
 export function getLastFrame(sessionId) {
-    return sessions.get(sessionId)?.lastFrame || null;
+    return storeGetFrame(sessionId);
 }
 
 export function stopVisionLoop(sessionId) {
@@ -100,5 +100,6 @@ export function stopVisionLoop(sessionId) {
     if (!state) return;
     clearInterval(state.interval);
     sessions.delete(sessionId);
+    clearFrame(sessionId);
     logger.info('Vision loop stopped', { sessionId });
 }

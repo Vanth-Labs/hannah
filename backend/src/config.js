@@ -90,6 +90,27 @@ At the end of each response, append an emotion tag on a new line in the format:
     recallK: parseInt(process.env.MEMORY_RECALL_K || '3', 10),
     recallEnabled: process.env.MEMORY_RECALL !== 'false',
   },
+  tools: {
+    // Function-calling (Fase T). OFF por defecto: llama3.1:8b es poco fiable con tools
+    // (a veces emite el tool-call como texto y ensucia el chat). Activar con TOOLS_ENABLED=true
+    // idealmente con un modelo bueno para tools (qwen2.5) vía el panel ⚙.
+    enabled: process.env.TOOLS_ENABLED === 'true',
+    // Set chico ayuda al 8B (se confunde con muchas tools). recall_memory se omite:
+    // el recall vectorial ya se inyecta automático en cada prompt.
+    names: (process.env.TOOLS
+      || 'get_datetime,look_now,get_weather,open_app,run_command')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+    // SEGURIDAD: run_command SOLO si systemControl=true (default OFF), y con allowlist.
+    systemControl: process.env.TOOLS_SYSTEM_CONTROL === 'true',
+    // open_app: el LLM elige la CLAVE; el comando es fijo (sin inyección). Editable.
+    appAllowlist: {
+      firefox: 'firefox', chrome: 'google-chrome-stable', browser: 'xdg-open https://www.google.com',
+      code: 'code', vscode: 'code', files: 'xdg-open ~',
+      terminal: 'x-terminal-emulator || konsole || gnome-terminal || alacritty',
+    },
+    cmdAllowlist: (process.env.TOOLS_CMD_ALLOWLIST || 'echo,ls,date,uptime,df -h,free -h,whoami')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+  },
   session: {
     ttl: parseInt(process.env.SESSION_TTL_MINUTES || '30', 10),
   },
