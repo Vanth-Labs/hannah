@@ -18,11 +18,59 @@ const EMOTION_COLOR = {
     sad:      '#93c5fd',
 };
 
-export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording }) {
+// Control de posición del overlay: mover/redimensionar por clic (fiable, sin voz/LLM).
+// El selector de pantalla aparece SOLO si hay más de un monitor (universal).
+function PositionPanel({ monitors, onMove, onClose }) {
+    const cell = { pointerEvents: 'auto', height: '30px', borderRadius: '8px', cursor: 'pointer',
+        background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.14)',
+        color: 'rgba(255,255,255,0.8)', fontSize: '13px' };
+    const Btn = ({ label, spec, style }) => (
+        <button onClick={() => onMove(spec)} style={{ ...cell, ...style }}>{label}</button>
+    );
+    const gap = { width: '30px' };
+    return (
+        <div style={{
+            position: 'fixed', top: '54px', right: '16px', zIndex: 20, width: '206px',
+            background: 'rgba(10,14,22,0.95)', border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: '14px', padding: '14px', fontFamily: "'DM Mono', monospace",
+            color: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)', pointerEvents: 'auto',
+        }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', fontSize: '11px', letterSpacing: '0.12em' }}>
+                <span>POSICIÓN</span>
+                <span onClick={onClose} style={{ cursor: 'pointer', opacity: 0.6 }}>✕</span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                <Btn label="⛶ Completa" spec="fullscreen" style={{ flex: 2 }} />
+                <Btn label="▫ Chica" spec="top-right" style={{ flex: 1 }} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
+                <Btn label="↖" spec="top-left" /><span style={gap} /><Btn label="↗" spec="top-right" />
+                <span style={gap} /><Btn label="●" spec="center" /><span style={gap} />
+                <Btn label="↙" spec="bottom-left" /><span style={gap} /><Btn label="↘" spec="bottom-right" />
+            </div>
+            {monitors?.count > 1 && (
+                <div>
+                    <div style={{ fontSize: '10px', opacity: 0.5, marginBottom: '5px', letterSpacing: '0.08em' }}>
+                        PANTALLA ({monitors.count})
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                        {monitors.list.map((m) => (
+                            <Btn key={m.index} label={String(m.index)} spec={`screen ${m.index} full`} style={{ flex: 1 }} />
+                        ))}
+                        <Btn label="⇄" spec="next-screen full" style={{ flex: 1 }} />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, onMoveWindow }) {
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
+    const [showPos, setShowPos] = useState(false);
     const { emotion, isSpeaking, visionActive, transcript, userTranscript, connected, logs,
-        avatarMode, setAvatarMode, handsFree, setHandsFree } = useHannahStore();
+        avatarMode, setAvatarMode, handsFree, setHandsFree, monitors } = useHannahStore();
 
     const handleSend = () => {
         if (!input.trim()) return;
@@ -111,6 +159,23 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
                         {handsFree ? '🎧 manos-libres' : '🎧 off'}
                     </button>
                 )}
+                {/* Posición de la ventana (overlay): mover/redimensionar por clic */}
+                {isOverlay && (
+                    <button
+                        onClick={() => setShowPos((v) => !v)}
+                        title="Posición de la ventana"
+                        style={{
+                            pointerEvents: 'auto',
+                            width: '30px', height: '30px', borderRadius: '50%',
+                            background: showPos ? 'rgba(122,184,232,0.15)' : 'rgba(255,255,255,0.06)',
+                            border: `1px solid ${showPos ? 'rgba(122,184,232,0.5)' : 'rgba(255,255,255,0.15)'}`,
+                            color: showPos ? '#7ab8e8' : 'rgba(255,255,255,0.6)',
+                            fontSize: '14px', cursor: 'pointer',
+                        }}
+                    >
+                        ⤢
+                    </button>
+                )}
                 {/* Ajustes: trae tu propio modelo/API */}
                 <button
                     onClick={() => setShowSettings(true)}
@@ -134,6 +199,14 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
             </div>
 
             {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+
+            {showPos && isOverlay && (
+                <PositionPanel
+                    monitors={monitors}
+                    onMove={(spec) => onMoveWindow?.(spec)}
+                    onClose={() => setShowPos(false)}
+                />
+            )}
 
             {/* ── Transcript flotante (oculto en modo overlay) ── */}
             {!isOverlay && (transcript || userTranscript) && (

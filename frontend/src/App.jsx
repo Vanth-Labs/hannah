@@ -157,6 +157,7 @@ export default function App() {
                 onToggleVision={handleToggleVision}
                 onToggleRecord={handleRecord}
                 isRecording={isRecording}
+                onMoveWindow={(spec) => sendCommand({ command: 'WINDOW_MOVE', spec })}
             />
         </>
     );

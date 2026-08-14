@@ -188,6 +188,10 @@ export function useWebSocket() {
                 useHannahStore.getState().setOverlayGaze({ x: msg.x, y: msg.y });
                 break;
 
+            case 'monitors':
+                useHannahStore.getState().setMonitors({ count: msg.count, list: msg.list || [] });
+                break;
+
             default:
                 addLog(JSON.stringify(msg), 'debug');
         }
