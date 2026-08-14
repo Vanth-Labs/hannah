@@ -83,6 +83,61 @@ const S = {
     },
 };
 
+// ── Selector de voz Kokoro agrupado por idioma. Lee las voces reales del sidecar
+// (GET /tts/voices); si está caído usa un fallback mínimo. El prefijo de la voz define
+// el idioma (e=español, a=inglés US, …) y el 2º carácter el género (f/m).
+const LANG_BY_PREFIX = { e: 'Español', a: 'Inglés (US)', b: 'Inglés (UK)', f: 'Francés', i: 'Italiano', p: 'Portugués', j: 'Japonés', z: 'Chino', h: 'Hindi' };
+const LANG_ORDER = ['e', 'a', 'b', 'f', 'i', 'p', 'j', 'z', 'h'];   // Español primero
+const FALLBACK_VOICES = ['ef_dora', 'em_alex', 'em_santa', 'af_heart', 'af_bella'];
+
+function VoiceField({ value, onChange, provider }) {
+    const [voices, setVoices] = useState([]);
+    const [custom, setCustom] = useState(false);
+
+    useEffect(() => {
+        if (provider === 'elevenlabs') return;
+        fetch('/api/v1/tts/voices')
+            .then((r) => r.json())
+            .then((d) => setVoices(d.voices?.length ? d.voices : FALLBACK_VOICES))
+            .catch(() => setVoices(FALLBACK_VOICES));
+    }, [provider]);
+
+    // ElevenLabs: los voice-id son arbitrarios (cloud) -> texto libre.
+    if (provider === 'elevenlabs') {
+        return <input style={S.input} value={value} placeholder="voice id" onChange={(e) => onChange(e.target.value)} />;
+    }
+    if (custom) {
+        return (
+            <div>
+                <input style={S.input} value={value} placeholder="nombre de voz (ej. ef_dora)"
+                    onChange={(e) => onChange(e.target.value)} autoFocus />
+                <button style={{ ...S.preset, marginTop: '6px' }} onClick={() => setCustom(false)}>← elegir de la lista</button>
+            </div>
+        );
+    }
+
+    const list = (value && !voices.includes(value)) ? [value, ...voices] : voices;
+    const groups = {};
+    for (const v of list) (groups[v[0]] ||= []).push(v);
+    const prefixes = [
+        ...LANG_ORDER.filter((p) => groups[p]),
+        ...Object.keys(groups).filter((p) => !LANG_ORDER.includes(p)),
+    ];
+    const label = (v) => `${v} ${v[1] === 'f' ? '♀' : v[1] === 'm' ? '♂' : ''}`.trim();
+
+    return (
+        <select style={S.input} value={value}
+            onChange={(e) => (e.target.value === '__custom__' ? setCustom(true) : onChange(e.target.value))}>
+            {prefixes.map((p) => (
+                <optgroup key={p} label={LANG_BY_PREFIX[p] || p.toUpperCase()}>
+                    {groups[p].map((v) => <option key={v} value={v}>{label(v)}</option>)}
+                </optgroup>
+            ))}
+            <option value="__custom__">Personalizada…</option>
+        </select>
+    );
+}
+
 // ── Atajos de voz (abrir apps/páginas). Estado propio: carga GET /shortcuts, edita
 // filas clave→valor y guarda POST /shortcuts. Sin tocar la config de proveedores.
 function ShortcutsSection() {
@@ -244,7 +299,13 @@ export function SettingsPanel({ onClose }) {
                             return (
                                 <div key={fld.name}>
                                     <label style={S.label}>{fld.label}</label>
-                                    {fld.type === 'select' ? (
+                                    {s.key === 'tts' && fld.name === 'voiceId' ? (
+                                        <VoiceField
+                                            value={val}
+                                            provider={form.tts?.provider || 'kokoro'}
+                                            onChange={(v) => setField(s.key, fld.name, v)}
+                                        />
+                                    ) : fld.type === 'select' ? (
                                         <select style={S.input} value={val} onChange={(e) => setField(s.key, fld.name, e.target.value)}>
                                             {fld.options.map((o) => <option key={o} value={o}>{o}</option>)}
                                         </select>
