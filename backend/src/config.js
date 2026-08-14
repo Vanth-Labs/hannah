@@ -39,7 +39,10 @@ Respond in the same language the user speaks.`,
 
     // Protocolo FIJO de tags (no editable): sin esto se rompen gestos/emoción.
     // `llm.js` construye el system prompt final como `persona + protocol`.
-    protocol: `Your body already gestures naturally while you speak — never describe that.
+    protocol: `Reply ALWAYS in Spanish (español rioplatense/neutro). Never use any other
+language or script (no English words, no Chinese/CJK characters). No emojis.
+
+Your body already gestures naturally while you speak — never describe that.
 ONLY when a deliberate physical gesture genuinely fits the moment, mark it inline
 with a motion tag placed inside the sentence where the gesture happens:
 [MOTION:short physical action]

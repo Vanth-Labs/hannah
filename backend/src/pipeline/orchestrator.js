@@ -5,6 +5,7 @@ import { synthesizeSpeechStream } from './tts.js';
 import { generateVisemesFromText } from './lipsync.js';
 import { generateMotion, generateMotionFromText } from './motion.js';
 import { moveWindow, parseMoveIntent } from './windowControl.js';
+import { handleOpenIntent, resolveDataAction } from './tools.js';
 import { conversationManager } from '../state/conversationManager.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -65,6 +66,8 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
         // Gestos/emoción/mover: con o sin corchete (el 8B a veces los omite).
         .replace(/[[(*]?\s*(MOTION|EMOTION|MOVE)\s*:[^\])*\n]*[\])*]?/gi, '')
         .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final
+        // Quitar emojis y pictogramas (no se hablan bien y el usuario no los quiere).
+        .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}️‍]/gu, '')
         .replace(/\s+/g, ' ')
         .trim();
     // Si tras limpiar no queda texto real, ignorar el fragmento
@@ -144,14 +147,19 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
             throw new Error(asrResult.message || 'No se detectó voz clara en el audio');
         }
 
-        // Guardar lo que dijo el usuario en la memoria in-memory de la sesión
-        conversationManager.addTurn(sessionId, 'user', asrResult.transcript);
-
-        // Comando de movimiento de ventana (determinista, no depende del LLM).
+        const ctx = { sessionId, send: onStreamSegment };
+        // Acciones DETERMINISTAS (no dependen de que el LLM acierte): mover / abrir / ejecutar / buscar.
         const moveSpec = parseMoveIntent(asrResult.transcript);
         if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
+        handleOpenIntent(asrResult.transcript, ctx);                    // "abre X" (sin resultado)
+        const dataResult = await resolveDataAction(asrResult.transcript, ctx);   // "ejecuta/busca/lee X" (con resultado)
+        const turnText = dataResult
+            ? `${asrResult.transcript}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
+            : asrResult.transcript;
 
-        // Avisarle al cliente qué fue lo que entendimos
+        // Guardar el turno (con el resultado inyectado si hubo acción de datos).
+        conversationManager.addTurn(sessionId, 'user', turnText);
+        // Avisarle al cliente qué fue lo que entendimos (el texto original).
         onStreamSegment({ type: 'user_transcript', text: asrResult.transcript });
 
         // 3. LLM: Ejecutar el flujo del modelo pasándole el historial de turnos actual
@@ -204,11 +212,16 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
         const session = conversationManager.getSession(sessionId);
         if (!session) throw new Error('La sesión no existe o ha expirado');
 
-        conversationManager.addTurn(sessionId, 'user', text);
-
-        // Comando de movimiento de ventana (determinista, no depende del LLM).
+        const ctx = { sessionId, send: onStreamSegment };
+        // Acciones deterministas: mover / abrir / ejecutar / buscar / leer.
         const moveSpec = parseMoveIntent(text);
         if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
+        handleOpenIntent(text, ctx);
+        const dataResult = await resolveDataAction(text, ctx);
+        const turnText = dataResult
+            ? `${text}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
+            : text;
+        conversationManager.addTurn(sessionId, 'user', turnText);
 
         const updatedSession = conversationManager.getSession(sessionId);
         await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal);

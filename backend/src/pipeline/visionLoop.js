@@ -25,8 +25,8 @@ export async function describeScene(frameBase64) {
 // REACT_IF_SIMILARITY_BELOW: reacciona solo si la escena cambió lo suficiente
 //   (más BAJO = exige más cambio = habla MENOS). MIN_GAP_MS: tiempo mínimo entre
 //   comentarios (más ALTO = habla MENOS).
-const REACT_IF_SIMILARITY_BELOW = 0.45;
-const MIN_GAP_MS = 25000;
+const REACT_IF_SIMILARITY_BELOW = 0.30;   // exige MÁS cambio de escena para hablar
+const MIN_GAP_MS = 60000;                  // mínimo 60s entre reacciones por visión
 
 // Solapamiento de palabras entre dos descripciones (0..1). Sirve para NO reaccionar
 // cuando la escena no cambió (evita que narre lo mismo una y otra vez).

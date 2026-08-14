@@ -156,6 +156,60 @@ const TOOLS = {
   },
 };
 
+// Detecta "abre/ábreme X" (ES/EN) y lo abre de forma DETERMINISTA (no depende de que el
+// LLM emita [BROWSE:]/[OPEN:]). Devuelve true si lo manejó.
+const SITES = {
+  youtube: 'youtube.com', wikipedia: 'wikipedia.org', google: 'google.com', gmail: 'mail.google.com',
+  github: 'github.com', twitter: 'twitter.com', reddit: 'reddit.com', chatgpt: 'chatgpt.com',
+  whatsapp: 'web.whatsapp.com', spotify: 'open.spotify.com', netflix: 'netflix.com', maps: 'maps.google.com',
+};
+const APP_KEYS = ['navegador', 'browser', 'firefox', 'chrome', 'terminal', 'consola', 'code', 'vscode', 'archivos', 'files'];
+export async function handleOpenIntent(text, ctx) {
+  const s = (text || '').toLowerCase();
+  const m = s.match(/(?:^|\s)(?:[aá]bre(?:me|la|lo)?|abrir|open)\s+(?:me\s+|el\s+|la\s+|una?\s+)?(.+)/);
+  if (!m) return false;
+  const target = m[1].trim().replace(/\s+en (?:el|mi) navegador.*$/, '').replace(/[.,!?¿¡]+$/, '').trim();
+  if (!target) return false;
+  const hasDomain = /\.[a-z]{2,}(?:\/|$|\s)/.test(target);
+  // App conocida (sin dominio) -> open_app.
+  const app = APP_KEYS.find((a) => target.includes(a));
+  if (app && !hasDomain) {
+    await runTool('open_app', { name: (app === 'navegador' || app === 'browser') ? 'browser' : (app === 'consola' ? 'terminal' : app) }, ctx);
+    return true;
+  }
+  // Sitio conocido o dominio explícito -> open_url.
+  const siteKey = Object.keys(SITES).find((k) => target.includes(k));
+  const url = siteKey ? SITES[siteKey] : (hasDomain ? target.replace(/\s+/g, '') : null);
+  if (url) { await runTool('open_url', { url }, ctx); return true; }
+  return false;
+}
+
+// Intents de DATOS deterministas: "ejecuta X", "busca X", "lee la url X". Ejecuta la
+// acción y devuelve el RESULTADO real para inyectarlo al LLM (así no lo inventa). null
+// si no aplica. (open/move se manejan aparte porque no necesitan resultado.)
+export async function resolveDataAction(text, ctx) {
+  const t = text || '';
+  let m;
+  // Ejecutar comando: "corre/ejecuta [el comando] X"
+  if ((m = t.match(/(?:^|\s)(?:corr[eé]|ejecut[aá]|run)\s+(?:el\s+comando\s+|the\s+command\s+)?(.+)/i))) {
+    const cmd = m[1].trim().replace(/[.,;]+$/, '');
+    const r = await runTool('run_command', { command: cmd }, ctx);
+    return `[Salida real de "${cmd}"]:\n${r}`;
+  }
+  // Leer una URL: "lee (la url) X"
+  if ((m = t.match(/(?:^|\s)(?:lee|leé|read|abre y lee)\s+(?:la\s+(?:url|p[aá]gina|web)\s+|the\s+)?(\S+\.\S+\S*)/i))) {
+    const r = await runTool('fetch_url', { url: m[1].trim() }, ctx);
+    return `[Contenido de ${m[1].trim()}]:\n${r}`;
+  }
+  // Buscar en internet: "busca X (en internet/google)"
+  if ((m = t.match(/(?:^|\s)(?:busc[aá]|search)\s+(?:en internet\s+|en google\s+|en la web\s+|for\s+)?(.+)/i))) {
+    const q = m[1].trim().replace(/\s+en (?:internet|google|la web)\s*$/i, '').replace(/[.?!]+$/, '');
+    const r = await runTool('web_search', { query: q }, ctx);
+    return `[Resultados de buscar "${q}"]:\n${r}`;
+  }
+  return null;
+}
+
 // Schemas de las tools habilitadas (respeta config.tools.names y systemControl).
 export function toolSchemas() {
   if (!config.tools.enabled) return [];
