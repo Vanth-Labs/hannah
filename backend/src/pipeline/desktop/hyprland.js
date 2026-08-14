@@ -18,7 +18,7 @@ export async function probe() {
 
 export async function getMonitors() {
   const ms = await hypr('monitors');
-  return (ms || []).map((m) => ({ name: m.name, x: m.x, y: m.y, width: m.width, height: m.height, focused: !!m.focused }));
+  return (ms || []).map((m) => ({ id: m.id, name: m.name, x: m.x, y: m.y, width: m.width, height: m.height, focused: !!m.focused }));
 }
 
 export async function getCursor() {
@@ -30,7 +30,7 @@ export async function getCursor() {
 export async function findWindow() {
   const clients = await hypr('clients');
   const w = clients?.find(isHannah);
-  return w ? { id: w.address, at: w.at, size: w.size, name: w.title } : null;
+  return w ? { id: w.address, at: w.at, size: w.size, name: w.title, monitor: w.monitor } : null;
 }
 
 // Cierra las ventanas cuyo título/clase incluya alguno de los términos. Nunca cierra a

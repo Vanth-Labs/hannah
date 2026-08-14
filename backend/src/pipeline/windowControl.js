@@ -31,9 +31,25 @@ export async function getGaze() {
   return { x: nx, y: ny };
 }
 
+// En qué monitor está la ventana, por su posición REAL en píxeles (la verdad visual).
+// Robusto para layouts escalonados con huecos:
+// 1) punto-en-rect usando el CENTRO de la ventana (no la esquina, que en fullscreen cae
+//    justo en el borde entre dos monitores y se resuelve al equivocado);
+// 2) el monitor MÁS CERCANO por distancia de centros (nunca fallback ciego a monitors[0]).
+// NOTA: NO usamos el campo `monitor` del compositor: puede quedar desactualizado tras un
+// move (visto en Hyprland: ventana ya en HDMI pero monitor seguía reportando DP-3).
 function monitorOf(win, monitors) {
-  const [x, y] = win.at;
-  return monitors.find((m) => x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height) || monitors[0];
+  const cx = win.at[0] + win.size[0] / 2;
+  const cy = win.at[1] + win.size[1] / 2;
+  const inside = monitors.find((m) => cx >= m.x && cx < m.x + m.width && cy >= m.y && cy < m.y + m.height);
+  if (inside) return inside;
+  let best = monitors[0], bestD = Infinity;
+  for (const m of monitors) {
+    const dx = (m.x + m.width / 2) - cx, dy = (m.y + m.height / 2) - cy;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = m; }
+  }
+  return best;
 }
 
 function cornerXY(m, corner, [w, h]) {
