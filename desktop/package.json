@@ -1,0 +1,49 @@
+{
+  "name": "hannah-desktop",
+  "version": "1.0.0",
+  "description": "Hannah — overlay de escritorio universal (Electron: Windows/Mac/Linux)",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "build:linux": "electron-builder --linux AppImage deb",
+    "build:win": "electron-builder --win nsis",
+    "build:mac": "electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "ai.hannah.desktop",
+    "productName": "Hannah",
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
+    "extraResources": [
+      "../hannah-frontend/dist"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities"
+    }
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}
