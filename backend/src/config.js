@@ -85,7 +85,7 @@ At the end of each response, append an emotion tag on a new line in the format:
   },
   tts: {
     provider: process.env.TTS_PROVIDER || 'kokoro',
-    voiceId: process.env.ELEVENLABS_VOICE_ID || 'af_bella', // Doubles as the Kokoro voice ID (af_* = American English)
+    voiceId: process.env.ELEVENLABS_VOICE_ID || 'ef_dora', // Doubles as the Kokoro voice ID. Hannah habla español -> voz española por defecto (ef_dora ♀; em_alex/em_santa ♂). Prefijo de voz = idioma (a=en-us, e=es, ...).
     sidecarUrl: process.env.TTS_SIDECAR_URL || 'http://127.0.0.1:8002',
     apiKey: process.env.ELEVENLABS_API_KEY || '', // usado solo por el proveedor elevenlabs
     model: process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2',

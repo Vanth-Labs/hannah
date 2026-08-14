@@ -4,6 +4,7 @@ import { getHealth } from './health.js';
 import { createSession, deleteSession } from './sessions.js';
 import { readSettings, writeSettings } from './settings.js';
 import { readShortcuts, writeShortcuts } from './shortcuts.js';
+import { readVoices } from './tts.js';
 import { generateDialogueStream } from '../pipeline/llm.js';
 import { synthesizeSpeechStream } from '../pipeline/tts.js';
 import { generateVisemesFromText } from '../pipeline/lipsync.js';
@@ -19,6 +20,7 @@ router.get('/settings', readSettings);
 router.post('/settings', writeSettings);
 router.get('/shortcuts', readShortcuts);
 router.post('/shortcuts', writeShortcuts);
+router.get('/tts/voices', readVoices);
 
 // TESTING FALLBACK: Evaluates all internal Core AI modules working smoothly as a unified chain
 router.post('/text', async (req, res) => {

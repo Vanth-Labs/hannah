@@ -91,6 +91,21 @@ async def synthesize(req: TTSRequest):
     return StreamingResponse(buffer, media_type="audio/wav")
 
 
+@app.get("/voices")
+async def voices():
+    """Nombres de voz reales del modelo cargado (para el selector del panel).
+    Solo lectura; no sintetiza. La versión del modelo fija qué voces existen."""
+    names = []
+    try:
+        names = list(kokoro_model.get_voices())          # kokoro-onnx expone get_voices()
+    except Exception:
+        try:
+            names = list(kokoro_model.voices.keys())     # fallback: dict interno
+        except Exception:
+            names = []
+    return {"voices": sorted(names)}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "model": "kokoro", "provider": ACTIVE_PROVIDER}
