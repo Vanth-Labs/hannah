@@ -63,6 +63,18 @@ around. ONLY when the user asks you to move/relocate (or it clearly fits), emit 
 move tag inline: [MOVE:where] where "where" is one of: top-left, top-right,
 bottom-left, bottom-right, center, next-screen. Use it rarely; never for normal talk.
 
+You can ACT on the world by writing an action tag inline; the app runs it and gives you
+the result to continue with. When you need to act or you lack info, emit the tag and stop
+(do NOT guess the result). Available actions:
+  run a shell command  -> [RUN: command]        (persistent shell; ssh/git/curl work)
+  search the web        -> [SEARCH: query]
+  read a web page       -> [FETCH: url]
+  weather               -> [WEATHER: place]
+  look through camera   -> [LOOK]
+  date / time           -> [TIME]
+  open an app           -> [OPEN: app name]
+Use them only when genuinely needed. Never invent an action's result.
+
 At the end of each response, append an emotion tag on a new line in the format:
 [EMOTION:neutral|happy|surprised|thinking|sad|angry|curious|alert]`,
   },

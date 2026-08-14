@@ -66,11 +66,9 @@ export const generateDialogueStream = async (history, onToken, onComplete, signa
                 content: turn.content,
             })),
         ];
-        // Con tools: pasada de decisión NO-streaming (Ollama solo devuelve tool_calls
-        // sin streaming), y streaming solo para la respuesta hablada. Sin tools: el
-        // streaming original (más snappy).
-        const text = toolSchemas().length
-            ? await generateWithTools(messages, onToken, signal, ctx)
+        // Con tools ON: loop de acciones por tags (determinista). Sin tools: streaming directo.
+        const text = config.tools.enabled
+            ? await generateWithActions(messages, onToken, signal, ctx)
             : await streamAnswer(messages, onToken, signal);
         if (text === null) return;   // abortado (barge-in)
         finalizeLlmTurn(text, timer.stop(), onComplete);
@@ -98,51 +96,44 @@ async function streamAnswer(messages, onToken, signal) {
     return content;
 }
 
-// Loop de tool-calling: pasada NO-streaming con tools; si el modelo pide tools, las
-// ejecuta, apenda los resultados y repite; cuando ya no pide tools, la respuesta
-// hablada se STREAMEA. Cap de profundidad. Devuelve el texto final o null si se abortó.
-async function generateWithTools(messages, onToken, signal, ctx) {
+// Acciones por TAGS (determinista, fiable en modelos locales — no depende del
+// function-calling que los 7B/8B hacen a medias): el modelo emite un tag de acción,
+// el backend lo ejecuta y le realimenta el resultado. Ver el protocolo en config.js.
+const ACTION_TOOL = {
+    run: ['run_command', 'command'], search: ['web_search', 'query'], fetch: ['fetch_url', 'url'],
+    weather: ['get_weather', 'location'], look: ['look_now', null], time: ['get_datetime', null],
+    open: ['open_app', 'name'], recall: ['recall_memory', 'query'],
+};
+const ACTION_RE = /\[\s*(RUN|SEARCH|FETCH|WEATHER|LOOK|TIME|OPEN|RECALL)\b\s*(?::\s*([^\]\n]*))?\]/gi;
+
+function parseActions(text) {
+    const acts = []; let m; ACTION_RE.lastIndex = 0;
+    while ((m = ACTION_RE.exec(text || ''))) acts.push({ key: m[1].toLowerCase(), arg: (m[2] || '').trim() });
+    return acts;
+}
+
+async function generateWithActions(messages, onToken, signal, ctx) {
     for (let depth = 0; depth < 3; depth++) {
-        const tools = toolSchemas();
+        // Pasada NO-streaming para poder detectar tags de acción antes de hablar.
         const resp = await getLlmClient().chat.completions.create(
-            { model: config.llm.model, messages, max_tokens: 400, stream: false, ...(tools.length ? { tools } : {}) },
-            { signal });
+            { model: config.llm.model, messages, max_tokens: 400, stream: false }, { signal });
         if (signal?.aborted) return null;
-        const msg = resp.choices[0]?.message || {};
+        const text = resp.choices[0]?.message?.content || '';
+        const acts = parseActions(text);
+        if (!acts.length) { if (onToken && text) onToken(text); return text; }   // sin acción -> es la respuesta
 
-        if (msg.tool_calls?.length) {
-            messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
-            for (const tc of msg.tool_calls) {
-                let args = {};
-                try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { /* sin args */ }
-                const result = await runTool(tc.function?.name, args, ctx);
-                messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
-            }
-            // Tras ejecutar tools, generar la respuesta hablada. El protocolo verboso
-            // de gestos ahoga al modelo 8B en el follow-up -> system SLIM (persona +
-            // instrucción corta; conserva el tag de emoción, no el menú de gestos). Se
-            // hace NO-streaming (más fiable con 8B) y se emite el texto por onToken.
-            messages[0] = {
-                role: 'system',
-                content: `${config.llm.persona}\n\nUse the tool results to answer the user `
-                    + `conversationally and briefly (1-2 sentences). End with an emotion tag like `
-                    + `[EMOTION:neutral|happy|surprised|thinking|sad|angry|curious|alert].`,
-            };
-            const done = await getLlmClient().chat.completions.create(
-                { model: config.llm.model, messages, max_tokens: 300, stream: false }, { signal });
-            if (signal?.aborted) return null;
-            const answer = done.choices[0]?.message?.content || '';
-            if (onToken && answer) onToken(answer);
-            return answer;
+        // Ejecutar las acciones y realimentar los resultados para la respuesta final.
+        const results = [];
+        for (const a of acts) {
+            const [tool, argName] = ACTION_TOOL[a.key] || [];
+            if (!tool) continue;
+            const r = await runTool(tool, argName ? { [argName]: a.arg } : {}, ctx);
+            results.push(`${a.key.toUpperCase()}${a.arg ? ` ${a.arg}` : ''} -> ${r}`);
         }
-
-        // Sin tool_calls: este mensaje ES la respuesta. Emitirla por onToken.
-        const text = msg.content || '';
-        if (onToken && text) onToken(text);
-        return text;
+        messages.push({ role: 'assistant', content: text });
+        messages.push({ role: 'user', content: `[resultados de la acción]\n${results.join('\n')}\n\nResponde al usuario AHORA usando estos resultados, breve y natural. NO emitas más tags de acción.` });
     }
-    // Profundidad agotada: forzar respuesta final hablada.
-    return streamAnswer(messages, onToken, signal);
+    return streamAnswer(messages, onToken, signal);   // profundidad agotada
 }
 
 /**
