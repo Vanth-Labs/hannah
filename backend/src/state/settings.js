@@ -15,10 +15,13 @@ const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 // Campos editables por sección (whitelist). Nada fuera de esto se toca desde la API.
 const ALLOWED = {
-  llm: ['provider', 'model', 'apiKey', 'baseUrl'],
+  llm: ['provider', 'model', 'apiKey', 'baseUrl', 'persona'],
   asr: ['provider', 'model', 'apiKey', 'language', 'sidecarUrl'],
   tts: ['provider', 'model', 'apiKey', 'voiceId', 'sidecarUrl'],
 };
+
+// Campos que en blanco NO se sobreescriben (conservan el valor actual).
+const KEEP_IF_BLANK = new Set(['apiKey', 'persona']);
 
 /**
  * Merge de un patch dentro de `config` in-place.
@@ -32,8 +35,8 @@ export function applySettings(patch = {}) {
     for (const key of ALLOWED[section]) {
       if (!(key in incoming)) continue;
       let value = incoming[key];
-      if (key === 'apiKey' && (value == null || String(value).trim() === '')) {
-        continue; // blanco = conservar la key existente
+      if (KEEP_IF_BLANK.has(key) && (value == null || String(value).trim() === '')) {
+        continue; // blanco = conservar el valor existente (key/persona)
       }
       if (key === 'baseUrl' && value === '') value = null; // '' -> OpenAI oficial
       config[section][key] = value;

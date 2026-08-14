@@ -36,9 +36,10 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete) => {
     let accumulatedResponse = '';
 
     try {
-        // OpenAI expects the system prompt injected directly as the first object in the array
+        // System prompt = persona (editable por el usuario) + protocolo fijo de tags.
+        const systemPrompt = `${config.llm.persona}\n\n${config.llm.protocol}`;
         const formattedMessages = [
-            { role: 'system', content: config.llm.systemPrompt },
+            { role: 'system', content: systemPrompt },
             ...history.map(turn => ({
                 role: turn.role === 'assistant' ? 'assistant' : 'user',
                 content: turn.content

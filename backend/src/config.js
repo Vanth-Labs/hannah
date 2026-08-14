@@ -30,11 +30,16 @@ export const config = {
     apiKey: process.env.LLM_API_KEY || process.env.OPENAI_API_KEY,
     baseUrl: process.env.LLM_BASE_URL || null, // Null defaults to official OpenAI servers
     contextTurns: parseInt(process.env.CONTEXT_TURNS || '10', 10),
-    systemPrompt: `You are Hannah, a helpful and expressive AI avatar.
-Respond conversationally and concisely (1–3 sentences).
-Respond in the same language the user speaks.
 
-Your body already gestures naturally while you speak — never describe that.
+    // Personalidad EDITABLE por el usuario (panel ⚙). Solo el carácter/estilo;
+    // las reglas de tags van aparte en `protocol` y se anexan siempre.
+    persona: process.env.LLM_PERSONA || `You are Hannah, a helpful and expressive AI avatar.
+Respond conversationally and concisely (1–3 sentences).
+Respond in the same language the user speaks.`,
+
+    // Protocolo FIJO de tags (no editable): sin esto se rompen gestos/emoción.
+    // `llm.js` construye el system prompt final como `persona + protocol`.
+    protocol: `Your body already gestures naturally while you speak — never describe that.
 ONLY when a deliberate physical gesture genuinely fits the moment, mark it inline
 with a motion tag placed inside the sentence where the gesture happens:
 [MOTION:short physical action]
