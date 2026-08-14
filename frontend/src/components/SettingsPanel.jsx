@@ -22,6 +22,7 @@ const SECTIONS = [
             { name: 'baseUrl', label: 'Base URL', type: 'text', ph: 'https://…/v1  (vacío = OpenAI)' },
             { name: 'model', label: 'Modelo', type: 'text', ph: 'gpt-4o-mini' },
             { name: 'apiKey', label: 'API key', type: 'password' },
+            { name: 'persona', label: 'Personalidad', type: 'textarea', ph: 'Quién es, cómo habla… (en blanco = conservar)' },
         ],
     },
     {
@@ -169,6 +170,13 @@ export function SettingsPanel({ onClose }) {
                                         <select style={S.input} value={val} onChange={(e) => setField(s.key, fld.name, e.target.value)}>
                                             {fld.options.map((o) => <option key={o} value={o}>{o}</option>)}
                                         </select>
+                                    ) : fld.type === 'textarea' ? (
+                                        <textarea
+                                            style={{ ...S.input, minHeight: '80px', resize: 'vertical', lineHeight: 1.4 }}
+                                            value={val}
+                                            placeholder={fld.ph || ''}
+                                            onChange={(e) => setField(s.key, fld.name, e.target.value)}
+                                        />
                                     ) : (
                                         <input
                                             style={S.input}

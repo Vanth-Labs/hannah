@@ -350,7 +350,9 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             face.saccadeNext = 1.2 + Math.random() * 2.5;
         }
         face.gazeTarget.set(face.gazeAnchor.x + face.saccade.x, face.gazeAnchor.y + face.saccade.y);
-        face.gaze.lerp(face.gazeTarget, aSlow);
+        // Ojos: seguimiento RÁPIDO (los ojos reales hacen saccades casi instantáneos;
+        // un lerp lento se ve laggy y "constante"). Snap hacia el objetivo.
+        face.gaze.lerp(face.gazeTarget, Math.min(1, 22 * delta));
         if (rig.leftEye && rig.eyeRestL) {
             _quat.setFromEuler(new THREE.Euler(face.gaze.y, face.gaze.x, 0));
             rig.leftEye.quaternion.copy(rig.eyeRestL).multiply(_quat);
