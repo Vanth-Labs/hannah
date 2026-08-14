@@ -200,6 +200,12 @@ export function useWebSocket() {
                 useHannahStore.getState().setPendingConfirm({ id: msg.id, command: msg.command });
                 break;
 
+            case 'command_run':
+                // Comando ejecutado por Hannah: mostrar toast con su salida real (así
+                // ves qué hizo sin abrir la terminal).
+                useHannahStore.getState().setCommandRun({ command: msg.command, output: msg.output, at: Date.now() });
+                break;
+
             default:
                 addLog(JSON.stringify(msg), 'debug');
         }

@@ -1,5 +1,5 @@
 // src/components/HUD.jsx
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { SettingsPanel } from './SettingsPanel.jsx';
 import { TerminalPanel } from './TerminalPanel.jsx';
@@ -37,12 +37,46 @@ function IconBtn({ onClick, onMouseDown, onMouseUp, onTouchStart, onTouchEnd, ti
     );
 }
 
+// Toast que muestra el comando ejecutado y su salida real, sin abrir la terminal.
+// Se auto-cierra a los 9s (se reinicia si llega uno nuevo).
+function CommandToast({ run, onClose }) {
+    useEffect(() => {
+        const id = setTimeout(onClose, 9000);
+        return () => clearTimeout(id);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [run.at]);
+    return (
+        <div style={{
+            position: 'fixed', top: '46px', left: '50%', transform: 'translateX(-50%)',
+            zIndex: 32, width: 'min(520px, 92%)', maxHeight: '40vh', overflow: 'auto',
+            background: 'rgba(8,11,18,0.93)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+            border: '1px solid rgba(122,184,232,0.35)', borderRadius: '12px',
+            boxShadow: '0 8px 28px rgba(0,0,0,0.45)', pointerEvents: 'auto', fontFamily: "'DM Mono', monospace",
+        }}>
+            <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.08)',
+            }}>
+                <span style={{ color: '#7ab8e8', fontSize: '11px', letterSpacing: '0.05em', wordBreak: 'break-all' }}>
+                    ⌨ {run.command}
+                </span>
+                <span onClick={onClose} style={{ cursor: 'pointer', color: 'rgba(255,255,255,0.5)', fontSize: '12px', flexShrink: 0, marginLeft: '10px' }}>✕</span>
+            </div>
+            <pre style={{
+                margin: 0, padding: '8px 12px', fontSize: '11.5px', color: 'rgba(255,255,255,0.8)',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>{run.output || '(sin salida)'}</pre>
+        </div>
+    );
+}
+
 export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, sendCommand }) {
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
     const [showTerminal, setShowTerminal] = useState(false);
     const { emotion, isSpeaking, visionActive, transcript, userTranscript, connected, logs,
-        avatarMode, setAvatarMode, handsFree, setHandsFree, pendingConfirm, setPendingConfirm } = useHannahStore();
+        avatarMode, setAvatarMode, handsFree, setHandsFree, pendingConfirm, setPendingConfirm,
+        commandRun, setCommandRun } = useHannahStore();
 
     const toggleTerminal = () => {
         setShowTerminal((v) => {
@@ -84,9 +118,9 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
                 overlay: abajo-centro, discreto sobre el avatar.
                 web:     arriba-derecha. */}
             <div style={{
-                position: 'fixed', zIndex: 20,
+                position: 'fixed', zIndex: 31,
                 ...(isOverlay
-                    ? { bottom: '20px', left: '50%', transform: 'translateX(-50%)' }
+                    ? { bottom: showTerminal ? 'calc(42% + 14px)' : '20px', left: '50%', transform: 'translateX(-50%)', transition: 'bottom 0.18s' }
                     : { top: '14px', right: '18px' }),
                 display: 'flex', alignItems: 'center', gap: '8px',
                 padding: '7px 9px', borderRadius: '999px',
@@ -105,6 +139,8 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
                 <IconBtn onClick={() => setShowSettings(true)}
                     title="Ajustes (modelo/API, voz, atajos)">⚙</IconBtn>
             </div>
+
+            {commandRun && <CommandToast run={commandRun} onClose={() => setCommandRun(null)} />}
 
             {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
