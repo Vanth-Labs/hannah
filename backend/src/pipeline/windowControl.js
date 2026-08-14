@@ -74,20 +74,20 @@ function cornerXY(m, corner, [w, h]) {
 export function parseMoveIntent(text) {
   const s = (text || '').toLowerCase();
   // ¿hay intención de mover/redimensionar la ventana?
-  const hasVerb = /\b(mu[eé]vete|mu[eé]vase|vete|ve|ponte|p[oó]nte|colócate|ub[ií]cate|ll[eé]vate|and[aá]te|p[aá]sate|regr[eé]sate|mueve|ponla|hazte|agr[aá]ndate|ach[ií]cate|minim|maxim|move|go|put yourself|resize)\b/.test(s);
-  const hasScreenNoun = /(pantalla completa|full ?screen|otra pantalla|otro monitor|siguiente pantalla|next screen|esquina|corner|widget|centro|al medio|en medio)/.test(s);
+  const hasVerb = /\b(mu[eé]vete|mu[eé]vase|vete|ve|ponte|p[oó]nte|colócate|ub[ií]cate|ll[eé]vate|and[aá]te|p[aá]sate|regr[eé]sate|mueve|ponla|hazte|agr[aá]ndate|ach[ií]cate|minim|maxim|move|go|put yourself|move yourself|resize|make yourself|shrink|grow|switch|jump)\b/.test(s);
+  const hasScreenNoun = /(pantalla completa|full ?screen|otra pantalla|otro monitor|siguiente pantalla|next screen|other screen|other monitor|switch screen|esquina|corner|widget|centro|center|middle|al medio|en medio|small|tiny)/.test(s);
   if (!hasVerb && !hasScreenNoun) return null;
 
-  // pantalla completa / llenar
-  if (/(pantalla completa|full ?screen|maxim|toda la pantalla|ll[eé]nala|agr[aá]ndate|hazte grande)/.test(s)) {
-    return /(otra|otro|siguiente|next)/.test(s) ? 'next-screen full' : 'fullscreen';
+  // pantalla completa / llenar / fullscreen
+  if (/(pantalla completa|full ?screen|maxim|toda la pantalla|whole screen|ll[eé]nala|agr[aá]ndate|hazte grande|make yourself big|get big)/.test(s)) {
+    return /(otra|otro|siguiente|next|other)/.test(s) ? 'next-screen full' : 'fullscreen';
   }
-  // cambiar de pantalla/monitor
-  if (/(otra pantalla|otro monitor|siguiente pantalla|next screen|cambia de pantalla|p[aá]sate de pantalla|de pantalla)/.test(s)) {
+  // cambiar de pantalla/monitor / switch screen
+  if (/(otra pantalla|otro monitor|siguiente pantalla|next screen|other screen|other monitor|switch screen|cambia de pantalla|p[aá]sate de pantalla|de pantalla|move screens)/.test(s)) {
     return 'next-screen full';
   }
-  // centro
-  if (/(centro|en medio|al medio|center)/.test(s)) return 'center';
+  // centro / center
+  if (/(centro|en medio|al medio|center|middle)/.test(s)) return 'center';
 
   // esquinas (widget) por dirección
   const vert = /(abajo|inferior|de abajo|bottom|baja)/.test(s) ? 'bottom'
@@ -97,10 +97,10 @@ export function parseMoveIntent(text) {
   if (vert && horz) return `${vert}-${horz}`;
   if (vert) return `${vert}-right`;
   // solo lado -> esa pantalla (con varios monitores, "a la izquierda" = monitor izquierdo)
-  if (horz && /(pantalla|monitor|lado|mu[eé]vete|vete|p[aá]sate)/.test(s)) return `${horz} screen full`;
+  if (horz && /(pantalla|monitor|lado|screen|side|mu[eé]vete|vete|p[aá]sate|move|go)/.test(s)) return `${horz} screen full`;
   if (horz) return `top-${horz}`;
   // pequeña/widget/esquina sin dirección -> esquina por defecto
-  if (/(pequeñ|chica|chiquit|widget|esquina|rinc[oó]n|ach[ií]cate|minim)/.test(s)) return 'top-right';
+  if (/(pequeñ|chica|chiquit|widget|esquina|rinc[oó]n|ach[ií]cate|minim|small|tiny|shrink|corner)/.test(s)) return 'top-right';
   return null;
 }
 
@@ -116,23 +116,26 @@ export async function moveWindow(spec = '') {
   const cur = monitorOf(win, monitors);
   const size = win.size || [360, 560];
 
-  // ¿cambio de monitor?
+  const cornerName = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'].find((c) => s.includes(c));
+
+  // ¿cambio de monitor? SOLO en specs de pantalla. Las esquinas (top-left, bottom-right…)
+  // se quedan SIEMPRE en el monitor actual — el "left"/"right" de la esquina NO es el
+  // monitor. (Antes "bottom-left" te mandaba al monitor izquierdo, ese era el bug.)
   let target = cur;
-  if (/(next|other|another)[\s-]*(screen|monitor|pantalla)/.test(s) || s === 'next' || s === 'next-screen') {
-    const i = monitors.indexOf(cur);
-    target = monitors[(i + 1) % monitors.length];
-  } else {
-    const byName = monitors.find((m) => s.includes(m.name.toLowerCase()));
-    if (byName) target = byName;
-    else {
+  if (!cornerName) {
+    if (/(next|other|another)[\s-]*(screen|monitor|pantalla)/.test(s) || s === 'next' || s === 'next-screen') {
+      const i = monitors.indexOf(cur);
+      target = monitors[(i + 1) % monitors.length];
+    } else {
+      const byName = monitors.find((m) => s.includes(m.name.toLowerCase()));
       const mScreen = s.match(/(?:screen|monitor|pantalla)\s*(\d)/);
-      if (mScreen) target = monitors[Math.min(monitors.length - 1, parseInt(mScreen[1], 10) - 1)] || cur;
+      if (byName) target = byName;
+      else if (mScreen) target = monitors[Math.min(monitors.length - 1, parseInt(mScreen[1], 10) - 1)] || cur;
       else if (s.includes('left')) target = monitors.reduce((a, b) => (b.x < a.x ? b : a), monitors[0]);
-      else if (s.includes('right') && s.includes('screen')) target = monitors.reduce((a, b) => (b.x > a.x ? b : a), monitors[0]);
+      else if (s.includes('right')) target = monitors.reduce((a, b) => (b.x > a.x ? b : a), monitors[0]);
     }
   }
 
-  const cornerName = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'].find((c) => s.includes(c));
   const changedMonitor = target !== cur;
   const wantsFull = /\bfull|fill|whole|entire|toda|completa|maximiza|fullscreen\b/.test(s)
     || (!cornerName && (changedMonitor || /screen|monitor|pantalla/.test(s)));
