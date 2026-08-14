@@ -214,9 +214,12 @@ export function useWebSocket() {
                 if (w?.readyState === WebSocket.OPEN) {
                     w.send(JSON.stringify({ command: 'TERMINAL_START' }));
                     if (msg.command) {
+                        // run !== false -> se ejecuta solo (Enter). Con argumento dictado
+                        // (run === false) solo lo escribe: el usuario revisa y da Enter.
+                        const data = msg.run === false ? msg.command : `${msg.command}\n`;
                         setTimeout(() => {
                             if (ws.current?.readyState === WebSocket.OPEN) {
-                                ws.current.send(JSON.stringify({ command: 'TERMINAL_IN', data: `${msg.command}\n` }));
+                                ws.current.send(JSON.stringify({ command: 'TERMINAL_IN', data }));
                             }
                         }, 350);
                     }
