@@ -7,7 +7,7 @@ import { logger } from '../utils/logger.js';
 // Pre-importar en lugar de dynamic import por cada mensaje
 import { startVisionLoop, pushFrame, stopVisionLoop, getLastFrame, describeScene } from '../pipeline/visionLoop.js';
 import { processTextTurn, processUserTextTurn } from '../pipeline/orchestrator.js';
-import { getGaze } from '../pipeline/windowControl.js';
+import { getGaze, getMonitors, moveWindow } from '../pipeline/windowControl.js';
 
 export const initWebSocketGateway = (httpServer) => {
     const wss = new WebSocketServer({ noServer: true });
@@ -97,9 +97,15 @@ export const initWebSocketGateway = (httpServer) => {
 
                     case 'GAZE_ON':
                         startGaze();
+                        // Mandar la info de monitores para el control de posición de la UI.
+                        getMonitors().then((info) => safeSend({ type: 'monitors', ...info }));
                         break;
                     case 'GAZE_OFF':
                         stopGaze();
+                        break;
+                    case 'WINDOW_MOVE':
+                        // Comando directo desde la UI (botones): fiable, sin voz ni LLM.
+                        if (data.spec) moveWindow(String(data.spec));
                         break;
 
                     case 'SPEECH_START':

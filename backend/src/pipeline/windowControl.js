@@ -23,6 +23,15 @@ async function findWindow() {
   return clients.find(isHannah) || null;
 }
 
+// Info de monitores para la UI: cuántos hay y sus nombres, ordenados espacialmente
+// (izquierda->derecha). Universal: el frontend muestra el selector de pantalla solo si >1.
+export async function getMonitors() {
+  const monitors = await hypr('monitors');
+  if (!monitors?.length) return { count: 0, list: [] };
+  const ordered = [...monitors].sort((a, b) => a.x - b.x || a.y - b.y);
+  return { count: ordered.length, list: ordered.map((m, i) => ({ name: m.name, index: i + 1 })) };
+}
+
 // Mirada global: lee el cursor de Hyprland y la geometría de la ventana, y devuelve
 // una dirección normalizada {x,y} en [-1,1] (x: derecha+, y: arriba+) para que Hannah
 // mire hacia tu cursor AUNQUE esté en otro monitor. null si no hay ventana/cursor.
