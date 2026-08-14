@@ -5,12 +5,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "predev": "node scripts/copy-vad-assets.mjs",
+    "prebuild": "node scripts/copy-vad-assets.mjs",
+    "setup:vad": "node scripts/copy-vad-assets.mjs"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.5",
     "@react-three/drei": "^9.109.2",
     "@react-three/fiber": "^8.17.6",
+    "@ricky0123/vad-web": "^0.0.30",
+    "onnxruntime-web": "1.17.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.167.1",

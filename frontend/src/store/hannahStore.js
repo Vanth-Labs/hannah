@@ -25,6 +25,7 @@ export const useHannahStore = create((set, get) => ({
 
     // Comportamiento del avatar (toggles de Settings)
     autoLookat: true,          // la cabeza/ojos siguen a la cámara (Fase 3)
+    handsFree: false,          // conversación manos-libres por VAD (Fase B) + barge-in
 
     // Log de pipeline
     logs: [],
@@ -44,6 +45,7 @@ export const useHannahStore = create((set, get) => ({
     setCurrentMotion: (currentMotion) => set({ currentMotion }),
     setGestureTrigger: (gestureTrigger) => set({ gestureTrigger }),
     setAutoLookat: (autoLookat) => set({ autoLookat }),
+    setHandsFree: (handsFree) => set({ handsFree }),
 
     addLog: (msg, type = 'info') => set((state) => ({
         logs: [...state.logs.slice(-49), {

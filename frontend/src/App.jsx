@@ -4,6 +4,7 @@ import { Scene } from './components/Scene.jsx';
 import { HUD } from './components/HUD.jsx';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { useVision } from './hooks/useVision.js';
+import { useVoiceActivity } from './hooks/useVoiceActivity.js';
 import { useHannahStore } from './store/hannahStore.js';
 
 // ── Fondo: gradiente oscuro con sutil vignette ──────────────────────────────
@@ -38,11 +39,29 @@ const AvatarLoadingHint = () => {
 };
 
 export default function App() {
-    const { sendCommand, sendAudio, sendText } = useWebSocket();
+    const { sendCommand, sendAudio, sendText, stopPlayback } = useWebSocket();
     const { videoRef, startVision, stopVision } = useVision(sendCommand);
-    const { visionActive, connected } = useHannahStore();
+    const { visionActive, connected, handsFree } = useHannahStore();
 
     const [isRecording, setIsRecording] = useState(false);
+
+    // Barge-in: cortar a Hannah y avisar al backend que aborte el turno en curso.
+    const bargeIn = useCallback(() => {
+        stopPlayback();
+        sendCommand({ command: 'INTERRUPT' });
+    }, [stopPlayback, sendCommand]);
+
+    // Manos-libres (VAD local): al detectar voz mientras Hannah habla -> barge-in;
+    // al terminar el enunciado -> mandarlo como turno (WAV 16kHz).
+    useVoiceActivity({
+        enabled: handsFree,
+        onInterrupt: bargeIn,
+        onUtterance: (wavBuffer) => {
+            sendCommand({ command: 'SPEECH_START' });
+            sendAudio(wavBuffer);
+            sendCommand({ command: 'SPEECH_END' });
+        },
+    });
 
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
@@ -51,6 +70,7 @@ export default function App() {
     const handleRecord = useCallback(async (start) => {
         if (start) {
             try {
+                stopPlayback();   // barge-in: si Hannah hablaba, callarla al tomar el mic
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
                 audioChunksRef.current = [];
@@ -77,7 +97,7 @@ export default function App() {
             };
             setIsRecording(false);
         }
-    }, [sendCommand, sendAudio]);
+    }, [sendCommand, sendAudio, stopPlayback]);
 
     // ── Toggle visión ───────────────────────────────────────────────────────
     const handleToggleVision = useCallback(() => {

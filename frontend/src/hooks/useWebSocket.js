@@ -28,6 +28,7 @@ export function useWebSocket() {
     const audioCtx = useRef(null);
     const audioQueue = useRef([]);
     const isPlaying = useRef(false);
+    const currentSource = useRef(null);   // BufferSource sonando ahora (para barge-in)
     const visemeSchedule = useRef([]);  // visemas pendientes de reproducir
     const visemeTimer = useRef(null);
 
@@ -96,6 +97,7 @@ export function useWebSocket() {
         source.buffer = buffer;
         source.connect(ctx.destination);
         source.onended = drainQueue;
+        currentSource.current = source;
         scheduleVisemes(visemes);
         // El movimiento (co-speech) arranca sincronizado con el inicio del audio.
         if (motion) {
@@ -133,6 +135,21 @@ export function useWebSocket() {
         visemeSchedule.current = [];
         useHannahStore.getState().setVisemes([]);
     };
+
+    // Barge-in: cortar en seco lo que Hannah está diciendo (audio + visemas + motion).
+    const stopPlayback = useCallback(() => {
+        audioQueue.current = [];
+        if (currentSource.current) {
+            try { currentSource.current.onended = null; currentSource.current.stop(); } catch { /* ya parado */ }
+            currentSource.current = null;
+        }
+        clearVisemeSchedule();
+        isPlaying.current = false;
+        const st = useHannahStore.getState();
+        st.setIsSpeaking(false);
+        st.setCurrentMotion(null);
+        st.setGestureTrigger(null);
+    }, []);
 
     // ── Handlers de mensajes del servidor ──────────────────────────────────
     const handleMessage = useCallback((msg) => {
@@ -235,5 +252,5 @@ export function useWebSocket() {
         };
     }, []);
 
-    return { sendCommand, sendAudio, sendText, ws };
+    return { sendCommand, sendAudio, sendText, stopPlayback, ws };
 }

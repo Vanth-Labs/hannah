@@ -16,7 +16,7 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
     const { emotion, isSpeaking, visionActive, transcript, userTranscript, connected, logs,
-        avatarMode, setAvatarMode } = useHannahStore();
+        avatarMode, setAvatarMode, handsFree, setHandsFree } = useHannahStore();
 
     const handleSend = () => {
         if (!input.trim()) return;
@@ -71,6 +71,25 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording })
                     }}
                 >
                     {avatarMode === 'vrm' ? '✿ anime' : '⚡ smpl-x'}
+                </button>
+                {/* Manos-libres (VAD): hablarle sin botón + interrumpirla */}
+                <button
+                    onClick={() => setHandsFree(!handsFree)}
+                    title="Manos libres: habla sin botón y puedes interrumpirla"
+                    style={{
+                        pointerEvents: 'auto',
+                        background: handsFree ? 'rgba(110,231,183,0.12)' : 'rgba(255,255,255,0.06)',
+                        border: `1px solid ${handsFree ? 'rgba(110,231,183,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                        borderRadius: '12px',
+                        padding: '4px 10px',
+                        color: handsFree ? '#6ee7b7' : 'rgba(255,255,255,0.5)',
+                        fontFamily: "'DM Mono', monospace",
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                        letterSpacing: '0.06em',
+                    }}
+                >
+                    {handsFree ? '🎧 manos-libres' : '🎧 off'}
                 </button>
                 {/* Ajustes: trae tu propio modelo/API */}
                 <button

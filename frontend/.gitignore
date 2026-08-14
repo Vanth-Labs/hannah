@@ -29,3 +29,4 @@ public/smplx_avatar.glb
 # clips Mixamo crudos (licencia Adobe) — re-hornear con scripts/bake_mixamo.mjs
 public/animations/*.fbx
 # Se CONSERVAN: public/avatar.glb (VRM necesario) y public/animations/baked/*.json
+public/vad/
