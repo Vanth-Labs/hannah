@@ -215,17 +215,24 @@ export async function resolveSkillPhrase(text, ctx) {
   return null;
 }
 
-/** Índice compacto de skills para inyectar en el system prompt (dinámico). '' si no hay. */
+/** Índice de skills para el system prompt (dinámico). Incluye la GUÍA (cuerpo del SKILL.md,
+ *  truncada) igual que Claude Code le pasa las instrucciones al modelo — así decide y arma el
+ *  input mejor. '' si no hay skills. */
 export function skillsPromptSection() {
   if (!skills.length) return '';
   const lines = skills.map((s) => {
     const eg = s.action.template.includes('{')
-      ? ` e.g. [SKILL: ${s.name} | <input>]` : ` e.g. [SKILL: ${s.name}]`;
-    return `  - ${s.name}: ${s.description || s.name}.${eg}`;
+      ? `[SKILL: ${s.name} | <input>]` : `[SKILL: ${s.name}]`;
+    let out = `  - ${s.name}: ${s.description || s.name}. → ${eg}`;
+    // Guía (cuerpo del SKILL.md): las instrucciones de cuándo/cómo usarla, compactadas.
+    const guide = String(s.body || '').replace(/\s+/g, ' ').trim();
+    if (guide) out += `\n      ${guide.slice(0, 280)}`;
+    return out;
   });
-  return `\n\nYou have these SKILLS. Invoke ONE inline with [SKILL: name | input] only when it\n`
-    + `clearly fits what the user wants; the app runs it and gives you the real result to\n`
-    + `narrate (never invent it). Omit the "| input" part for skills that take none.\n`
+  return `\n\nYou have these SKILLS. Invoke ONE inline with [SKILL: name | input] when it clearly\n`
+    + `fits what the user wants; the app runs it and gives you the REAL result to narrate\n`
+    + `(never invent it). Omit "| input" for skills that take none. Read each skill's guide to\n`
+    + `decide and to build the input:\n`
     + lines.join('\n');
 }
 
