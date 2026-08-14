@@ -146,7 +146,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
 
         // Comando de movimiento de ventana (determinista, no depende del LLM).
         const moveSpec = parseMoveIntent(asrResult.transcript);
-        if (moveSpec) moveWindow(moveSpec);
+        if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
 
         // Avisarle al cliente qué fue lo que entendimos
         onStreamSegment({ type: 'user_transcript', text: asrResult.transcript });
@@ -205,7 +205,7 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
 
         // Comando de movimiento de ventana (determinista, no depende del LLM).
         const moveSpec = parseMoveIntent(text);
-        if (moveSpec) moveWindow(moveSpec);
+        if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
 
         const updatedSession = conversationManager.getSession(sessionId);
         await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment, signal);
