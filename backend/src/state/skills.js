@@ -116,6 +116,23 @@ function findSkill(name) {
   return skills.find((s) => s.name === n) || null;
 }
 
+// Arma "usuario@host" desde lenguaje natural dictado, p.ej.
+// "192.168.1.30 con el usuario drocho" -> "drocho@192.168.1.30". Tolera relleno de la voz.
+function sshArg(raw) {
+  let s = ` ${String(raw || '').trim()} `;
+  let user = '';
+  const mu = s.match(/\s(?:con\s+(?:el\s+)?usuario|como|usuario|user|con)\s+([^\s@]+)/i);
+  if (mu) { user = mu[1].replace(/[.,;]+$/, ''); s = s.replace(mu[0], ' '); }
+  s = s.replace(/\b(?:un|una|el|la|al|a|mi|de|del|the|to|por|ssh)\b/gi, ' ').trim();
+  // Si ya viene user@host, respetarlo.
+  const at = s.match(/\S+@\S+/);
+  if (at) return at[0];
+  const ip = s.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/);
+  const dom = s.match(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/i);
+  const host = (ip ? ip[0] : dom ? dom[0] : (s.split(/\s+/).filter(Boolean).pop() || '')).replace(/[.,;]+$/, '');
+  return user && host ? `${user}@${host}` : host;
+}
+
 // Rellena {arg}/{cualquier} con el input capturado y ejecuta la acción vía runTool.
 async function execSkill(skill, arg, ctx) {
   const filled = skill.action.template.replace(/\{[^}]*\}/g, (arg || '').trim());
@@ -138,14 +155,21 @@ async function execSkill(skill, arg, ctx) {
     // Sesión interactiva (ssh, top, python...). No captura: abre el panel y escribe el
     // comando; el usuario sigue la sesión (password, etc.). Mismo gate que run_command.
     if (!config.tools.systemControl) return 'terminal access is off (enable system control)';
-    if (DANGER.test(filled)) {
-      if (!ctx?.send) return `refused for safety: ${filled}`;
+    // SSH: armar user@host desde lo dictado (más robusto que el {arg} literal).
+    let command = /^\s*ssh\b/i.test(skill.action.template) ? `ssh ${sshArg(arg)}`.trim() : filled;
+    if (DANGER.test(command)) {
+      if (!ctx?.send) return `refused for safety: ${command}`;
       const { id, promise } = requestConfirm();
-      ctx.send({ type: 'confirm_command', id, command: filled });
-      if (!(await promise)) return `the user did NOT approve running: ${filled}`;
+      ctx.send({ type: 'confirm_command', id, command });
+      if (!(await promise)) return `the user did NOT approve running: ${command}`;
     }
-    ctx?.send?.({ type: 'open_terminal', command: filled });
-    return `[Abrí la terminal y ejecuté "${filled}" — el usuario ve la sesión y puede continuarla]`;
+    // Con argumento dictado por voz -> NO ejecutar solo: lo escribe y el usuario da Enter
+    // (así corrige si la voz falló el host/usuario). Sin argumento -> corre directo.
+    const autorun = !/\{[^}]*\}/.test(skill.action.template);
+    ctx?.send?.({ type: 'open_terminal', command, run: autorun });
+    return autorun
+      ? `[Abrí la terminal y ejecuté "${command}"]`
+      : `[Escribí "${command}" en la terminal; el usuario lo revisa y le da Enter]`;
   }
   return null;
 }
