@@ -7,6 +7,7 @@ import { logger } from '../utils/logger.js';
 // Pre-importar en lugar de dynamic import por cada mensaje
 import { startVisionLoop, pushFrame, stopVisionLoop, getLastFrame, describeScene } from '../pipeline/visionLoop.js';
 import { processTextTurn, processUserTextTurn } from '../pipeline/orchestrator.js';
+import { getGaze } from '../pipeline/windowControl.js';
 
 export const initWebSocketGateway = (httpServer) => {
     const wss = new WebSocketServer({ noServer: true });
@@ -44,6 +45,18 @@ export const initWebSocketGateway = (httpServer) => {
             }
         };
 
+        // Mirada global (solo overlay): sondea el cursor de Hyprland y le manda a Hannah
+        // hacia dónde mirar, aunque el cursor esté en otro monitor. Se activa con GAZE_ON.
+        let gazeTimer = null;
+        const startGaze = () => {
+            if (gazeTimer) return;
+            gazeTimer = setInterval(async () => {
+                const g = await getGaze();
+                if (g) safeSend({ type: 'gaze', x: g.x, y: g.y });
+            }, 80);
+        };
+        const stopGaze = () => { if (gazeTimer) { clearInterval(gazeTimer); gazeTimer = null; } };
+
         ws.on('message', async (message, isBinary) => {
             // ── Mensajes binarios: chunks de audio ──────────────────────────
             if (isBinary) {
@@ -80,6 +93,13 @@ export const initWebSocketGateway = (httpServer) => {
                         // El usuario empezó a hablar sobre Hannah: abortar su turno en curso.
                         logger.info('INTERRUPT: abortando turno en curso', { sessionId });
                         abortCurrentTurn();
+                        break;
+
+                    case 'GAZE_ON':
+                        startGaze();
+                        break;
+                    case 'GAZE_OFF':
+                        stopGaze();
                         break;
 
                     case 'SPEECH_START':
@@ -162,6 +182,7 @@ export const initWebSocketGateway = (httpServer) => {
         ws.on('close', () => {
             logger.info('Conexión WebSocket cerrada por el cliente', { sessionId });
             abortCurrentTurn();
+            stopGaze();
             audioChunks = [];
             stopVisionLoop(sessionId);
         });

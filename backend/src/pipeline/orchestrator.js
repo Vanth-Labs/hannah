@@ -4,6 +4,7 @@ import { generateDialogueStream } from './llm.js';
 import { synthesizeSpeechStream } from './tts.js';
 import { generateVisemesFromText } from './lipsync.js';
 import { generateMotion, generateMotionFromText } from './motion.js';
+import { moveWindow } from './windowControl.js';
 import { conversationManager } from '../state/conversationManager.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -50,13 +51,17 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     const motionMatch = rawText.match(/[[(*]\s*MOTION:\s*([^\])*\n]+?)\s*[\])*]/i);
     const action = motionMatch ? (motionMatch[1] || '').trim() : '';
 
-    // Quitar etiquetas MOTION:/EMOTION: con cualquier delimitador: no deben verse en
-    // el subtítulo, oírse en el TTS ni condicionar el co-speech. Se incluyen variantes
+    // Director de ventana: [MOVE:posición] mueve el overlay por el escritorio/monitores.
+    const moveMatch = rawText.match(/[[(*]\s*MOVE:\s*([^\])*\n]+?)\s*[\])*]/i);
+    if (moveMatch) moveWindow((moveMatch[1] || '').trim());
+
+    // Quitar etiquetas MOTION:/EMOTION:/MOVE: con cualquier delimitador: no deben verse
+    // en el subtítulo, oírse en el TTS ni condicionar el co-speech. Incluye variantes
     // sin cerrar (streaming parcial) para que nunca se filtre un corchete suelto.
     const text = rawText
-        .replace(/[[(*]\s*(MOTION|EMOTION):[^\])*\n]*[\])*]/gi, '') // delimitada completa
-        .replace(/[[(*]\s*(MOTION|EMOTION):[^\])*\n]*/gi, '')       // sin cerrar (streaming parcial)
-        .replace(/[[(*]\s*$/g, '')                                  // delimitador abierto al final
+        .replace(/[[(*]\s*(MOTION|EMOTION|MOVE):[^\])*\n]*[\])*]/gi, '') // delimitada completa
+        .replace(/[[(*]\s*(MOTION|EMOTION|MOVE):[^\])*\n]*/gi, '')       // sin cerrar (streaming parcial)
+        .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final
         .replace(/\s+/g, ' ')
         .trim();
     // Si tras limpiar no queda texto real, ignorar el fragmento
