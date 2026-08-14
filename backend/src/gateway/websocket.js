@@ -5,9 +5,8 @@ import { conversationManager } from '../state/conversationManager.js';
 import { logger } from '../utils/logger.js';
 
 // Pre-importar en lugar de dynamic import por cada mensaje
-import { startVisionLoop, pushFrame, stopVisionLoop, getLastFrame } from '../pipeline/visionLoop.js';
+import { startVisionLoop, pushFrame, stopVisionLoop, getLastFrame, describeScene } from '../pipeline/visionLoop.js';
 import { processTextTurn, processUserTextTurn } from '../pipeline/orchestrator.js';
-import { analyzeFrame } from '../pipeline/vision.js';
 
 export const initWebSocketGateway = (httpServer) => {
     const wss = new WebSocketServer({ noServer: true });
@@ -140,8 +139,8 @@ export const initWebSocketGateway = (httpServer) => {
                             break;
                         }
 
-                        const visionReport = await analyzeFrame(lastFrame);
-                        const yoloPrompt = `[SISTEMA - ALERTA DE CÁMARA YOLO]: Escaneo completado. Detección: "${visionReport.summary}". Reacciona de inmediato de forma hablada adoptando tu personalidad de Hannah AI. Sé directa, concisa y alerta al usuario.`;
+                        const sceneSummary = await describeScene(lastFrame);
+                        const yoloPrompt = `[SISTEMA - CÁMARA]: Escaneo completado. Veo: "${sceneSummary}". Reacciona de inmediato de forma hablada adoptando tu personalidad de Hannah AI. Sé directa y concisa.`;
                         await processTextTurn(sessionId, yoloPrompt, safeSend);
                         break;
                     }

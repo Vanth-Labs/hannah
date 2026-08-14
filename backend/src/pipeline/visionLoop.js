@@ -1,7 +1,18 @@
 // src/pipeline/visionLoop.js
 import { analyzeFrame } from './vision.js';
+import { describeFrame } from './vlm.js';
 import { processTextTurn } from './orchestrator.js';
+import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
+
+// Describe la escena con el proveedor activo: VLM local (rico) o YOLO (etiquetas).
+export async function describeScene(frameBase64) {
+    if (config.vision.provider === 'vlm') {
+        return describeFrame(frameBase64);
+    }
+    const vision = await analyzeFrame(frameBase64);
+    return vision?.summary || '';
+}
 
 const sessions = new Map();
 
@@ -19,10 +30,10 @@ export function startVisionLoop(sessionId, send) {
 
         state.isProcessing = true;
         try {
-            const vision = await analyzeFrame(state.lastFrame);
-            if (!vision?.summary) return;
+            const summary = await describeScene(state.lastFrame);
+            if (!summary) return;
 
-            const prompt = `[VISIÓN]: ${vision.summary}. Reacciona brevemente (1-2 frases), como si lo estuvieras viendo ahora mismo.`;
+            const prompt = `[VISIÓN]: ${summary}. Reacciona brevemente (1-2 frases), como si lo estuvieras viendo ahora mismo.`;
             await processTextTurn(sessionId, prompt, send);
         } catch (err) {
             logger.error('Vision loop error', { message: err.message });
