@@ -44,13 +44,13 @@ export function useVoiceActivity({ enabled, onUtterance, onInterrupt }) {
                     onnxWASMBasePath: '/vad/',
                     model: 'v5',
                     // Ajustes de robustez:
-                    // - umbral algo más sensible para captar el inicio de tu voz
-                    positiveSpeechThreshold: 0.45,
-                    negativeSpeechThreshold: 0.30,
+                    // - umbral más sensible para captar el inicio de tu voz
+                    positiveSpeechThreshold: 0.35,
+                    negativeSpeechThreshold: 0.25,
                     // - esperar más antes de dar por terminada la frase (no cortar en pausas)
-                    redemptionFrames: 16,
-                    // - exigir varios frames de voz -> ignora blips cortos de ruido de fondo
-                    minSpeechFrames: 4,
+                    redemptionFrames: 18,
+                    // - pocos frames para no perder palabras cortas ("abre", "sí")
+                    minSpeechFrames: 3,
                     // - capturar el arranque de la palabra (que el ASR no pierda la primera sílaba)
                     preSpeechPadFrames: 4,
                     onSpeechStart: () => {
