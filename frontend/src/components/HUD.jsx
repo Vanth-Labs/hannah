@@ -17,6 +17,26 @@ const EMOTION_COLOR = {
     sad:      '#93c5fd',
 };
 
+// Botón de icono redondo reutilizable (dedupe de estilos). `active` lo tiñe con activeColor.
+function IconBtn({ onClick, onMouseDown, onMouseUp, onTouchStart, onTouchEnd, title, active, activeColor = '#7ab8e8', size = 34, children }) {
+    return (
+        <button
+            onClick={onClick} onMouseDown={onMouseDown} onMouseUp={onMouseUp}
+            onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} title={title}
+            style={{
+                pointerEvents: 'auto', width: size, height: size, borderRadius: '50%',
+                display: 'grid', placeItems: 'center', flexShrink: 0,
+                background: active ? `${activeColor}22` : 'rgba(255,255,255,0.06)',
+                border: `1px solid ${active ? `${activeColor}66` : 'rgba(255,255,255,0.14)'}`,
+                color: active ? activeColor : 'rgba(255,255,255,0.55)',
+                fontSize: `${Math.round(size * 0.44)}px`, cursor: 'pointer', transition: 'all 0.15s',
+            }}
+        >
+            {children}
+        </button>
+    );
+}
+
 export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, sendCommand }) {
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
@@ -45,118 +65,45 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
 
     return (
         <>
-            {/* ── Status bar arriba ─────────────────────────────────────── */}
+            {/* ── Status mínimo (arriba-izquierda), sin botones ─────────────── */}
             <div style={{
-                position: 'fixed', top: 0, left: 0, right: 0,
-                display: 'flex', alignItems: 'center', gap: '12px',
-                padding: '14px 24px',
-                fontFamily: "'DM Mono', monospace",
-                fontSize: '11px',
-                color: 'rgba(255,255,255,0.4)',
-                zIndex: 10,
-                background: 'linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%)',
+                position: 'fixed', top: '14px', left: '18px',
+                display: 'flex', alignItems: 'center', gap: '10px',
+                fontFamily: "'DM Mono', monospace", fontSize: '10px', letterSpacing: '0.06em',
+                zIndex: 10, pointerEvents: 'none',
             }}>
-                <span style={{ color: connected ? '#4ade80' : '#f87171' }}>
-                    {connected ? '● online' : '○ offline'}
+                <span style={{ color: connected ? '#4ade80' : '#f87171' }} title={connected ? 'online' : 'offline'}>
+                    {connected ? '●' : '○'}
                 </span>
-                <span style={{ color: emotionColor, letterSpacing: '0.08em' }}>
-                    {emotion}
-                </span>
-                {isSpeaking && (
-                    <span style={{ color: '#fff', animation: 'pulse 1s infinite' }}>
-                        speaking
-                    </span>
-                )}
-                {visionActive && (
-                    <span style={{ color: '#6ee7b7' }}>● yolo</span>
-                )}
-                <div style={{ flex: 1 }} />
-                {/* Mic on/off (manos-libres): apaga la escucha */}
-                <button
-                    onClick={() => setHandsFree(!handsFree)}
-                    title={handsFree ? 'Micrófono activo (click para silenciar)' : 'Micrófono silenciado'}
-                    style={{
-                        pointerEvents: 'auto',
-                        width: '30px', height: '30px', borderRadius: '50%',
-                        background: handsFree ? 'rgba(110,231,183,0.12)' : 'rgba(248,113,113,0.12)',
-                        border: `1px solid ${handsFree ? 'rgba(110,231,183,0.4)' : 'rgba(248,113,113,0.4)'}`,
-                        color: handsFree ? '#6ee7b7' : '#f87171',
-                        fontSize: '14px', cursor: 'pointer',
-                    }}
-                >
+                <span style={{ color: emotionColor }}>{emotion}</span>
+                {isSpeaking && <span style={{ color: '#fff', animation: 'pulse 1s infinite' }}>speaking</span>}
+                {visionActive && <span style={{ color: '#6ee7b7' }}>● cam</span>}
+            </div>
+
+            {/* ── Dock flotante de controles (glass, agrupado) ──────────────
+                overlay: abajo-centro, discreto sobre el avatar.
+                web:     arriba-derecha. */}
+            <div style={{
+                position: 'fixed', zIndex: 20,
+                ...(isOverlay
+                    ? { bottom: '20px', left: '50%', transform: 'translateX(-50%)' }
+                    : { top: '14px', right: '18px' }),
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '7px 9px', borderRadius: '999px',
+                background: 'rgba(12,15,22,0.6)', backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+                border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 6px 24px rgba(0,0,0,0.35)',
+            }}>
+                <IconBtn onClick={() => setHandsFree(!handsFree)} active={handsFree} activeColor="#6ee7b7"
+                    title={handsFree ? 'Micrófono activo (click para silenciar)' : 'Micrófono silenciado'}>
                     {handsFree ? '🎙' : '🔇'}
-                </button>
-                {/* Cámara/visión (arriba en overlay) */}
-                <button
-                    onClick={onToggleVision}
-                    title="Que Hannah te vea por la cámara"
-                    style={{
-                        pointerEvents: 'auto',
-                        width: '30px', height: '30px', borderRadius: '50%',
-                        background: visionActive ? 'rgba(110,231,183,0.12)' : 'rgba(255,255,255,0.06)',
-                        border: `1px solid ${visionActive ? 'rgba(110,231,183,0.4)' : 'rgba(255,255,255,0.15)'}`,
-                        color: visionActive ? '#6ee7b7' : 'rgba(255,255,255,0.5)',
-                        fontSize: '14px', cursor: 'pointer',
-                    }}
-                >
-                    👁
-                </button>
-                {/* Manos-libres (VAD): en overlay va siempre ON (sin botón). */}
-                {!isOverlay && (
-                    <button
-                        onClick={() => setHandsFree(!handsFree)}
-                        title="Manos libres: habla sin botón y puedes interrumpirla"
-                        style={{
-                            pointerEvents: 'auto',
-                            background: handsFree ? 'rgba(110,231,183,0.12)' : 'rgba(255,255,255,0.06)',
-                            border: `1px solid ${handsFree ? 'rgba(110,231,183,0.4)' : 'rgba(255,255,255,0.15)'}`,
-                            borderRadius: '12px',
-                            padding: '4px 10px',
-                            color: handsFree ? '#6ee7b7' : 'rgba(255,255,255,0.5)',
-                            fontFamily: "'DM Mono', monospace",
-                            fontSize: '11px',
-                            cursor: 'pointer',
-                            letterSpacing: '0.06em',
-                        }}
-                    >
-                        {handsFree ? '🎧 manos-libres' : '🎧 off'}
-                    </button>
-                )}
-                {/* Terminal: panel de shell real que Hannah y tú comparten */}
-                <button
-                    onClick={toggleTerminal}
-                    title="Terminal (Hannah puede correr comandos)"
-                    style={{
-                        pointerEvents: 'auto',
-                        width: '30px', height: '30px', borderRadius: '50%',
-                        background: showTerminal ? 'rgba(122,184,232,0.15)' : 'rgba(255,255,255,0.06)',
-                        border: `1px solid ${showTerminal ? 'rgba(122,184,232,0.5)' : 'rgba(255,255,255,0.15)'}`,
-                        color: showTerminal ? '#7ab8e8' : 'rgba(255,255,255,0.6)',
-                        fontSize: '13px', cursor: 'pointer',
-                    }}
-                >
-                    ⌨
-                </button>
-                {/* Ajustes: trae tu propio modelo/API */}
-                <button
-                    onClick={() => setShowSettings(true)}
-                    title="Ajustes (modelo/API, voz, avatar)"
-                    style={{
-                        pointerEvents: 'auto',
-                        background: 'rgba(255,255,255,0.06)',
-                        border: '1px solid rgba(255,255,255,0.15)',
-                        borderRadius: '12px',
-                        padding: '4px 10px',
-                        color: 'rgba(255,255,255,0.6)',
-                        fontSize: '13px',
-                        cursor: 'pointer',
-                    }}
-                >
-                    ⚙
-                </button>
-                <span style={{ fontFamily: "'Syne', sans-serif", letterSpacing: '0.2em', fontSize: '12px', color: 'rgba(255,255,255,0.15)' }}>
-                    HANNAH
-                </span>
+                </IconBtn>
+                <IconBtn onClick={onToggleVision} active={visionActive} activeColor="#6ee7b7"
+                    title="Que Hannah te vea por la cámara">👁</IconBtn>
+                <IconBtn onClick={toggleTerminal} active={showTerminal} activeColor="#7ab8e8"
+                    title="Terminal (Hannah puede correr comandos)">⌨</IconBtn>
+                <IconBtn onClick={() => setShowSettings(true)}
+                    title="Ajustes (modelo/API, voz, atajos)">⚙</IconBtn>
             </div>
 
             {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}

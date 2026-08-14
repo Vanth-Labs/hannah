@@ -83,6 +83,84 @@ const S = {
     },
 };
 
+// ── Atajos de voz (abrir apps/páginas). Estado propio: carga GET /shortcuts, edita
+// filas clave→valor y guarda POST /shortcuts. Sin tocar la config de proveedores.
+function ShortcutsSection() {
+    const [sites, setSites] = useState([]);   // [[clave, dominio], ...]
+    const [apps, setApps] = useState([]);      // [[clave, appKey], ...]
+    const [status, setStatus] = useState('cargando…');
+
+    useEffect(() => {
+        fetch('/api/v1/shortcuts')
+            .then((r) => r.json())
+            .then((d) => {
+                setSites(Object.entries(d.sites || {}));
+                setApps(Object.entries(d.apps || {}));
+                setStatus('');
+            })
+            .catch(() => setStatus('backend no disponible'));
+    }, []);
+
+    const edit = (list, setList, i, col, v) =>
+        setList(list.map((row, j) => (j === i ? (col === 0 ? [v, row[1]] : [row[0], v]) : row)));
+    const add = (list, setList) => setList([...list, ['', '']]);
+    const del = (list, setList, i) => setList(list.filter((_, j) => j !== i));
+
+    const save = async () => {
+        setStatus('guardando…');
+        const toObj = (rows) => Object.fromEntries(
+            rows.map(([k, v]) => [k.trim().toLowerCase(), v.trim()]).filter(([k, v]) => k && v));
+        try {
+            const r = await fetch('/api/v1/shortcuts', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sites: toObj(sites), apps: toObj(apps) }),
+            });
+            const d = await r.json();
+            setSites(Object.entries(d.sites || {}));
+            setApps(Object.entries(d.apps || {}));
+            setStatus('guardado ✓');
+        } catch { setStatus('error al guardar'); }
+    };
+
+    const rowStyle = { display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center' };
+    const delBtn = { flexShrink: 0, width: '26px', height: '26px', borderRadius: '7px', cursor: 'pointer',
+        background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', fontSize: '13px' };
+    const addBtn = { ...S.preset, marginTop: '8px', display: 'inline-block' };
+
+    const group = (title, hint, list, setList) => (
+        <div style={{ marginTop: '10px' }}>
+            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.5)', marginBottom: '2px' }}>{title}</div>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', marginBottom: '4px' }}>{hint}</div>
+            {list.map((row, i) => (
+                <div key={i} style={rowStyle}>
+                    <input style={{ ...S.input, flex: '0 0 40%' }} value={row[0]}
+                        placeholder="dices…" onChange={(e) => edit(list, setList, i, 0, e.target.value)} />
+                    <input style={{ ...S.input, flex: 1 }} value={row[1]}
+                        placeholder={title === 'Páginas' ? 'dominio.com' : 'browser/terminal/code'}
+                        onChange={(e) => edit(list, setList, i, 1, e.target.value)} />
+                    <button style={delBtn} onClick={() => del(list, setList, i)} title="Quitar">✕</button>
+                </div>
+            ))}
+            <button style={addBtn} onClick={() => add(list, setList)}>+ añadir</button>
+        </div>
+    );
+
+    return (
+        <div style={S.sec}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={S.secTitle}>Atajos de voz (abrir por comando)</div>
+                <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>{status}</span>
+            </div>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)', marginBottom: '4px' }}>
+                Di «abre <em>clave</em>» y Hannah lo abre. Las apps deben existir en el allowlist del backend.
+            </div>
+            {group('Páginas', 'ej.  youtube → youtube.com', sites, setSites)}
+            {group('Apps', 'ej.  navegador → browser', apps, setApps)}
+            <button style={{ ...S.save, marginTop: '12px' }} onClick={save}>Guardar atajos</button>
+        </div>
+    );
+}
+
 export function SettingsPanel({ onClose }) {
     const { autoLookat, setAutoLookat } = useHannahStore();
     const [form, setForm] = useState({ llm: {}, tts: {}, asr: {} });
@@ -191,6 +269,9 @@ export function SettingsPanel({ onClose }) {
                         })}
                     </div>
                 ))}
+
+                {/* Atajos de voz para abrir apps/páginas (editable, con defaults) */}
+                <ShortcutsSection />
 
                 {/* Toggle de comportamiento (solo frontend) */}
                 <div style={S.sec}>
