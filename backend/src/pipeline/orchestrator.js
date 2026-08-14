@@ -6,6 +6,7 @@ import { generateVisemesFromText } from './lipsync.js';
 import { generateMotion, generateMotionFromText } from './motion.js';
 import { moveWindow, parseMoveIntent } from './windowControl.js';
 import { handleOpenIntent, handleCloseIntent, resolveDataAction } from './tools.js';
+import { resolveSkillPhrase } from '../state/skills.js';
 import { conversationManager } from '../state/conversationManager.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -62,7 +63,7 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     const text = rawText
         // con o sin corchetes (llama3.1:8b a veces los omite), cerrada o no
         // Acciones: SIEMPRE con corchete (son palabras comunes; jamás estripar "look"/"time" sueltos).
-        .replace(/[[(*]\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|RECALL)\b\s*:?[^\])*\n]*[\])*]/gi, '')
+        .replace(/[[(*]\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|RECALL|SKILL)\b\s*:?[^\])*\n]*[\])*]/gi, '')
         // Gestos/emoción/mover: con o sin corchete (el 8B a veces los omite).
         .replace(/[[(*]?\s*(MOTION|EMOTION|MOVE)\s*:[^\])*\n]*[\])*]?/gi, '')
         .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final
@@ -153,7 +154,9 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
         if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
         handleOpenIntent(asrResult.transcript, ctx);                    // "abre X" (sin resultado)
         handleCloseIntent(asrResult.transcript, ctx);                   // "cierra X" (sin resultado)
-        const dataResult = await resolveDataAction(asrResult.transcript, ctx);   // "ejecuta/busca/lee X" (con resultado)
+        // Skills con `phrases` (deterministas) tienen prioridad; si no, intents de datos.
+        const dataResult = (await resolveSkillPhrase(asrResult.transcript, ctx))
+            || (await resolveDataAction(asrResult.transcript, ctx));    // "ejecuta/busca/lee X" (con resultado)
         const turnText = dataResult
             ? `${asrResult.transcript}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
             : asrResult.transcript;
@@ -219,7 +222,7 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
         if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
         handleOpenIntent(text, ctx);
         handleCloseIntent(text, ctx);
-        const dataResult = await resolveDataAction(text, ctx);
+        const dataResult = (await resolveSkillPhrase(text, ctx)) || (await resolveDataAction(text, ctx));
         const turnText = dataResult
             ? `${text}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
             : text;

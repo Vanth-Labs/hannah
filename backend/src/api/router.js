@@ -5,6 +5,7 @@ import { createSession, deleteSession } from './sessions.js';
 import { readSettings, writeSettings } from './settings.js';
 import { readShortcuts, writeShortcuts } from './shortcuts.js';
 import { readVoices } from './tts.js';
+import { readSkills, writeSkill, removeSkill } from './skills.js';
 import { generateDialogueStream } from '../pipeline/llm.js';
 import { synthesizeSpeechStream } from '../pipeline/tts.js';
 import { generateVisemesFromText } from '../pipeline/lipsync.js';
@@ -21,6 +22,9 @@ router.post('/settings', writeSettings);
 router.get('/shortcuts', readShortcuts);
 router.post('/shortcuts', writeShortcuts);
 router.get('/tts/voices', readVoices);
+router.get('/skills', readSkills);
+router.post('/skills', writeSkill);
+router.delete('/skills/:name', removeSkill);
 
 // TESTING FALLBACK: Evaluates all internal Core AI modules working smoothly as a unified chain
 router.post('/text', async (req, res) => {

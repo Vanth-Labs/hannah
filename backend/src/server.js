@@ -9,11 +9,13 @@ import { router as apiRouter } from './api/router.js';
 import { initWebSocketGateway } from './gateway/websocket.js';
 import { loadPersisted } from './state/settings.js';
 import { loadShortcuts } from './state/shortcuts.js';
+import { loadSkills } from './state/skills.js';
 
 // Aplica la config de proveedores guardada por el usuario (data/settings.json)
 // por encima de los defaults de .env, antes de servir peticiones.
 loadPersisted();
 loadShortcuts();
+loadSkills();
 
 const app = express();
 

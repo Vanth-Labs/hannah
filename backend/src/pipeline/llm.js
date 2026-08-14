@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
 import { toolSchemas, runTool } from './tools.js';
+import { skillsPromptSection, resolveSkill } from '../state/skills.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
 
@@ -49,7 +50,7 @@ async function buildSystemPrompt(history) {
     let memorySection = '';
     if (summary) memorySection += `\n\n[What you remember about the user and past conversations]\n${summary}`;
     if (recalled) memorySection += `\n\n[Relevant things from earlier conversations]\n${recalled}`;
-    return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}`;
+    return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}${skillsPromptSection()}`;
 }
 
 /**
@@ -104,7 +105,7 @@ const ACTION_TOOL = {
     browse: ['open_url', 'url'], close: ['close_window', 'target'], weather: ['get_weather', 'location'], look: ['look_now', null],
     time: ['get_datetime', null], open: ['open_app', 'name'], recall: ['recall_memory', 'query'],
 };
-const ACTION_RE = /\[\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|RECALL)\b\s*(?::\s*([^\]\n]*))?\]/gi;
+const ACTION_RE = /\[\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|RECALL|SKILL)\b\s*(?::\s*([^\]\n]*))?\]/gi;
 
 function parseActions(text) {
     const acts = []; let m; ACTION_RE.lastIndex = 0;
@@ -125,6 +126,13 @@ async function generateWithActions(messages, onToken, signal, ctx) {
         // Ejecutar las acciones y realimentar los resultados para la respuesta final.
         const results = [];
         for (const a of acts) {
+            // [SKILL: nombre | input] -> resuelve la skill (estilo Claude Code); el backend ejecuta.
+            if (a.key === 'skill') {
+                const [nm, ...rest] = a.arg.split('|');
+                const r = await resolveSkill(nm.trim(), rest.join('|').trim(), ctx);
+                results.push(`SKILL ${a.arg} -> ${r ?? `skill "${nm.trim()}" no existe`}`);
+                continue;
+            }
             const [tool, argName] = ACTION_TOOL[a.key] || [];
             if (!tool) continue;
             const r = await runTool(tool, argName ? { [argName]: a.arg } : {}, ctx);
