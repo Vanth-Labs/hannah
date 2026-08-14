@@ -10,6 +10,8 @@ import { getLastFrame } from '../state/frameStore.js';
 import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
 
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36';
+
 const fn = (name, description, properties = {}, required = []) => ({
   type: 'function',
   function: { name, description, parameters: { type: 'object', properties, required } },
@@ -54,6 +56,50 @@ const TOOLS = {
           ? `${c.weatherDesc?.[0]?.value}, ${c.temp_C}°C (feels ${c.FeelsLikeC}°C), humidity ${c.humidity}%`
           : 'weather unavailable';
       } catch { return 'weather unavailable'; }
+    },
+  },
+
+  // ── INTERNET ────────────────────────────────────────────────────────────
+  fetch_url: {
+    schema: fn('fetch_url', 'Open a web page and return its readable text (for reading articles/docs).',
+      { url: { type: 'string', description: 'the URL to read' } }, ['url']),
+    handler: async ({ url }) => {
+      try {
+        const u = /^https?:\/\//i.test(url || '') ? url : `https://${url}`;
+        const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(9000) });
+        const html = await r.text();
+        const text = html
+          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+          .replace(/\s+/g, ' ').trim();
+        return text ? text.slice(0, 2500) : 'the page had no readable text';
+      } catch (error) { return `could not fetch that page: ${error.message}`; }
+    },
+  },
+
+  web_search: {
+    schema: fn('web_search', 'Search the web and return the top results (title, snippet, url).',
+      { query: { type: 'string', description: 'what to search for' } }, ['query']),
+    handler: async ({ query }) => {
+      try {
+        const r = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query || '')}`,
+          { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(9000) });
+        const html = await r.text();
+        const strip = (s) => s.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, ' ').trim();
+        const out = [];
+        const re = /class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+        let m;
+        while ((m = re.exec(html)) && out.length < 5) {
+          let href = m[1];
+          if (/y\.js|ad_domain|ad_provider/.test(href)) continue;   // saltar anuncios
+          const uddg = href.match(/[?&]uddg=([^&]+)/);       // DDG envuelve la URL real
+          if (uddg) href = decodeURIComponent(uddg[1]);
+          out.push(`${strip(m[2])} — ${strip(m[3])} (${href})`);
+        }
+        return out.length ? out.join('\n') : 'no results found';
+      } catch (error) { return `search failed: ${error.message}`; }
     },
   },
 
