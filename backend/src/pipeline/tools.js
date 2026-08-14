@@ -14,7 +14,7 @@ import { closeWindows } from './desktop/index.js';
 import { getShortcuts } from '../state/shortcuts.js';
 
 // Comandos DESTRUCTIVOS que requieren confirmación del usuario (lo demás corre libre).
-const DANGER = /\brm\s+-[a-z]*[rf]|\brm\s+\S*\s*\/(?:\s|$|\*)|\bmkfs|\bdd\s+.*\bof=|:\(\)\s*\{\s*:|>\s*\/dev\/(?!null)|\bchmod\s+-R\s+0|\b(shutdown|reboot|poweroff|halt|fdisk|wipefs|userdel|mkswap)\b|\bgit\s+.*--force|\bmv\s+\S+\s+\/\s*$/i;
+export const DANGER = /\brm\s+-[a-z]*[rf]|\brm\s+\S*\s*\/(?:\s|$|\*)|\bmkfs|\bdd\s+.*\bof=|:\(\)\s*\{\s*:|>\s*\/dev\/(?!null)|\bchmod\s+-R\s+0|\b(shutdown|reboot|poweroff|halt|fdisk|wipefs|userdel|mkswap)\b|\bgit\s+.*--force|\bmv\s+\S+\s+\/\s*$/i;
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36';
 
@@ -260,19 +260,8 @@ export async function resolveDataAction(text, ctx) {
     if (wantsRead && !isUrl && fileTok) return runAndReport(`cat ${fileTok[1]}`);
   }
 
-  // 2) Lenguaje natural -> comando (frases comunes, alta precisión). Ampliable.
-  const NL_CMD = [
-    [/\b(?:list[aá]|lista(?:me)?|mostrame|muestra|ver)\b[^.]*\b(?:archivos?|carpeta|directorio|contenido)\b/i, 'ls -la'],
-    [/\b(?:qu[eé]\s+)?(?:kernel|n[uú]cleo)\b/i, 'uname -r'],
-    [/\bespacio\b[^.]*\b(?:disco|libre)\b|\bdisco\b[^.]*\bespacio\b/i, 'df -h'],
-    [/\b(?:memoria|ram)\b[^.]*\b(?:uso|libre|cu[aá]nt|queda)/i, 'free -h'],
-    [/\bd[oó]nde estoy\b|\b(?:carpeta|directorio)\s+actual\b|\bpwd\b/i, 'pwd'],
-    [/\bqui[eé]n soy\b|\bwhoami\b|\bmi usuario\b/i, 'whoami'],
-    [/\buptime\b|\bcu[aá]nto\b[^.]*\b(?:encendid|prendid|arriba)/i, 'uptime'],
-    [/\b(?:mi\s+)?ip\b/i, 'ip -brief addr'],
-    [/\bprocesos\b[^.]*\b(?:corriendo|activos|abiertos|pesad)/i, 'ps aux --sort=-%cpu | head -15'],
-  ];
-  for (const [re, cmd] of NL_CMD) if (re.test(t)) return runAndReport(cmd);
+  // (Las frases comunes tipo "qué kernel", "cuánto espacio" migraron a SKILLS cross-platform
+  //  con `phrases:` — ver state/skills.js y skills/. resolveSkillPhrase corre antes que esto.)
 
   // 3) Verbo explícito + comando: "corré/ejecutá/hacé [un] <cmd>"
   if ((m = t.match(new RegExp(`(?:^|\\s)(?:${RUN_VERBS})\\s+(?:el\\s+comando\\s+|the\\s+command\\s+|una?\\s+|a\\s+)?(.+)`, 'i')))) {

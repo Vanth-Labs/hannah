@@ -2,8 +2,10 @@
 // Sistema de SKILLS estilo Claude Code: cada skill es una carpeta con un SKILL.md
 // (frontmatter + guía). MODEL-AGNÓSTICO: cualquier LLM lee el índice de skills y decide
 // cuál usar emitiendo [SKILL: nombre | input]; el BACKEND ejecuta la acción declarada
-// (run/open/search) — el modelo no inventa el comando, solo elige la skill. Opcionalmente
-// una skill declara `phrases:` para además dispararse determinista (fiable en cualquier modelo).
+// (run/terminal/open/search) — el modelo no inventa el comando, solo elige la skill.
+// Opcionalmente `phrases:` para disparo determinista (fiable en cualquier modelo).
+// CROSS-PLATFORM: las acciones aceptan variante por-OS (run.linux/run.mac/run.windows);
+// se resuelve por process.platform.
 //
 // Defaults de fábrica: hannah-backend/skills/<name>/SKILL.md (committed).
 // Skills del usuario:  data/skills/<name>/SKILL.md (gitignored). El usuario pisa por nombre.
@@ -11,7 +13,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
-import { runTool } from '../pipeline/tools.js';
+import { config } from '../config.js';
+import { runTool, DANGER } from '../pipeline/tools.js';
+import { requestConfirm } from '../pipeline/terminal.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SHIPPED_DIR = path.resolve(__dirname, '../../skills');       // defaults del repo
@@ -28,7 +32,7 @@ function parseFrontmatter(raw) {
   if (!m) return { meta: {}, body: String(raw).trim() };
   const meta = {};
   for (const line of m[1].split('\n')) {
-    const kv = line.match(/^\s*([A-Za-z_]+)\s*:\s*(.*)$/);
+    const kv = line.match(/^\s*([A-Za-z_.]+)\s*:\s*(.*)$/);   // permite claves por-OS (run.linux)
     if (!kv) continue;
     const key = kv[1].toLowerCase();
     let val = kv[2].trim();
@@ -47,15 +51,22 @@ function parseFrontmatter(raw) {
   return { meta, body: (m[2] || '').trim() };
 }
 
+// OS actual -> sufijo de clave. darwin=mac, win32=windows, resto=linux.
+const OS = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'linux';
+// Elige la variante por-OS de una acción (run.linux) o la genérica (run).
+const pick = (meta, type) => meta[`${type}.${OS}`] ?? meta[type] ?? null;
+
 function toSkill(raw, fallbackName, source) {
   const { meta, body } = parseFrontmatter(raw);
   const name = String(meta.name || fallbackName).toLowerCase().trim();
   if (!name) return null;
-  // Exactamente UNA acción: run (shell) | open (navegador) | search (web).
+  // Exactamente UNA acción, con variante por-OS opcional (run.linux/mac/windows):
+  //   run (shell) | terminal (sesión interactiva en el panel) | open (navegador) | search (web).
   let action = null;
-  if (meta.run) action = { type: 'run', template: String(meta.run) };
-  else if (meta.open) action = { type: 'open', template: String(meta.open) };
-  else if (meta.search) action = { type: 'search', template: String(meta.search) };
+  for (const type of ['run', 'terminal', 'open', 'search']) {
+    const tpl = pick(meta, type);
+    if (tpl) { action = { type, template: String(tpl) }; break; }
+  }
   if (!action) return null;   // sin acción no es ejecutable
   return {
     name,
@@ -122,6 +133,19 @@ async function execSkill(skill, arg, ctx) {
   if (skill.action.type === 'search') {
     const r = await runTool('web_search', { query: filled }, ctx);
     return `[Resultados de buscar "${filled}"]:\n${r}`;
+  }
+  if (skill.action.type === 'terminal') {
+    // Sesión interactiva (ssh, top, python...). No captura: abre el panel y escribe el
+    // comando; el usuario sigue la sesión (password, etc.). Mismo gate que run_command.
+    if (!config.tools.systemControl) return 'terminal access is off (enable system control)';
+    if (DANGER.test(filled)) {
+      if (!ctx?.send) return `refused for safety: ${filled}`;
+      const { id, promise } = requestConfirm();
+      ctx.send({ type: 'confirm_command', id, command: filled });
+      if (!(await promise)) return `the user did NOT approve running: ${filled}`;
+    }
+    ctx?.send?.({ type: 'open_terminal', command: filled });
+    return `[Abrí la terminal y ejecuté "${filled}" — el usuario ve la sesión y puede continuarla]`;
   }
   return null;
 }

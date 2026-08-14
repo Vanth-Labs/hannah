@@ -33,9 +33,20 @@ Ejemplo: "hacé ping a google.com" -> arg = google.com
 ```
 
 - **Una** acción por skill:
-  - `run: <comando>` — lo corre en la terminal real (pty).
+  - `run: <comando>` — lo corre y captura la salida (comando que termina rápido).
+  - `terminal: <comando>` — abre el **panel de terminal** y escribe el comando; vos seguís la
+    sesión. Para **interactivos**: `ssh`, `python`, `htop`, `top`, `vim`… (con `run` no sirven,
+    porque no "terminan").
   - `open: <url>` — abre la web en el navegador (ventana visible).
-  - `search: <query>` — busca en internet y te trae resultados.
+  - `search: <query>` — busca en internet y te trae resultados (sin abrir navegador).
+- **Cross-platform** — cualquier acción acepta variante por sistema operativo; se elige por
+  `process.platform`:
+  ```
+  run.linux:   free -h
+  run.mac:     vm_stat
+  run.windows: Get-CimInstance Win32_OperatingSystem | Select FreePhysicalMemory
+  ```
+  Si ponés solo `run:` (sin sufijo) se usa en todos. En Windows el shell es PowerShell.
 - **`{arg}`** (o cualquier `{...}`) se reemplaza por lo que dijiste después de la frase / el
   input que pasa el modelo. Si la skill no lleva input, no pongas `{arg}`.
 - **`description`**: una línea; es lo que ve el modelo en su índice de skills.

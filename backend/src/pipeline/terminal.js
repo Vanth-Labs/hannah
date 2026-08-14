@@ -10,8 +10,11 @@ import { logger } from '../utils/logger.js';
 const sessions = new Map();   // sessionId -> { pty, subs:Set<send>, lastData }
 
 function create(sessionId) {
-  const shell = process.env.SHELL || 'bash';
-  const p = pty.spawn(shell, ['-l'], {
+  // Shell por OS: Windows -> PowerShell/cmd; Linux/Mac -> login shell del usuario.
+  const isWin = process.platform === 'win32';
+  const shell = isWin ? (process.env.COMSPEC || 'powershell.exe') : (process.env.SHELL || 'bash');
+  const args = isWin ? [] : ['-l'];
+  const p = pty.spawn(shell, args, {
     name: 'xterm-color', cols: 100, rows: 30, cwd: os.homedir(), env: process.env,
   });
   const s = { pty: p, subs: new Set(), lastData: Date.now() };
