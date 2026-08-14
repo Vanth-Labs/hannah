@@ -8,6 +8,7 @@ import { logger } from '../utils/logger.js';
 import { startVisionLoop, pushFrame, stopVisionLoop, getLastFrame, describeScene } from '../pipeline/visionLoop.js';
 import { processTextTurn, processUserTextTurn } from '../pipeline/orchestrator.js';
 import { getGaze } from '../pipeline/windowControl.js';
+import { attach as terminalAttach, input as terminalInput, resize as terminalResize, dispose as terminalDispose, resolveConfirm } from '../pipeline/terminal.js';
 
 export const initWebSocketGateway = (httpServer) => {
     const wss = new WebSocketServer({ noServer: true });
@@ -57,6 +58,9 @@ export const initWebSocketGateway = (httpServer) => {
         };
         const stopGaze = () => { if (gazeTimer) { clearInterval(gazeTimer); gazeTimer = null; } };
 
+        // Terminal: suscripción al stream del pty de esta sesión (para el panel xterm).
+        let detachTerminal = null;
+
         ws.on('message', async (message, isBinary) => {
             // ── Mensajes binarios: chunks de audio ──────────────────────────
             if (isBinary) {
@@ -100,6 +104,19 @@ export const initWebSocketGateway = (httpServer) => {
                         break;
                     case 'GAZE_OFF':
                         stopGaze();
+                        break;
+
+                    case 'TERMINAL_START':
+                        if (!detachTerminal) detachTerminal = terminalAttach(sessionId, safeSend);
+                        break;
+                    case 'TERMINAL_IN':
+                        terminalInput(sessionId, data.data || '');
+                        break;
+                    case 'TERMINAL_RESIZE':
+                        terminalResize(sessionId, data.cols, data.rows);
+                        break;
+                    case 'CONFIRM_COMMAND':
+                        resolveConfirm(data.id, data.approved);
                         break;
 
                     case 'SPEECH_START':
@@ -183,6 +200,8 @@ export const initWebSocketGateway = (httpServer) => {
             logger.info('Conexión WebSocket cerrada por el cliente', { sessionId });
             abortCurrentTurn();
             stopGaze();
+            if (detachTerminal) detachTerminal();
+            terminalDispose(sessionId);
             audioChunks = [];
             stopVisionLoop(sessionId);
         });

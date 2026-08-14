@@ -32,6 +32,7 @@
     "express-rate-limit": "^8.5.2",
     "form-data": "^4.0.5",
     "helmet": "^8.2.0",
+    "node-pty": "^1.1.0",
     "openai": "^6.39.0",
     "uuid": "^14.0.0",
     "winston": "^3.19.0",
@@ -41,5 +42,8 @@
     "jest": "^30.4.2",
     "nodemon": "^3.1.14",
     "supertest": "^7.2.2"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }

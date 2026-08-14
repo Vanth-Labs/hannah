@@ -9,6 +9,10 @@ import { describeFrame } from './vlm.js';
 import { getLastFrame } from '../state/frameStore.js';
 import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
+import { runCommand, requestConfirm } from './terminal.js';
+
+// Comandos DESTRUCTIVOS que requieren confirmación del usuario (lo demás corre libre).
+const DANGER = /\brm\s+-[a-z]*[rf]|\brm\s+\S*\s*\/(?:\s|$|\*)|\bmkfs|\bdd\s+.*\bof=|:\(\)\s*\{\s*:|>\s*\/dev\/(?!null)|\bchmod\s+-R\s+0|\b(shutdown|reboot|poweroff|halt|fdisk|wipefs|userdel|mkswap)\b|\bgit\s+.*--force|\bmv\s+\S+\s+\/\s*$/i;
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36';
 
@@ -117,19 +121,26 @@ const TOOLS = {
     },
   },
 
-  // run_command: DESACTIVADO salvo config.tools.systemControl=true, y solo prefijos
-  // del allowlist (sin shell arbitrario, sin sudo/rm/redirecciones).
+  // run_command: terminal REAL (pty persistente: cd/env persisten; ssh/git/curl/etc.).
+  // Solo si systemControl=true. Corre libre; SOLO pide confirmación si es destructivo.
   run_command: {
-    schema: fn('run_command', 'Run one of the allowed shell commands. Only enabled if the user turned system control on.',
-      { command: { type: 'string', description: 'command to run' } }, ['command']),
-    handler: async ({ command }) => {
-      if (!config.tools.systemControl) return 'system control is disabled';
-      const c = String(command || '').trim();
-      if (/[;&|`$><]|\bsudo\b|\brm\b|\bmkfs\b|\bdd\b/.test(c)) return 'blocked: unsafe command';
-      const ok = config.tools.cmdAllowlist.some((p) => c.startsWith(p));
-      if (!ok) return `blocked: only these are allowed: ${config.tools.cmdAllowlist.join(', ')}`;
-      return await new Promise((res) => exec(c, { timeout: 5000 }, (e, out) =>
-        res(e ? `error: ${e.message}` : (out || 'done').slice(0, 400))));
+    schema: fn('run_command',
+      'Run a shell command in your terminal. Persistent shell (cd/env persist across calls); '
+      + 'supports ssh, git, curl, package managers and interactive tools. Use it to inspect or act on the system.',
+      { command: { type: 'string', description: 'the shell command to run' } }, ['command']),
+    handler: async ({ command }, ctx) => {
+      if (!config.tools.systemControl) return 'terminal access is off (enable system control to allow it)';
+      const cmd = String(command || '').trim();
+      if (!cmd) return 'no command given';
+      // Confirmación SOLO para comandos destructivos.
+      if (DANGER.test(cmd)) {
+        if (!ctx?.send) return `refused for safety (no way to ask you to confirm): ${cmd}`;
+        const { id, promise } = requestConfirm();
+        ctx.send({ type: 'confirm_command', id, command: cmd });
+        const approved = await promise;
+        if (!approved) return `the user did NOT approve running: ${cmd}`;
+      }
+      return runCommand(ctx?.sessionId || 'default', cmd);
     },
   },
 };
