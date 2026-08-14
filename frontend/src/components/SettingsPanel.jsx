@@ -9,6 +9,7 @@ import { useHannahStore } from '../store/hannahStore.js';
 // Presets de LLM: rellenan baseUrl/model de un click (el usuario ajusta luego).
 const LLM_PRESETS = [
     { label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1', model: 'llama3.1:8b' },
+    { label: 'Anthropic (Claude)', baseUrl: 'https://api.anthropic.com/v1/', model: 'claude-haiku-4-5-20251001' },
     { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
     { label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.1-8b-instant' },
     { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-3.1-8b-instruct' },
