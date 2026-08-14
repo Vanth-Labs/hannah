@@ -159,7 +159,10 @@ export const summarizeConversation = async (oldSummary, turns) => {
     const sys = 'You maintain a concise long-term memory for the AI avatar Hannah. '
         + 'Update the memory with DURABLE facts about the user (name, preferences, ongoing '
         + 'topics, plans, promises) and key context. Keep it short (max ~1000 chars), third '
-        + 'person, terse, drop stale trivia and small talk. Output ONLY the updated memory text.';
+        + 'person, terse, drop stale trivia and small talk. '
+        + 'NEVER store volatile system/technical state (hostname, IP addresses, disk/memory/CPU '
+        + 'numbers, command outputs, file listings, connected servers): those are checked LIVE '
+        + 'with skills, not remembered. Output ONLY the updated memory text.';
     const user = `Current memory:\n${oldSummary || '(empty)'}\n\nNew conversation to fold in:\n${convo}`;
     try {
         const res = await getLlmClient().chat.completions.create({

@@ -184,16 +184,32 @@ export async function resolveSkill(name, arg, ctx) {
   return execSkill(skill, arg, ctx);
 }
 
-/** Disparo DETERMINISTA opcional: si el texto contiene una `phrases` de alguna skill, la
- *  ejecuta capturando lo que sigue a la frase como arg. null si ninguna matchea. */
+// Normaliza para matchear: minúsculas y SIN acentos (la voz/ASR varía "cómo"/"como",
+// "conéctate"/"conectate"). Así el disparo no depende de tildes.
+const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+// Relleno que NO cuenta como palabra clave (para el match por keywords, orden libre).
+const STOP = new Set(['el', 'la', 'los', 'las', 'un', 'una', 'de', 'del', 'al', 'a', 'en', 'mi',
+  'que', 'se', 'es', 'esta', 'este', 'esto', 'esa', 'ese', 'tu', 'the', 'of', 'my', 'to', 'por', 'con', 'y',
+  // verbos/pronombres genéricos: no distinguen una skill (evita falsos positivos).
+  'tengo', 'tenes', 'tiene', 'hay', 'dame', 'decime', 'quiero', 'saber', 'ver', 'esto', 'eso', 'me', 'lo', 'esta']);
+
+/** Disparo DETERMINISTA: dispara una skill si el texto matchea alguna `phrase`. Robusto:
+ *  sin acentos; para skills SIN argumento basta con que estén TODAS las palabras clave de la
+ *  frase (en cualquier orden); para skills CON {arg} usa substring y toma el resto como arg. */
 export async function resolveSkillPhrase(text, ctx) {
-  const t = String(text || '').toLowerCase();
+  const t = norm(text);
   for (const skill of skills) {
+    const hasArg = /\{[^}]*\}/.test(skill.action.template);
     for (const phrase of skill.phrases) {
-      const i = t.indexOf(phrase);
-      if (i === -1) continue;
-      const arg = String(text).slice(i + phrase.length).trim().replace(/[.?!,;]+$/, '');
-      return execSkill(skill, arg, ctx);
+      const p = norm(phrase);
+      if (hasArg) {
+        const i = t.indexOf(p);
+        if (i >= 0) return execSkill(skill, t.slice(i + p.length).trim().replace(/[.?!,;]+$/, ''), ctx);
+      } else {
+        if (t.includes(p)) return execSkill(skill, '', ctx);
+        const kw = p.split(/\s+/).filter((w) => w.length >= 3 && !STOP.has(w));
+        if (kw.length && kw.every((w) => t.includes(w))) return execSkill(skill, '', ctx);
+      }
     }
   }
   return null;
