@@ -23,6 +23,12 @@ db.exec(`
     ts INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+  CREATE TABLE IF NOT EXISTS embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    vec BLOB NOT NULL,
+    ts INTEGER NOT NULL
+  );
 `);
 
 const _append = db.prepare('INSERT INTO turns (role, content, ts) VALUES (?, ?, ?)');
@@ -31,6 +37,8 @@ const _unsummarized = db.prepare('SELECT id, role, content FROM turns WHERE id >
 const _maxId = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM turns');
 const _getKv = db.prepare('SELECT value FROM kv WHERE key = ?');
 const _setKv = db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+const _addEmb = db.prepare('INSERT INTO embeddings (text, vec, ts) VALUES (?, ?, ?)');
+const _allEmb = db.prepare('SELECT text, vec FROM embeddings ORDER BY id DESC LIMIT ?');
 
 export const memoryStore = {
   appendTurn(role, content) {
@@ -52,6 +60,17 @@ export const memoryStore = {
   setSummary(text, uptoId) {
     _setKv.run('summary', text);
     if (uptoId != null) _setKv.run('summary_upto_id', String(uptoId));
+  },
+  // Vector recall (Fase F2): guarda/lee embeddings como BLOB float32.
+  addEmbedding(text, float32) {
+    _addEmb.run(text, Buffer.from(float32.buffer, float32.byteOffset, float32.byteLength), Date.now());
+  },
+  // Últimos `limit` embeddings como {text, vec:Float32Array}.
+  embeddings(limit = 2000) {
+    return _allEmb.all(limit).map(({ text, vec }) => ({
+      text,
+      vec: new Float32Array(vec.buffer, vec.byteOffset, vec.length / 4),
+    }));
   },
   close() {
     try { db.close(); } catch (e) { logger.error('memory.db close', { message: e.message }); }

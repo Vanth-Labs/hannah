@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { memoryStore } from './memoryStore.js';
 import { summarizeConversation } from '../pipeline/llm.js';
+import { embed } from './embeddings.js';
 
 // Cuántos turnos sin resumir acumular antes de plegar en la memoria de largo plazo.
 const SUMMARY_THRESHOLD = 12;
@@ -76,6 +77,8 @@ class ConversationManager {
 
     // Persistir en la memoria de largo plazo (SQLite) antes de recortar la ventana.
     memoryStore.appendTurn(role, content);
+    // Embeber el turno para recall vectorial (fire-and-forget, no bloquea el turno).
+    this.embedTurn(role, content);
 
     // Evict older turns if we cross our architectural budget constraint
     if (session.turns.length > config.llm.contextTurns) {
@@ -86,6 +89,17 @@ class ConversationManager {
     // Plegar en el resumen de largo plazo cuando se acumulan turnos (en background).
     this.maybeSummarize();
     return true;
+  }
+
+  /** Embebe un turno y lo guarda para recall vectorial (background). */
+  async embedTurn(role, content) {
+    if (!config.memory.recallEnabled || !content || content.length < 8) return;
+    try {
+      const vec = await embed(`${role}: ${content}`);
+      if (vec) memoryStore.addEmbedding(content, vec);
+    } catch (error) {
+      logger.error('embedTurn falló', { message: error.message });
+    }
   }
 
   /**

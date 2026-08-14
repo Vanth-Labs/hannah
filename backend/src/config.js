@@ -83,6 +83,13 @@ At the end of each response, append an emotion tag on a new line in the format:
     sidecarUrl: process.env.MOTION_SIDECAR_URL || 'http://127.0.0.1:8005',
     enabled: process.env.MOTION_ENABLED !== 'false',
   },
+  memory: {
+    // Recall vectorial (Fase F2): embeddings locales vía Ollama.
+    embedModel: process.env.EMBED_MODEL || 'nomic-embed-text',
+    embedUrl: process.env.EMBED_URL || 'http://localhost:11434/api/embeddings',
+    recallK: parseInt(process.env.MEMORY_RECALL_K || '3', 10),
+    recallEnabled: process.env.MEMORY_RECALL !== 'false',
+  },
   session: {
     ttl: parseInt(process.env.SESSION_TTL_MINUTES || '30', 10),
   },

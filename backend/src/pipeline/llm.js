@@ -2,8 +2,27 @@
 import { OpenAI } from 'openai';
 import { config } from '../config.js';
 import { memoryStore } from '../state/memoryStore.js';
+import { embed, cosine } from '../state/embeddings.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
+
+// Recall vectorial: embebe el último mensaje del usuario, busca por coseno en la
+// memoria y devuelve los fragmentos OLD relevantes (los que NO están ya en la ventana).
+async function recallContext(history) {
+    if (!config.memory.recallEnabled) return '';
+    const lastUser = [...history].reverse().find((t) => t.role === 'user');
+    if (!lastUser?.content) return '';
+    const q = await embed(lastUser.content);
+    if (!q) return '';
+    const inWindow = new Set(history.map((t) => t.content));
+    const scored = memoryStore.embeddings(2000)
+        .filter((r) => !inWindow.has(r.text))
+        .map((r) => ({ text: r.text, s: cosine(q, r.vec) }))
+        .filter((r) => r.s > 0.55)
+        .sort((a, b) => b.s - a.s)
+        .slice(0, config.memory.recallK);
+    return scored.length ? scored.map((r) => `- ${r.text}`).join('\n') : '';
+}
 
 // Cliente OpenAI-compatible (Groq, Ollama, OpenRouter, OpenAI…) construido bajo
 // demanda y memoizado. Se reconstruye SOLO si cambian apiKey o baseUrl en runtime
@@ -37,11 +56,12 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete, signal) =
     let accumulatedResponse = '';
 
     try {
-        // System prompt = persona (editable) + memoria de largo plazo + protocolo fijo.
+        // System prompt = persona + memoria (resumen rodante + recall vectorial) + protocolo.
         const summary = memoryStore.getSummary();
-        const memorySection = summary
-            ? `\n\n[What you remember about the user and past conversations]\n${summary}`
-            : '';
+        const recalled = await recallContext(history);
+        let memorySection = '';
+        if (summary) memorySection += `\n\n[What you remember about the user and past conversations]\n${summary}`;
+        if (recalled) memorySection += `\n\n[Relevant things from earlier conversations]\n${recalled}`;
         const systemPrompt = `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}`;
         const formattedMessages = [
             { role: 'system', content: systemPrompt },
