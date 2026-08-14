@@ -124,13 +124,14 @@ function sshArg(raw) {
   const mu = s.match(/\s(?:con\s+(?:el\s+)?usuario|como|usuario|user|con)\s+([^\s@]+)/i);
   if (mu) { user = mu[1].replace(/[.,;]+$/, ''); s = s.replace(mu[0], ' '); }
   s = s.replace(/\b(?:un|una|el|la|al|a|mi|de|del|the|to|por|ssh)\b/gi, ' ').trim();
-  // Si ya viene user@host, respetarlo.
+  // Si ya viene user@host, respetarlo. minúscula: la voz suele capitalizar ("DROCHO") y en
+  // Linux el usuario es case-sensitive (casi siempre minúscula); hosts/IPs no se afectan.
   const at = s.match(/\S+@\S+/);
-  if (at) return at[0];
+  if (at) return at[0].toLowerCase();
   const ip = s.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/);
   const dom = s.match(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/i);
   const host = (ip ? ip[0] : dom ? dom[0] : (s.split(/\s+/).filter(Boolean).pop() || '')).replace(/[.,;]+$/, '');
-  return user && host ? `${user}@${host}` : host;
+  return (user && host ? `${user}@${host}` : host).toLowerCase();
 }
 
 // Rellena {arg}/{cualquier} con el input capturado y ejecuta la acción vía runTool.
