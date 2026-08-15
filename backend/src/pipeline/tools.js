@@ -166,7 +166,12 @@ const TOOLS = {
         const approved = await promise;
         if (!approved) return `the user did NOT approve running: ${cmd}`;
       }
-      return runCommand(ctx?.sessionId || 'default', cmd);
+      let out = await runCommand(ctx?.sessionId || 'default', cmd);
+      // Limpiar líneas de prompt del shell y mostrar el toast (para CUALQUIER origen: el
+      // modelo con [RUN:], la capa determinista o una skill).
+      out = String(out).split('\n').filter((l) => !/^\(?[\w.@-]*\)?\s*\[[^\]]*\]\s*[$#]/.test(l)).join('\n').trim();
+      ctx?.send?.({ type: 'command_run', command: cmd, output: out.slice(0, 1200) });
+      return out || '(sin salida)';
     },
   },
 };
@@ -238,12 +243,9 @@ export async function resolveDataAction(text, ctx) {
   const runAndReport = async (raw) => {
     const cmd = (raw || '').trim().replace(/^["'`]+|["'`]+$/g, '').replace(/[.?!]+$/, '').trim();
     if (!cmd) return null;
-    let r = await runTool('run_command', { command: cmd }, ctx);
-    // Quitar las líneas de prompt del shell que se cuelan (p.ej. "(base) [user@host ~]$ cmd").
-    r = String(r).split('\n').filter((l) => !/^\(?[\w.@-]*\)?\s*\[[^\]]*\]\s*[$#]/.test(l)).join('\n').trim();
-    // Toast en la UI: ves el comando y su salida real SIN abrir la terminal.
-    ctx?.send?.({ type: 'command_run', command: cmd, output: r.slice(0, 1200) });
-    return `[Salida real de "${cmd}"]:\n${r || '(sin salida)'}`;
+    // El handler de run_command limpia el prompt y emite el toast command_run (único origen).
+    const r = await runTool('run_command', { command: cmd }, ctx);
+    return `[Salida real de "${cmd}"]:\n${r}`;
   };
   // Verbos imperativos de "correr" (voseo/tú/infinitivo/enclítico + EN). Preciso a
   // propósito: excluye "hace" (calor/tiempo) y "tira"/"correo" para no correr basura.

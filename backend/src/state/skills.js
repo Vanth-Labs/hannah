@@ -138,11 +138,9 @@ function sshArg(raw) {
 async function execSkill(skill, arg, ctx) {
   const filled = skill.action.template.replace(/\{[^}]*\}/g, (arg || '').trim());
   if (skill.action.type === 'run') {
-    let r = await runTool('run_command', { command: filled }, ctx);
-    // Quita las líneas de prompt del shell y emite el toast (igual que runAndReport en tools.js).
-    r = String(r).split('\n').filter((l) => !/^\(?[\w.@-]*\)?\s*\[[^\]]*\]\s*[$#]/.test(l)).join('\n').trim();
-    ctx?.send?.({ type: 'command_run', command: filled, output: r.slice(0, 1200) });
-    return `[Salida real de "${filled}"]:\n${r || '(sin salida)'}`;
+    // El handler de run_command limpia el prompt y emite el toast (único origen).
+    const r = await runTool('run_command', { command: filled }, ctx);
+    return `[Salida real de "${filled}"]:\n${r}`;
   }
   if (skill.action.type === 'open') {
     const r = await runTool('open_url', { url: filled }, ctx);
@@ -215,24 +213,16 @@ export async function resolveSkillPhrase(text, ctx) {
   return null;
 }
 
-/** Índice de skills para el system prompt (dinámico). Incluye la GUÍA (cuerpo del SKILL.md,
- *  truncada) igual que Claude Code le pasa las instrucciones al modelo — así decide y arma el
- *  input mejor. '' si no hay skills. */
+/** Índice COMPACTO de skills (una línea c/u) para el system prompt. Se mantiene chico a
+ *  propósito: son atajos con nombre; para CUALQUIER otro comando el modelo usa [RUN:]
+ *  (ver el protocolo). '' si no hay skills. */
 export function skillsPromptSection() {
   if (!skills.length) return '';
   const lines = skills.map((s) => {
-    const eg = s.action.template.includes('{')
-      ? `[SKILL: ${s.name} | <input>]` : `[SKILL: ${s.name}]`;
-    let out = `  - ${s.name}: ${s.description || s.name}. → ${eg}`;
-    // Guía (cuerpo del SKILL.md): las instrucciones de cuándo/cómo usarla, compactadas.
-    const guide = String(s.body || '').replace(/\s+/g, ' ').trim();
-    if (guide) out += `\n      ${guide.slice(0, 280)}`;
-    return out;
+    const eg = s.action.template.includes('{') ? `[SKILL: ${s.name}|input]` : `[SKILL: ${s.name}]`;
+    return `  ${eg} — ${s.description || s.name}`;
   });
-  return `\n\nYou have these SKILLS. Invoke ONE inline with [SKILL: name | input] when it clearly\n`
-    + `fits what the user wants; the app runs it and gives you the REAL result to narrate\n`
-    + `(never invent it). Omit "| input" for skills that take none. Read each skill's guide to\n`
-    + `decide and to build the input:\n`
+  return `\n\nNamed SKILLS (shortcuts). Use one only if it clearly matches; otherwise use [RUN:].\n`
     + lines.join('\n');
 }
 
