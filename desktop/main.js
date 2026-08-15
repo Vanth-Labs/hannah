@@ -6,7 +6,7 @@ const { app, BrowserWindow, screen, ipcMain } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 
 // El sandbox de Chromium necesita SUID/namespaces; para una app local de confianza se apaga.
 // OJO: desde acá NO alcanza. Cuando corre este archivo, Chromium ya bifurcó el zygote, y el
@@ -170,6 +170,23 @@ async function reinforceOverlay() {
   return null;
 }
 
+// Apaga el stack del proyecto (backend, sidecars, Vite, Ollama) delegando en `./hannah stop`,
+// que es quien sabe qué levantó y tiene los candados de seguridad. Solo se hace si nos lanzó
+// el launcher (HANNAH_STOP_ON_EXIT=1): si arrancaste la app a mano para probar, cerrarla no
+// tiene por qué llevarse servicios que estabas usando.
+function stopStack() {
+  const script = path.join(__dirname, '..', 'hannah');
+  if (!fs.existsSync(script)) return;
+  try {
+    // detached: sobrevive a nuestra salida y arranca en su propia sesión, así el apagado no
+    // se alcanza a sí mismo al matar procesos.
+    spawn(script, ['stop'], { detached: true, stdio: 'ignore' }).unref();
+    console.log('[hannah] cerrando: apagando servicios del proyecto');
+  } catch (e) {
+    console.error('[hannah] no se pudo apagar el stack:', e.message);
+  }
+}
+
 function createWindow() {
   // OJO — NO consultar el cursor acá arriba. `screen.getCursorScreenPoint()` se CUELGA (y
   // vuelca core) mientras no exista ninguna ventana: el proceso queda vivo, sin ventana y sin
@@ -312,7 +329,9 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (!win || win.isDestroyed()) return;
+    // Si la instancia previa quedó viva pero sin ventana, hay que RECREARLA. Si acá se
+    // devolvía sin más, Super+H no hacía absolutamente nada y no había forma de saber por qué.
+    if (!win || win.isDestroyed()) { createWindow(); return; }
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
     win.setAlwaysOnTop(true, 'screen-saver');   // por si el WM se lo bajó mientras tanto
@@ -325,6 +344,13 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(createWindow).catch((e) => {
     console.error('[hannah] no se pudo crear la ventana:', e);
     app.quit();
+  });
+
+  // Cerrar la ventana = apagar Hannah entera (si nos lanzó el launcher). Va solo en la
+  // instancia primaria: una segunda instancia sale enseguida y no debe apagarle nada a la
+  // que está corriendo.
+  app.on('will-quit', () => {
+    if (process.env.HANNAH_STOP_ON_EXIT === '1') stopStack();
   });
 }
 process.on('uncaughtException', (e) => console.error('[hannah] excepción no capturada:', e));
