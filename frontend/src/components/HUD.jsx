@@ -1,5 +1,5 @@
 // src/components/HUD.jsx
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { SettingsPanel } from './SettingsPanel.jsx';
 import { TerminalPanel } from './TerminalPanel.jsx';

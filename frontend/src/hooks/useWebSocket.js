@@ -12,7 +12,6 @@ export function useWebSocket() {
     const isPlaying = useRef(false);
     const currentSource = useRef(null);   // BufferSource sonando ahora (para barge-in)
     const visemeSchedule = useRef([]);  // visemas pendientes de reproducir
-    const visemeTimer = useRef(null);
 
     const {
         setSession, setConnected, setEmotion,
@@ -313,6 +312,10 @@ export function useWebSocket() {
             ws.current?.close();
             audioCtx.current?.close();
         };
+        // Deps vacías A PROPÓSITO: la conexión debe montarse UNA vez. `connect` se accede
+        // siempre por connectRef (que se actualiza arriba), justo para no recrear el socket
+        // en cada render. Ponerlo en deps reconectaría en loop.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     return { sendCommand, sendAudio, sendText, stopPlayback, ws };

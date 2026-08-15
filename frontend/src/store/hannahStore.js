@@ -1,7 +1,7 @@
 // src/store/hannahStore.js
 import { create } from 'zustand';
 
-export const useHannahStore = create((set, get) => ({
+export const useHannahStore = create((set) => ({
     // Conexión
     sessionId: null,
     connected: false,

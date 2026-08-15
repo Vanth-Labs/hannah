@@ -230,7 +230,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
     };
 
     useFrame((state, delta) => {
-        const { emotion, currentVisemes, isSpeaking, currentMotion, gestureTrigger, autoLookat, overlayGaze } = useHannahStore.getState();
+        const { emotion, currentVisemes, currentMotion, gestureTrigger, autoLookat, overlayGaze } = useHannahStore.getState();
         const t = state.clock.getElapsedTime();
         const aFast = Math.min(1, 14 * delta);
         const aSlow = Math.min(1, 3 * delta);
