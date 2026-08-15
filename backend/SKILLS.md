@@ -60,26 +60,42 @@ Ejemplo: "hacé ping a google.com" -> arg = google.com
    `phrases`, la skill se ejecuta sí o sí, sin depender del modelo. Lo que sigue a la frase
    es el `{arg}`. Útil para que ande parejo hasta en modelos chicos.
 
-## ¿Quién dispara las skills? (frases vs modelo)
+## Las dos vías conviven (no hay que elegir)
 
-En ⚙ Ajustes → Skills hay un toggle **"Dejar que el modelo decida"**:
+La capa determinista corre **siempre primero**: si lo que dijiste matchea una `phrase` (o un
+intent del backend), se ejecuta y listo — fiable hasta con el 7B local. Si **nada** matchea, el
+turno sigue al modelo, que puede usar `[SKILL:]` o `[RUN:]` para cosas no pre-definidas. Con un
+modelo mejor (Claude/GPT/Groq-70b) esa segunda vía acierta más; con uno chico, las `phrases` son
+tu red.
 
-- **Apagado (default)** — DETERMINISTA: las `phrases` y el parseo del backend disparan. Fiable
-  en **cualquier** modelo (hasta el 7B local), pero solo hace lo pre-definido y puede arrastrar
-  ruido de la voz.
-- **Encendido** — CONFIÁS EN EL MODELO: se apaga la capa determinista; el modelo decide y llena
-  los argumentos (más inteligente, y puede hacer cosas **no** pre-definidas usando `[RUN:]`/
-  `[SKILL:]`). Requiere un modelo capaz (Claude/GPT/Groq-70b); con el 7B local falla más.
+## Referencia de comandos (además de las skills)
+
+Para comandos sueltos no hace falta crear una skill por cada uno: `hannah-backend/reference/*.md`
+son **cheat-sheets** (`linux.md`, `git.md`, `red.md`) con "intención → comando" y notas por SO,
+que se inyectan en el prompt para que el modelo escriba el `[RUN:]` correcto. Agregás un comando
+con **una línea**; las tuyas van en `data/reference/*.md`. Las skills quedan para lo que tiene
+mecanismo propio (sesión interactiva, abrir navegador, buscar) o lo que quieras 100% fiable.
 
 ## Seguridad
 
-La acción `run` pasa por el mismo guard que el resto: comandos destructivos (`rm -rf`, `dd`,
-`mkfs`, `sudo rm`, …) piden confirmación en un modal antes de ejecutarse. Aun así, como el
+Las acciones `run` y `terminal` **exigen `TOOLS_SYSTEM_CONTROL=true`** (off por defecto; el
+mismo flag que el panel ⌨). No hay allowlist de comandos: con el flag activo corre cualquier
+cosa. La única red es el guard `DANGER` — los destructivos (`rm`, `dd`, `mkfs`, `shutdown`,
+`git --force`, …) piden confirmación en un modal antes de ejecutarse (best-effort, no es una
+barrera de seguridad; ver `tests/unit/danger.test.js`). Aun así, como el
 `{arg}` viene de la conversación y entra al comando, **revisá qué skills creás** (es tu
 máquina; `TOOLS_SYSTEM_CONTROL` es opt-in). No pongas skills con comandos que no quieras que
 se ejecuten con un argumento arbitrario.
 
 ## Ejemplos incluidos
 
-`ping` (run), `diskspace` (run), `weather` (run, `wttr.in`), `youtube` (open). Miralos como
-plantilla en `hannah-backend/skills/`.
+Vienen 11 skills en `hannah-backend/skills/`, útiles como plantilla:
+
+- **run** (captura la salida): `hostname`, `memory`, `diskspace`, `iplocal`, `topproc`
+- **terminal** (sesión interactiva en el panel): `ssh`, `python`, `monitor`, `salir`
+- **open** (navegador): `youtube` · **search** (lee resultados): `buscar-web`
+
+Notas del formato: si un SKILL.md no declara ninguna acción, se ignora; el frontmatter lo parsea
+un lector propio y mínimo (`src/state/skills.js`, no YAML completo); al guardar desde el panel el
+nombre se sanitiza a `[a-z0-9_-]`; y tus skills viven en `data/`, que está **gitignored** (no se
+suben al repo).

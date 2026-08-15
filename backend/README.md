@@ -1,6 +1,16 @@
 # Hannah — Real-Time AI Avatar · Backend (Node.js)
 
-> **For AI coding agents:** This document is the single source of truth for the backend architecture of the Hannah project. Read it fully before writing any code. Every module, route, technology decision, and constraint described here is intentional and must be respected across all sessions.
+> ⚠️ **Vigencia.** Este documento es el diseño ORIGINAL y detallado del backend. El proyecto
+> evolucionó bastante desde entonces, así que **partes de este README están desactualizadas**
+> (dependencias, algunos puertos y rutas, el bloque `.env`, la lista de mensajes WS, el idioma
+> del avatar, y sistemas nuevos que no figuran: skills, reference, memoria SQLite, capa
+> determinista de acciones, ESLint/tests).
+>
+> **La fuente de verdad operativa es `../CLAUDE.md` (mantenido al día) y, ante cualquier duda,
+> el código.** Este archivo sigue siendo útil para entender el *porqué* de las decisiones de
+> arquitectura y los contratos originales; para *cómo correr y qué existe hoy*, usá CLAUDE.md.
+
+> **For AI coding agents:** read `../CLAUDE.md` first. Every module, route, technology decision, and constraint described here was intentional; check it against the code before relying on it.
 
 ---
 
@@ -309,7 +319,7 @@ numpy==1.26.4
 
 **Primary:** Groq (`llama-3.1-8b-instant`) via OpenAI-compatible SDK.
 
-**System prompt:** Loaded from `src/config.js` (configurable via env). Default:
+**System prompt:** `llm.persona` (editable) + `llm.protocol` (fijo: tags de emoción/gestos/acciones) en `src/config.js`. HOY el protocolo fuerza INGLÉS. Diseño original:
 
 ```
 You are Hannah, a helpful and expressive AI avatar.
@@ -551,6 +561,7 @@ Copy `.env.example` to `.env`. Never commit `.env`.
 ```bash
 # Server
 PORT=3001
+HOST=127.0.0.1        # el backend NO escucha en 0.0.0.0; la LAN entra por Vite :5173
 NODE_ENV=development
 LOG_LEVEL=info
 
@@ -575,8 +586,10 @@ ELEVENLABS_VOICE_ID=af_bella # Kokoro uses this variable for voice ID
 # Vision (YOLO, sidecar :8003)
 VISION_SIDECAR_URL=http://127.0.0.1:8003
 
-# Motion (EMAGE / PantoMatrix, sidecar :8004)
-MOTION_SIDECAR_URL=http://127.0.0.1:8004
+# Motion (dos providers con URLs propias; ver .env.example)
+MOTION_PROVIDER=lab
+MOTION_LAB_URL=http://127.0.0.1:8005
+MOTION_EMAGE_URL=http://127.0.0.1:8004
 MOTION_ENABLED=true
 # PANTOMATRIX_DIR=~/PantoMatrix   # repo con los pesos (por defecto ~/PantoMatrix)
 
@@ -587,7 +600,7 @@ SESSION_TTL_MINUTES=30
 CORS_ORIGIN=https://localhost:5173,http://localhost:5173
 ```
 
-**Canonical sidecar port map: ASR 8001 · TTS 8002 · Vision 8003 · Motion 8004** (matches the `sidecar:*` npm scripts).
+**Canonical sidecar port map: ASR 8001 · TTS 8002 · Vision 8003 · Motion-lab 8005 (default) · EMAGE 8004 (fallback)** (matches the `sidecar:*` npm scripts).
 
 ### Motion sidecar (EMAGE) — notes
 
