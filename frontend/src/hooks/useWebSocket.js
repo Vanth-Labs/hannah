@@ -191,6 +191,11 @@ export function useWebSocket() {
                 emitTerminalOut(msg.data);
                 break;
 
+            case 'terminal_clear':
+                // Limpia el xterm (borra pantalla + scrollback + cursor a home).
+                emitTerminalOut('\x1b[2J\x1b[3J\x1b[H');
+                break;
+
             case 'window_move':
                 // En Electron, el proceso main mueve la ventana (cross-platform).
                 if (DESKTOP) DESKTOP.moveWindow(msg.spec);
