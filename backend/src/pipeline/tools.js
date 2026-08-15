@@ -14,7 +14,7 @@ import { closeWindows } from './desktop/index.js';
 import { getShortcuts } from '../state/shortcuts.js';
 
 // Comandos DESTRUCTIVOS que requieren confirmación del usuario (lo demás corre libre).
-export const DANGER = /\brm\s+-[a-z]*[rf]|\brm\s+\S*\s*\/(?:\s|$|\*)|\bmkfs|\bdd\s+.*\bof=|:\(\)\s*\{\s*:|>\s*\/dev\/(?!null)|\bchmod\s+-R\s+0|\b(shutdown|reboot|poweroff|halt|fdisk|wipefs|userdel|mkswap)\b|\bgit\s+.*--force|\bmv\s+\S+\s+\/\s*$/i;
+export const DANGER = /\brm\s+\S|\brmdir\b|\bunlink\b|\bRemove-Item\b|\bdel\s+\S|\bmkfs|\bdd\s+.*\bof=|:\(\)\s*\{\s*:|>\s*\/dev\/(?!null)|\bchmod\s+-R\s+0|\b(shutdown|reboot|poweroff|halt|fdisk|wipefs|userdel|mkswap)\b|\bgit\s+.*--force|\bmv\s+\S+\s+\/\s*$/i;
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36';
 
@@ -238,10 +238,11 @@ export async function resolveDataAction(text, ctx) {
     return '[Limpiaste la terminal. Decilo en una frase corta.]';
   }
 
-  // ── EJECUTAR COMANDOS EN LA TERMINAL (determinista; es lo que más falla si se deja
-  // al LLM). Tres capas de más a menos fiable: backticks -> frase conocida -> verbo. ──
   const runAndReport = async (raw) => {
-    const cmd = (raw || '').trim().replace(/^["'`]+|["'`]+$/g, '').replace(/[.?!]+$/, '').trim();
+    let cmd = (raw || '').trim();
+    const wrap = cmd.match(/^(['"`])([\s\S]*)\1$/);   // desenvolver SOLO si TODO está entre comillas
+    if (wrap) cmd = wrap[2].trim();
+    cmd = cmd.replace(/[.?!]+$/, '').trim();
     if (!cmd) return null;
     // El handler de run_command limpia el prompt y emite el toast command_run (único origen).
     const r = await runTool('run_command', { command: cmd }, ctx);
@@ -273,6 +274,22 @@ export async function resolveDataAction(text, ctx) {
     const name = m[1].replace(/[.,;]+$/, '');
     const content = (m[2] || '').trim().replace(/[.]+$/, '');
     return runAndReport(content ? `printf '%s\\n' ${JSON.stringify(content)} > ${JSON.stringify(name)}` : `touch ${JSON.stringify(name)}`);
+  }
+
+  // 2.2) BORRAR archivo/carpeta -> rm (SIEMPRE pide confirmación por el guard DANGER). No confundir
+  // con "borrá la terminal" (se maneja arriba). Extrae la ruta/nombre real.
+  if (/(?:^|\s)(?:elimin[aá]r?(?:me)?|borr[aá]r?(?:me)?|borra|remove|delete|\brm\b)/i.test(t)
+      && !/\b(terminal|consola|pantalla|shell)\b/i.test(t)) {
+    const dir = /\b(carpeta|directorio|folder|dir)\b/i.test(t);
+    let target = null;
+    let mm;
+    if ((mm = t.match(/((?:~|\.{0,2})\/[^\s"'`]+)/))) target = mm[1];                 // ruta con /
+    else if ((mm = t.match(/(?:archivo|fichero|carpeta|directorio|file|folder|llamad[oa]|de\s+nombre)\s+(?:"([^"]+)"|'([^']+)'|([^\s,]+))/i))) target = mm[1] || mm[2] || mm[3];
+    else if ((mm = t.match(/([^\s"'`/]+\.[A-Za-z0-9]{1,6})/))) target = mm[1];         // nombre.ext
+    if (target) {
+      target = target.replace(/[.,;]+$/, '');
+      return runAndReport(`rm ${dir ? '-r ' : ''}${JSON.stringify(target)}`);
+    }
   }
 
   // 2.5) LISTAR la carpeta: "listá/listame/lista/ls" o "mostrá los archivos" (ruta opcional).
