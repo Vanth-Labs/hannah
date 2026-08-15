@@ -40,6 +40,7 @@ const COMPACT = { w: 400, h: 620 };
 const TITLE = 'Hannah';
 let win = null;
 let desired = null;   // bounds que queremos; los WM tiling los pisan y hay que re-aplicarlos
+let settled = false;  // ¿ya terminó la colocación inicial? (antes, los resize son del WM)
 
 // Mini servidor estático para el dist (así las rutas absolutas /avatar.glb, /assets/…
 // funcionan igual que en un navegador; file:// las rompería).
@@ -140,8 +141,14 @@ async function reinforceOverlay() {
     const addr = await hyprAddress();
     if (!addr) return null;                                        // todavía no está mapeada
     await run('hyprctl', ['dispatch', 'setfloating', `address:${addr}`]);
-    win.setBounds(desired);                                        // el tile pisó los bounds
     await run('hyprctl', ['dispatch', 'pin', `address:${addr}`]);  // pin: solo si es flotante
+    // Hyprland le asigna SU geometría de flotante, y lo hace después de responder al dispatch:
+    // si se re-aplican los bounds enseguida, los pisa igual y la ventana queda del tamaño
+    // equivocado. Por eso se espera y se re-aplica (medido: sin esto quedaba 630x1060).
+    for (const ms of [150, 400]) {
+      await new Promise((r) => setTimeout(r, ms));
+      win.setBounds(desired);
+    }
     return 'hyprctl (flotante + pin)';
   }
   if (de.includes('sway') || de.includes('i3')) {
@@ -190,7 +197,15 @@ function createWindow() {
   win.on('page-title-updated', (e) => e.preventDefault());   // el título es la llave, ver TITLE
   if (!saved) moveToCursorMonitor();   // ya hay ventana: ahora sí se puede preguntar el cursor
   // Recordar dónde la dejó el usuario (posición y tamaño) para el próximo arranque.
-  const saveSoon = debounce(() => { desired = win.getBounds(); saveBounds(desired); }, 500);
+  // OJO con `settled`: hasta que el overlay quede colocado, los eventos de resize NO son del
+  // usuario sino del WM tileando la ventana. Sin esta guarda se guardaba el tamaño impuesto
+  // por el tiling como si fuera el deseado, y el refuerzo lo re-aplicaba: la ventana nunca
+  // llegaba a 400x620 (medido: se quedaba en 613x1048, el tamaño del tile).
+  const saveSoon = debounce(() => {
+    if (!settled) return;
+    desired = win.getBounds();
+    saveBounds(desired);
+  }, 500);
   win.on('moved', saveSoon);
   win.on('resize', saveSoon);
   // Refuerzo por escritorio: si Electron no alcanzara, se pide el always-on-top por la vía
@@ -206,10 +221,11 @@ function createWindow() {
     reinforced = true;
     for (let i = 0; i < 6; i++) {
       const via = await reinforceOverlay();
-      if (via) { console.log(`[overlay] reforzado con ${via}`); return; }
+      if (via) { console.log(`[overlay] reforzado con ${via}`); break; }
       await new Promise((r) => setTimeout(r, 500));
+      if (i === 5) console.log('[overlay] sin refuerzo externo (Electron/XWayland debería alcanzar)');
     }
-    console.log('[overlay] sin refuerzo externo (Electron/XWayland debería alcanzar)');
+    settled = true;   // desde acá, mover/redimensionar SÍ es decisión del usuario: se guarda
   };
   win.once('ready-to-show', () => setTimeout(reinforceOnce, 600));
   setTimeout(reinforceOnce, 2500);

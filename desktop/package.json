@@ -5,8 +5,8 @@
   "main": "main.js",
   "type": "commonjs",
   "scripts": {
-    "start": "electron . --no-sandbox",
-    "start:dev": "HANNAH_DEV=1 electron . --no-sandbox",
+    "start": "electron . --no-sandbox --in-process-gpu --ozone-platform=${HANNAH_OZONE:-x11}",
+    "start:dev": "HANNAH_DEV=1 npm start",
     "build:linux": "electron-builder --linux AppImage deb",
     "build:win": "electron-builder --win nsis",
     "build:mac": "electron-builder --mac dmg",
@@ -36,7 +36,9 @@
       ],
       "category": "Utility",
       "executableArgs": [
-        "--no-sandbox"
+        "--no-sandbox",
+        "--in-process-gpu",
+        "--ozone-platform=x11"
       ]
     },
     "win": {
