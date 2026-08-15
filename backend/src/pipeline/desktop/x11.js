@@ -5,8 +5,12 @@
 import { sh } from './sh.js';
 
 
+// Sirve en X11 nativo (XFCE, Cinnamon, MATE, i3, GNOME/KDE sobre X11) y también en sesiones
+// Wayland para ventanas XWayland — que es como corre la app de escritorio a propósito.
+// Requiere xdotool (mover/redimensionar) y, para el always-on-top, wmctrl.
 export async function probe() {
-  return !!process.env.DISPLAY && !!(await sh('command -v xdotool'));
+  if (!process.env.DISPLAY) return false;
+  return !!(await sh('command -v xdotool')) || !!(await sh('command -v wmctrl'));
 }
 
 // xrandr --listmonitors -> " 0: +*DP-1 2560/597x1440/336+0+0  DP-1"
@@ -56,7 +60,11 @@ export async function close(queries) {
 export async function place(win, x, y, w, h) {
   await sh(`xdotool windowsize ${win.id} ${w} ${h}`);
   await sh(`xdotool windowmove ${win.id} ${x} ${y}`);
-  // always-on-top + pegar a todos los escritorios (equivalente al pin)
-  await sh(`wmctrl -i -r ${win.id} -b add,above,sticky`);
+  // Estado EWMH de overlay (lo respetan GNOME, KDE, XFCE, Cinnamon, MATE, i3…):
+  //   above        -> siempre encima          skip_taskbar/skip_pager -> es un widget
+  //   sticky       -> fijo aunque el viewport se desplace
+  await sh(`wmctrl -i -r ${win.id} -b add,above,sticky,skip_taskbar,skip_pager`);
+  // "En TODOS los escritorios" es _NET_WM_DESKTOP=-1, no sticky (que es sobre viewports).
+  await sh(`wmctrl -i -r ${win.id} -t -1`);
   return true;
 }
