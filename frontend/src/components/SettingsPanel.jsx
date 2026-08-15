@@ -5,6 +5,7 @@
 // puesto; el usuario es libre de cambiarlo. Dejar el apiKey en blanco = conservar.
 import { useEffect, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
+import { API_BASE } from '../lib/api.js';
 
 // Presets de LLM: rellenan baseUrl/model de un click (el usuario ajusta luego).
 const LLM_PRESETS = [
@@ -97,7 +98,7 @@ function VoiceField({ value, onChange, provider }) {
 
     useEffect(() => {
         if (provider === 'elevenlabs') return;
-        fetch('/api/v1/tts/voices')
+        fetch(`${API_BASE}/api/v1/tts/voices`)
             .then((r) => r.json())
             .then((d) => setVoices(d.voices?.length ? d.voices : FALLBACK_VOICES))
             .catch(() => setVoices(FALLBACK_VOICES));
@@ -147,7 +148,7 @@ function ShortcutsSection() {
     const [status, setStatus] = useState('cargando…');
 
     useEffect(() => {
-        fetch('/api/v1/shortcuts')
+        fetch(`${API_BASE}/api/v1/shortcuts`)
             .then((r) => r.json())
             .then((d) => {
                 setSites(Object.entries(d.sites || {}));
@@ -167,7 +168,7 @@ function ShortcutsSection() {
         const toObj = (rows) => Object.fromEntries(
             rows.map(([k, v]) => [k.trim().toLowerCase(), v.trim()]).filter(([k, v]) => k && v));
         try {
-            const r = await fetch('/api/v1/shortcuts', {
+            const r = await fetch(`${API_BASE}/api/v1/shortcuts`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sites: toObj(sites), apps: toObj(apps) }),
             });
@@ -234,18 +235,18 @@ function SkillsSection() {
     const [status, setStatus] = useState('cargando…');
     const [trust, setTrust] = useState(false);       // config.skills.trustModel
 
-    const load = () => fetch('/api/v1/skills').then((r) => r.json())
+    const load = () => fetch(`${API_BASE}/api/v1/skills`).then((r) => r.json())
         .then((d) => { setSkills(d.skills || []); setStatus(''); })
         .catch(() => setStatus('backend no disponible'));
     useEffect(() => {
         load();
-        fetch('/api/v1/settings').then((r) => r.json()).then((d) => setTrust(!!d.skills?.trustModel)).catch(() => {});
+        fetch(`${API_BASE}/api/v1/settings`).then((r) => r.json()).then((d) => setTrust(!!d.skills?.trustModel)).catch(() => {});
     }, []);
 
     const toggleTrust = async (val) => {
         setTrust(val);
         try {
-            await fetch('/api/v1/settings', {
+            await fetch(`${API_BASE}/api/v1/settings`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ skills: { trustModel: val } }),
             });
@@ -257,7 +258,7 @@ function SkillsSection() {
         if (!name || !editing.content.trim()) { setStatus('faltan nombre/contenido'); return; }
         setStatus('guardando…');
         try {
-            await fetch('/api/v1/skills', {
+            await fetch(`${API_BASE}/api/v1/skills`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, content: editing.content }),
             });
@@ -266,7 +267,7 @@ function SkillsSection() {
     };
     const del = async (name) => {
         setStatus('borrando…');
-        try { await fetch(`/api/v1/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }); setStatus(''); load(); }
+        try { await fetch(`${API_BASE}/api/v1/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }); setStatus(''); load(); }
         catch { setStatus('error al borrar'); }
     };
 
@@ -339,7 +340,7 @@ export function SettingsPanel({ onClose }) {
     const [status, setStatus] = useState('cargando…');
 
     useEffect(() => {
-        fetch('/api/v1/settings')
+        fetch(`${API_BASE}/api/v1/settings`)
             .then((r) => r.json())
             .then((d) => {
                 // apiKey se deja vacío en el form; hasApiKey guía el placeholder
@@ -374,7 +375,7 @@ export function SettingsPanel({ onClose }) {
             }
         }
         try {
-            const r = await fetch('/api/v1/settings', {
+            const r = await fetch(`${API_BASE}/api/v1/settings`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
             });
             const d = await r.json();
