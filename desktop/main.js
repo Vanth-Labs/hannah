@@ -7,6 +7,7 @@ const path = require('path');
 const http = require('http');
 const fs = require('fs');
 const { execFile, spawn } = require('child_process');
+const net = require('net');
 
 // El sandbox de Chromium necesita SUID/namespaces; para una app local de confianza se apaga.
 // OJO: desde acá NO alcanza. Cuando corre este archivo, Chromium ya bifurcó el zygote, y el
@@ -44,7 +45,8 @@ const DEBUG = process.env.HANNAH_DEBUG === '1';
 const dbg = (...a) => { if (DEBUG) console.error('[dbg]', ...a); };
 let win = null;
 let desired = null;   // bounds que queremos; los WM tiling los pisan y hay que re-aplicarlos
-let settled = false;  // ¿ya terminó la colocación inicial? (antes, los resize son del WM)
+let settled = false;
+let lastGazeLog = 0;  // ¿ya terminó la colocación inicial? (antes, los resize son del WM)
 
 // Mini servidor estático para el dist (así las rutas absolutas /avatar.glb, /assets/…
 // funcionan igual que en un navegador; file:// las rompería).
@@ -84,14 +86,14 @@ function cornerOf(d) {
 }
 
 // Bounds guardados, si todavía caen dentro de algún monitor conectado (si no, null).
+// Solo LEE lo guardado. La comprobación de si sigue a la vista la hace targetRect contra los
+// monitores del compositor: acá se validaba con la geometría de Electron, que está en otro
+// espacio de coordenadas, así que descartaba posiciones buenas y aceptaba malas.
 function savedBounds() {
   try {
     const b = JSON.parse(fs.readFileSync(boundsFile(), 'utf8'));
     if (!Number.isFinite(b?.x) || !Number.isFinite(b?.y)) return null;
-    const visible = screen.getAllDisplays().some((d) =>
-      b.x + b.width > d.bounds.x && b.x < d.bounds.x + d.bounds.width
-      && b.y + b.height > d.bounds.y && b.y < d.bounds.y + d.bounds.height);
-    return visible ? { width: b.width || COMPACT.w, height: b.height || COMPACT.h, x: b.x, y: b.y } : null;
+    return { x: b.x, y: b.y, width: b.width || COMPACT.w, height: b.height || COMPACT.h };
   } catch { return null; }   // primera vez o archivo inválido
 }
 
@@ -129,10 +131,38 @@ function out(cmd, args) {
   return new Promise((res) => execFile(cmd, args, { timeout: 3000 }, (e, so) => res(e ? null : so)));
 }
 
+// Hyprland expone un socket de control. Preguntar por ahí cuesta ~0.01ms; lanzar el binario
+// `hyprctl` cuesta ~2.8ms (medido acá). Con un sondeo cada 150ms para la mirada, esa es la
+// diferencia entre un widget que no se nota y uno que quema CPU sin hacer nada.
+function hyprSocket() {
+  const rt = process.env.XDG_RUNTIME_DIR, sig = process.env.HYPRLAND_INSTANCE_SIGNATURE;
+  return rt && sig ? path.join(rt, 'hypr', sig, '.socket.sock') : null;
+}
+
+function hyprAsk(cmd) {
+  return new Promise((resolve) => {
+    const sp = hyprSocket();
+    if (!sp) return resolve(null);
+    let data = '';
+    const s = net.connect(sp);
+    const done = (v) => { s.destroy(); resolve(v); };
+    s.setTimeout(1000, () => done(null));
+    s.on('connect', () => s.write(cmd));
+    s.on('data', (d) => { data += d; });
+    s.on('end', () => done(data || null));
+    s.on('error', () => done(null));
+  });
+}
+
+// Consulta a Hyprland: socket si está, y si no el binario (que siempre funciona).
+async function hyprQuery(cmd, json = false) {
+  return (await hyprAsk(json ? `j/${cmd}` : cmd)) || out('hyprctl', json ? [cmd, '-j'] : [cmd]);
+}
+
 // `hyprctl dispatch` responde "ok" y sale 0 SIEMPRE, encuentre o no la ventana: su código de
 // salida no sirve como señal de éxito. Hay que ubicarla primero y despachar por dirección.
 async function hyprAddress() {
-  const j = await out('hyprctl', ['clients', '-j']);
+  const j = await hyprQuery('clients', true);
   try {
     return JSON.parse(j).find((c) => (c.title || '') === TITLE)?.address || null;
   } catch { return null; }
@@ -196,12 +226,19 @@ function stopStack() {
 // Por eso se le pregunta al compositor y SOLO se acepta el valor si cae dentro de un monitor.
 async function cursorPoint(mons) {
   if (process.platform === 'linux') {
-    const hypr = await out('hyprctl', ['cursorpos']);                    // "1832, 948"
+    const hypr = await hyprQuery('cursorpos');                    // "1832, 948"
     const h = hypr && hypr.match(/(-?\d+)\s*,\s*(-?\d+)/);
     if (h) { const pt = { x: +h[1], y: +h[2] }; if (monitorContaining(pt, mons)) return pt; }
     const xdo = await out('xdotool', ['getmouselocation', '--shell']);
     const mx = xdo && xdo.match(/X=(-?\d+)/), my = xdo && xdo.match(/Y=(-?\d+)/);
     if (mx && my) { const pt = { x: +mx[1], y: +my[1] }; if (monitorContaining(pt, mons)) return pt; }
+    // Último recurso: la API de Electron. En X11 NATIVO (GNOME, KDE, XFCE, Cinnamon…) es
+    // correcta; bajo XWayland puede mentir, por eso se acepta solo si cae dentro de un
+    // monitor. Sin esto, un escritorio sin hyprctl ni xdotool abría siempre en mons[0].
+    try {
+      const pt = screen.getCursorScreenPoint();
+      if (monitorContaining(pt, mons)) return pt;
+    } catch { /* la API puede fallar: se sigue sin cursor */ }
     return null;              // nada fiable: el que llama se queda en el primer monitor
   }
   try { return screen.getCursorScreenPoint(); } catch { return null; }
@@ -230,17 +267,30 @@ function monitorContaining(pt, mons) {
     && pt.y >= m.y && pt.y < m.y + m.height) || null;
 }
 
+let monsCache = null, monsAt = 0;
 async function monitorRects() {
-  const j = await out('hyprctl', ['monitors', '-j']);
+  if (monsCache && Date.now() - monsAt < 10000) return monsCache;   // cambian muy de vez en cuando
+  const j = await hyprQuery('monitors', true);
   try {
-    const ms = JSON.parse(j).map((m) => ({ x: m.x, y: m.y, width: m.width, height: m.height }));
-    if (ms.length) return ms;
+    // width/height vienen en píxeles del MODO; el layout usa tamaño lógico (dividido por la
+    // escala), y con la pantalla rotada se intercambian. Sin esto, en monitores HiDPI o
+    // verticales la esquina se calcula fuera de la pantalla.
+    const ms = JSON.parse(j).map((m) => {
+      const k = m.scale || 1;
+      const girado = [1, 3, 5, 7].includes(m.transform);
+      return {
+        x: m.x, y: m.y,
+        width: Math.round((girado ? m.height : m.width) / k),
+        height: Math.round((girado ? m.width : m.height) / k),
+      };
+    });
+    if (ms.length) { monsCache = ms; monsAt = Date.now(); return ms; }
   } catch { /* sin hyprland */ }
   return screen.getAllDisplays().map((d) => d.bounds);
 }
 
 async function actualRect() {
-  const j = await out('hyprctl', ['clients', '-j']);
+  const j = await hyprQuery('clients', true);
   try {
     const c = JSON.parse(j).find((w) => (w.title || '') === TITLE);
     if (c) return { x: c.at[0], y: c.at[1], width: c.size[0], height: c.size[1] };
@@ -324,10 +374,13 @@ function createWindow() {
   const settleWindow = async () => {
     if (settling) return;
     settling = true;
+    // Los reintentos existen porque la ventana tarda en aparecer para el compositor; fuera de
+    // Linux no hay refuerzo posible y esperar 3s solo retrasa la colocación.
+    const intentos = process.platform === 'linux' ? 6 : 1;
     let via = null;
-    for (let i = 0; i < 6 && !via; i++) {
+    for (let i = 0; i < intentos && !via; i++) {
       via = await reinforceOverlay();
-      if (!via) await new Promise((r) => setTimeout(r, 500));
+      if (!via && i < intentos - 1) await new Promise((r) => setTimeout(r, 500));
     }
     console.log(via ? `[overlay] reforzado con ${via}`
       : '[overlay] sin refuerzo externo (Electron/XWayland debería alcanzar)');
@@ -362,66 +415,99 @@ function createWindow() {
   }
 
   // Mirada global: empuja la dirección del cursor (relativa a la ventana) al renderer.
-  // OJO: acá SÍ se usa la API de Electron, a diferencia de la colocación de la ventana.
-  // La mirada es RELATIVA —dirección del cursor respecto del centro de la ventana— y ambos
-  // valores salen del mismo espacio de coordenadas, así que el desfase de XWayland se cancela
-  // y el resultado es correcto. Mezclar acá el cursor del compositor con los bounds de
-  // Electron (o al revés) es lo que la rompe.
+  // Mirada GLOBAL: tiene que seguir al cursor aunque esté LEJOS de la ventana. Para eso la API
+  // de Electron no alcanza bajo XWayland: solo devuelve una posición válida mientras el puntero
+  // está encima de la propia ventana, así que al salir de ella la mirada se congela. (Antes no
+  // se notaba porque el overlay en modo navegador ocupaba el monitor entero.)
+  // Se le pregunta al compositor y se compara contra `desired`, que está en SU mismo espacio.
+  // Fuera de Linux (o sin hyprctl) se cae a la API de Electron, que ahí sí es global.
+  let lastCursor = null;
+  const cursorPoll = setInterval(() => {
+    monitorRects()
+      .then((mons) => cursorPoint(mons))
+      .then((pt) => { if (pt) lastCursor = pt; })
+      .catch(() => {});
+  }, 150);
+
   const gaze = setInterval(() => {
     // Si el renderer se cayó, `send` tira "Render frame was disposed" 12 veces por segundo y
     // tapa la consola justo cuando hay que leerla. Se comprueba antes y se ignora el resto.
     if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-    let c;
-    try { c = screen.getCursorScreenPoint(); } catch { return; }   // sin mirada, pero sin morir
-    const b = win.getBounds();
+    let c = lastCursor, b = desired;
+    if (!c || !b) {                        // sin vía por el compositor: la de Electron
+      try { c = screen.getCursorScreenPoint(); b = win.getBounds(); } catch { return; }
+    }
     const K = 1.4, centerX = b.x + b.width / 2, eyeY = b.y + b.height * 0.32;
     const clamp = (v) => Math.max(-1, Math.min(1, v));
-    win.webContents.send('hannah:gaze', {
-      x: clamp((c.x - centerX) / (b.width * K)),
-      y: clamp((eyeY - c.y) / (b.height * K)),
-    });
+    // La escala se toma del MONITOR, no de la ventana. Dividir por los 400px del widget satura
+    // la mirada apenas el cursor se aleja un palmo (medido: 1.00 en casi toda la pantalla), y
+    // Hannah queda bizca mirando siempre al extremo. Normalizando por el monitor el barrido es
+    // suave de una punta a la otra — que es como se sentía cuando el overlay ocupaba todo.
+    const m = monsCache && monitorContaining({ x: centerX, y: b.y + b.height / 2 }, monsCache);
+    const spanW = (m ? m.width : b.width) * K, spanH = (m ? m.height : b.height) * K;
+    const g = {
+      x: clamp((c.x - centerX) / spanW),
+      y: clamp((eyeY - c.y) / spanH),
+    };
+    if (DEBUG && Date.now() - lastGazeLog > 700) {
+      lastGazeLog = Date.now();
+      dbg('mirada: cursor', `${c.x},${c.y}`, 'ventana', `${b.x},${b.y}`, '->', `${g.x.toFixed(2)},${g.y.toFixed(2)}`);
+    }
+    win.webContents.send('hannah:gaze', g);
   }, 80);
-  win.on('closed', () => { clearInterval(gaze); win = null; });
+  win.on('closed', () => { clearInterval(gaze); clearInterval(cursorPoll); win = null; });
 }
 
 // Mover/redimensionar el overlay según un spec (mismo vocabulario que el backend).
-function doMove(spec) {
-  if (!win) return;
+// Toda la geometría sale del COMPOSITOR, igual que la colocación inicial: usar
+// screen.getAllDisplays()/getBounds() acá mandaba la ventana al monitor equivocado, o fuera de
+// la pantalla, en cuanto XWayland reportaba un layout distinto al real.
+async function doMove(spec) {
+  if (!win || win.isDestroyed()) return;
   const s = String(spec || '').toLowerCase();
-  const ds = screen.getAllDisplays().map((d) => ({ id: d.id, ...d.bounds }));
-  const ordered = [...ds].sort((a, b) => a.x - b.x || a.y - b.y);
-  const cur = { id: screen.getDisplayMatching(win.getBounds()).id, ...screen.getDisplayMatching(win.getBounds()).bounds };
+  const mons = await monitorRects();
+  if (!mons.length) return;
+  const ordered = [...mons].sort((a, b) => a.x - b.x || a.y - b.y);
+  const rect = (await actualRect()) || desired || ordered[0];
+  const cur = monitorContaining({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, ordered)
+    || ordered[0];
+  const iCur = ordered.indexOf(cur);
   const corner = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'].find((c) => s.includes(c));
 
   let t = cur;
   if (!corner) {
     if (/\b(next|other|another|siguiente|otra|otro)\b/.test(s)) {
-      const i = ordered.findIndex((m) => m.id === cur.id); t = ordered[(i + 1) % ordered.length];
+      t = ordered[(iCur + 1) % ordered.length];
     } else if (/(screen|monitor|pantalla)\s*(\d)/.test(s)) {
-      const n = +s.match(/(screen|monitor|pantalla)\s*(\d)/)[2]; t = ordered[Math.min(ordered.length - 1, n - 1)] || cur;
+      const n = +s.match(/(screen|monitor|pantalla)\s*(\d)/)[2];
+      t = ordered[Math.min(ordered.length - 1, n - 1)] || cur;
     } else if (s.includes('left')) t = ordered[0];
     else if (s.includes('right')) t = ordered[ordered.length - 1];
   }
   const wantsFull = /\b(full|fill|whole|toda|completa|maxim|fullscreen)\b/.test(s)
-    || (!corner && (t.id !== cur.id || /screen|monitor|pantalla/.test(s)));
+    || (!corner && (t !== cur || /screen|monitor|pantalla/.test(s)));
 
   if (wantsFull) {
-    win.setBounds({ x: t.x, y: t.y, width: t.width, height: t.height });
-  } else {
-    const { w, h } = COMPACT, M = 40;
-    const map = {
-      'top-left': [t.x + M, t.y + M],
-      'top-right': [t.x + t.width - w - M, t.y + M],
-      'bottom-left': [t.x + M, t.y + t.height - h - M],
-      'bottom-right': [t.x + t.width - w - M, t.y + t.height - h - M],
-      'center': [Math.round(t.x + (t.width - w) / 2), Math.round(t.y + (t.height - h) / 2)],
-    };
-    const [x, y] = map[corner || 'top-right'];
-    win.setBounds({ x, y, width: w, height: h });
+    await placeAt({ x: t.x, y: t.y, width: t.width, height: t.height });
+    return;
   }
+  const { w, h } = COMPACT, M = MARGIN;
+  const map = {
+    'top-left': [t.x + M, t.y + M],
+    'top-right': [t.x + t.width - w - M, t.y + M],
+    'bottom-left': [t.x + M, t.y + t.height - h - M],
+    'bottom-right': [t.x + t.width - w - M, t.y + t.height - h - M],
+    'center': [Math.round(t.x + (t.width - w) / 2), Math.round(t.y + (t.height - h) / 2)],
+  };
+  const [x, y] = map[corner || 'top-right'];
+  await placeAt({ x, y, width: w, height: h });
 }
 
-ipcMain.handle('hannah:move', (_e, spec) => { doMove(spec); ensureOnScreen().catch(() => {}); return true; });
+ipcMain.handle('hannah:move', async (_e, spec) => {
+  await doMove(spec);
+  await ensureOnScreen();   // ni siquiera un movimiento pedido puede dejarla inalcanzable
+  return true;
+});
 ipcMain.handle('hannah:monitors', () => screen.getAllDisplays().map((d, i) => ({ index: i + 1, name: d.label || `screen ${i + 1}` })));
 
 // Instancia única: Super+H se aprieta muchas veces. La segunda vez hay que traer la ventana
@@ -457,3 +543,4 @@ if (!app.requestSingleInstanceLock()) {
 process.on('uncaughtException', (e) => console.error('[hannah] excepción no capturada:', e));
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+
