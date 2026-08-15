@@ -74,6 +74,8 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
         .replace(/[[(*]\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|RECALL|SKILL)\b\s*:?[^\])*\n]*[\])*]/gi, '')
         // Gestos/emoción/mover: con o sin corchete (el 8B a veces los omite).
         .replace(/[[(*]?\s*(MOTION|EMOTION|MOVE)\s*:[^\])*\n]*[\])*]?/gi, '')
+        // Tags inventados por el modelo, tipo [FULLSCREEN] / [DONE] (corchete + MAYÚSCULAS, sin :).
+        .replace(/[[(*]\s*[A-Z][A-Z_ -]{2,}\s*[\])*]/g, '')
         .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final
         // Quitar emojis y pictogramas (no se hablan bien y el usuario no los quiere).
         .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}️‍]/gu, '')
