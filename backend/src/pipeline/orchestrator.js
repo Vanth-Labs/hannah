@@ -77,7 +77,9 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
         .replace(/[[(*]\s*[A-Z][A-Z_ -]{2,}\s*[\])*]/g, '')
         .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final
         // Quitar emojis y pictogramas (no se hablan bien y el usuario no los quiere).
-        .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}️‍]/gu, '')
+        // Incluye los joiners (ZWJ/VS16) a propósito: si no, quedan restos de los compuestos.
+        // eslint-disable-next-line no-misleading-character-class
+        .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{FE0F}\u{200D}]/gu, '')
         .replace(/\s+/g, ' ')
         .trim();
     // Si tras limpiar no queda texto real, ignorar el fragmento

@@ -19,7 +19,7 @@ const VISEME_RULES = {
  */
 export const generateVisemesFromText = (text) => {
     const timer = startTimer();
-    const cleanText = text.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+    const cleanText = text.toLowerCase().trim().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "");
     const words = cleanText.split(/\s+/);
 
     const visemes = [];

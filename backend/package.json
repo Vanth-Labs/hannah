@@ -13,7 +13,8 @@
     "sidecar:asr": "cd sidecar/asr && ../.venv/bin/python -m uvicorn main:app --port 8001 --reload",
     "sidecar:tts": "cd sidecar/tts && ../.venv/bin/python -m uvicorn main:app --port 8002 --reload",
     "sidecar:vision": "cd sidecar/vision && ../.venv/bin/python -m uvicorn main:app --port 8003 --reload",
-    "sidecar:motion": "cd sidecar/motion && ../../../.venv/bin/python -m uvicorn main:app --port 8004"
+    "sidecar:motion": "cd sidecar/motion && ../../../.venv/bin/python -m uvicorn main:app --port 8004",
+    "lint": "eslint src tests"
   },
   "jest": {
     "testEnvironment": "node",
@@ -41,6 +42,8 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
     "jest": "^30.4.2",
     "nodemon": "^3.1.14"
   },

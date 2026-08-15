@@ -27,7 +27,7 @@ let skills = [];   // [{ name, description, action:{type,template}, confirm, phr
 //   key: value            -> string
 //   key: [a, b, "c d"]    -> array
 //   key: true|false       -> boolean
-function parseFrontmatter(raw) {
+export function parseFrontmatter(raw) {   // exportada para tests (helper puro)
   const m = String(raw).match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
   if (!m) return { meta: {}, body: String(raw).trim() };
   const meta = {};
@@ -82,7 +82,7 @@ function toSkill(raw, fallbackName, source) {
 
 function scanDir(dir, source) {
   const out = [];
-  let entries = [];
+  let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const e of entries) {
     if (!e.isDirectory()) continue;
@@ -118,12 +118,14 @@ function findSkill(name) {
 
 // Arma "usuario@host" desde lenguaje natural dictado, p.ej.
 // "192.168.1.30 con el usuario drocho" -> "drocho@192.168.1.30". Tolera relleno de la voz.
-function sshArg(raw) {
+export function sshArg(raw) {   // exportada para tests (helper puro)
   let s = ` ${String(raw || '').trim()} `;
   let user = '';
   const mu = s.match(/\s(?:con\s+(?:el\s+)?usuario|como|usuario|user|con)\s+([^\s@]+)/i);
   if (mu) { user = mu[1].replace(/[.,;]+$/, ''); s = s.replace(mu[0], ' '); }
-  s = s.replace(/\b(?:un|una|el|la|al|a|mi|de|del|the|to|por|ssh)\b/gi, ' ').trim();
+  // Palabras sueltas de relleno: se exige espacio a ambos lados para NO partir tokens con
+  // guion (antes "mi-server.local" perdía el "mi-" y quedaba "server.local").
+  s = s.replace(/(?<=\s)(?:un|una|el|la|al|a|mi|de|del|the|to|por|ssh)(?=\s)/gi, ' ').trim();
   // Si ya viene user@host, respetarlo. minúscula: la voz suele capitalizar ("DROCHO") y en
   // Linux el usuario es case-sensitive (casi siempre minúscula); hosts/IPs no se afectan.
   const at = s.match(/\S+@\S+/);

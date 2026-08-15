@@ -22,7 +22,7 @@ let docs = [];   // [{ name, content }]
 export function loadReference() {
   docs = [];
   for (const dir of DIRS) {
-    let files = [];
+    let files;
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.md')); } catch { continue; }
     for (const f of files) {
       try {

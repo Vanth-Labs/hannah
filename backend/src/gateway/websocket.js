@@ -78,7 +78,7 @@ export const initWebSocketGateway = (httpServer) => {
             let data;
             try {
                 data = JSON.parse(message.toString());
-            } catch (parseErr) {
+            } catch {
                 // Solo metadata (regla: nunca loguear contenido del usuario).
                 logger.error('JSON inválido recibido', {
                     sessionId,

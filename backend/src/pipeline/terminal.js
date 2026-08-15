@@ -54,6 +54,8 @@ export async function runCommand(sessionId, command) {
   s.pty.write(command.replace(/\n+$/, '') + '\n');
   await waitIdle(s, 15000, 700);
   sub.dispose();
+  /* eslint-disable no-control-regex -- limpiamos secuencias ANSI/OSC del pty: los
+     caracteres de control son justamente lo que hay que matchear. */
   const clean = captured
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC (títulos / shell-integration, ej. 3008)
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')            // CSI (colores/cursor)
@@ -63,6 +65,7 @@ export async function runCommand(sessionId, command) {
     .replace(/\r/g, '')
     .replace(/[^\n]*[$#%>]\s*$/, '')                     // recortar el prompt final (PS1)
     .trim();
+  /* eslint-enable no-control-regex */
   // quitar prompt + eco del comando de la primera línea (deja solo la salida real)
   const cmdFirst = command.trim().split('\n')[0];
   const lines = clean.split('\n');

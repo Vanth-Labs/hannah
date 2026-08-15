@@ -69,7 +69,7 @@ function cornerXY(m, corner, [w, h]) {
 // canónico para moveWindow(), o null. Determinista -> no depende de que el LLM acierte.
 export function parseMoveIntent(text) {
   const s = (text || '').toLowerCase();
-  const hasVerb = /\b(mu[eé]vete|mu[eé]vase|vete|ve|ponte|p[oó]nte|colócate|ub[ií]cate|ll[eé]vate|and[aá]te|p[aá]sate|regr[eé]sate|mueve|ponla|hazte|agr[aá]ndate|ach[ií]cate|minim|maxim|move|go|put yourself|move yourself|resize|make yourself|shrink|grow|switch|jump)\b/.test(s);
+  const hasVerb = /\b(mu[eé]vete|mu[eé]vase|mov[eé]te|vete|ve|ponte|p[oó]nte|pon[eé]te|pon[eé]lo|corr[eé]te|colócate|ub[ií]cate|ll[eé]vate|and[aá]te|p[aá]sate|regr[eé]sate|mueve|ponla|hazte|agr[aá]ndate|ach[ií]cate|minim|maxim|move|go|put yourself|move yourself|resize|make yourself|shrink|grow|switch|jump)\b/.test(s);
   const hasScreenNoun = /(pantalla completa|full ?screen|otra pantalla|otro monitor|siguiente pantalla|next screen|other screen|other monitor|switch screen|esquina|corner|widget|centro|center|middle|al medio|en medio|small|tiny)/.test(s);
   if (!hasVerb && !hasScreenNoun) return null;
 
