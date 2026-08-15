@@ -154,12 +154,11 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
         if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
         handleOpenIntent(asrResult.transcript, ctx);                    // "abre X" (sin resultado)
         handleCloseIntent(asrResult.transcript, ctx);                   // "cierra X" (sin resultado)
-        // Las skills con `phrases` SIEMPRE disparan (son triggers explícitos y fiables, así una
-        // pregunta como "cómo se llama la compu" corre el comando en vez de contestar de memoria).
-        // `trustModel` solo decide si además corre la capa genérica (ejecuta/busca/lee X) o la
-        // deja para el modelo.
+        // Capa DETERMINISTA siempre primero (fiable en cualquier modelo): skills con `phrases`
+        // y luego intents genéricos (ejecutá/creá/listá/busca/lee X). Así el modelo débil no
+        // "finge" que corrió algo. trustModel solo suma la vía por tags del modelo para lo abierto.
         const dataResult = (await resolveSkillPhrase(asrResult.transcript, ctx))
-            || (config.skills.trustModel ? null : await resolveDataAction(asrResult.transcript, ctx));
+            || (await resolveDataAction(asrResult.transcript, ctx));
         const turnText = dataResult
             ? `${asrResult.transcript}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
             : asrResult.transcript;
@@ -226,7 +225,7 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
         handleOpenIntent(text, ctx);
         handleCloseIntent(text, ctx);
         const dataResult = (await resolveSkillPhrase(text, ctx))
-            || (config.skills.trustModel ? null : await resolveDataAction(text, ctx));
+            || (await resolveDataAction(text, ctx));
         const turnText = dataResult
             ? `${text}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
             : text;

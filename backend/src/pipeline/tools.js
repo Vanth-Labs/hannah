@@ -227,6 +227,12 @@ export async function resolveDataAction(text, ctx) {
   const t = text || '';
   let m;
 
+  // Limpiar la terminal: "limpiá/borrá/clearea la terminal/consola/pantalla" -> evento a xterm.
+  if (/(?:^|\s)(?:limpi[aá]|borr[aá]|clear(?:e[aá])?|clean|vaci[aá])\w*\s+(?:la\s+|el\s+|mi\s+)?(?:terminal|consola|pantalla|shell)\b/i.test(t)) {
+    ctx?.send?.({ type: 'terminal_clear' });
+    return '[Limpiaste la terminal. Decilo en una frase corta.]';
+  }
+
   // ── EJECUTAR COMANDOS EN LA TERMINAL (determinista; es lo que más falla si se deja
   // al LLM). Tres capas de más a menos fiable: backticks -> frase conocida -> verbo. ──
   const runAndReport = async (raw) => {
@@ -258,6 +264,19 @@ export async function resolveDataAction(text, ctx) {
     const isUrl = /https?:\/\//i.test(t) || /\b[\w-]+\.(?:com|org|net|io|dev|gg|tv|co|app|ai)\b/i.test(t);
     const fileTok = t.match(/((?:~|\.{0,2})\/[^\s"'`]+|[^\s"'`/]+\.[A-Za-z0-9]{1,5})/);
     if (wantsRead && !isUrl && fileTok) return runAndReport(`cat ${fileTok[1]}`);
+  }
+
+  // 2) CREAR un archivo: "creá/creame [un] archivo <nombre> [con (el) contenido/texto <...>]".
+  if ((m = t.match(/(?:^|\s)(?:cre[aá]r?(?:me)?|crea)\s+(?:un\s+|el\s+|una\s+)?(?:archivo|fichero|file|nota|documento)\s+(?:llamado\s+|de\s+nombre\s+|con\s+nombre\s+)?([^\s,]+)(?:\s+con\s+(?:el\s+)?(?:contenido|texto|el\s+texto)\s+(.+))?/i))) {
+    const name = m[1].replace(/[.,;]+$/, '');
+    const content = (m[2] || '').trim().replace(/[.]+$/, '');
+    return runAndReport(content ? `printf '%s\\n' ${JSON.stringify(content)} > ${JSON.stringify(name)}` : `touch ${JSON.stringify(name)}`);
+  }
+
+  // 2.5) LISTAR la carpeta: "listá/listame/lista/ls" o "mostrá los archivos" (ruta opcional).
+  if (/(?:^|\s)(?:list[aá]\w*|ls\b)/i.test(t) || /\bmostr\w*\s+(?:los\s+)?archivos?\b/i.test(t)) {
+    const dir = t.match(/((?:~|\.{0,2})\/[^\s"'`]+)/);
+    return runAndReport(dir ? `ls -la ${dir[1]}` : 'ls -la');
   }
 
   // (Las frases comunes tipo "qué kernel", "cuánto espacio" migraron a SKILLS cross-platform
