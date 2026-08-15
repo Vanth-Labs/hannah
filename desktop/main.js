@@ -1,16 +1,31 @@
 // hannah-desktop/main.js
 // Overlay universal (Win/Mac/Linux) con Electron (Chromium). La ventana carga el frontend;
 // el OVERLAY (flotar encima, mover entre pantallas, mirada global) se hace aquí con APIs
-// cross-platform de Electron — no depende de hyprctl/xdotool. En Linux corre bajo XWayland
-// por defecto, donde el always-on-top funciona bien.
+// cross-platform de Electron — no depende de hyprctl/xdotool.
 const { app, BrowserWindow, screen, ipcMain } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
+const { execFile } = require('child_process');
 
 // El sandbox de Chromium en AppImage necesita SUID; para una app local de confianza
 // lo desactivamos así el usuario no tiene que pasar --no-sandbox.
 app.commandLine.appendSwitch('no-sandbox');
+
+// ── LINUX: forzar X11/XWayland. Esto es lo que hace que el overlay funcione IGUAL en
+// GNOME, KDE, XFCE, Cinnamon, Hyprland… ────────────────────────────────────────────────
+// En Wayland NATIVO el protocolo prohíbe por diseño que una app controle su z-order o su
+// posición global: `alwaysOnTop` queda en no-op y `setBounds`/`getCursorScreenPoint` no
+// funcionan (no se puede mover entre monitores). Bajo XWayland la ventana es X11 real y
+// los compositores respetan _NET_WM_STATE_ABOVE, así que todo anda con un solo código.
+// OJO: Electron <=33 elegía XWayland solo; desde Electron 38 el default es Wayland nativo,
+// o sea que esto DEBE quedar explícito o el overlay se rompe al actualizar.
+// Escape para experimentar: HANNAH_OZONE=wayland (se pierde flotar/mover, ver README).
+if (process.platform === 'linux') {
+  const ozone = process.env.HANNAH_OZONE || 'x11';
+  app.commandLine.appendSwitch('ozone-platform', ozone);
+  if (!process.env.ELECTRON_OZONE_PLATFORM_HINT) process.env.ELECTRON_OZONE_PLATFORM_HINT = ozone;
+}
 
 const DEV = !!process.env.HANNAH_DEV;   // cargar el Vite dev server
 const DEV_URL = 'http://localhost:5173/?overlay=1';
@@ -37,10 +52,67 @@ function serveDist(distDir) {
   return new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
 }
 
-function createWindow() {
-  win = new BrowserWindow({
+// ── Posición: recordar dónde quedó; si es la primera vez, esquina del monitor del cursor ──
+const boundsFile = () => path.join(app.getPath('userData'), 'window-bounds.json');
+const MARGIN = 40;   // mismo margen que usa el backend para las esquinas
+
+function saveBounds(b) {
+  try { fs.writeFileSync(boundsFile(), JSON.stringify(b)); } catch { /* no es crítico */ }
+}
+
+function startBounds() {
+  // 1) lo guardado, si todavía cae dentro de algún monitor conectado
+  try {
+    const b = JSON.parse(fs.readFileSync(boundsFile(), 'utf8'));
+    if (Number.isFinite(b?.x) && Number.isFinite(b?.y)) {
+      const visible = screen.getAllDisplays().some((d) =>
+        b.x + b.width > d.bounds.x && b.x < d.bounds.x + d.bounds.width
+        && b.y + b.height > d.bounds.y && b.y < d.bounds.y + d.bounds.height);
+      if (visible) return { width: b.width || COMPACT.w, height: b.height || COMPACT.h, x: b.x, y: b.y };
+    }
+  } catch { /* primera vez o archivo inválido */ }
+  // 2) esquina inferior derecha del monitor donde está el cursor
+  const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds;
+  return {
     width: COMPACT.w, height: COMPACT.h,
-    frame: false, transparent: true, resizable: true, skipTaskbar: false,
+    x: d.x + d.width - COMPACT.w - MARGIN,
+    y: d.y + d.height - COMPACT.h - MARGIN,
+  };
+}
+
+function debounce(fn, ms) {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+// ── Refuerzo del overlay por escritorio (best-effort) ──────────────────────────────────
+// Electron bajo XWayland suele bastar, pero algunos entornos necesitan que se pida por su
+// propia vía. Se intentan en orden y sin ruido: si el binario no existe, se ignora.
+function run(cmd, args) {
+  return new Promise((res) => execFile(cmd, args, { timeout: 3000 }, (e) => res(!e)));
+}
+
+async function reinforceOverlay() {
+  if (process.platform !== 'linux' || !win || win.isDestroyed()) return;
+  const de = (process.env.XDG_CURRENT_DESKTOP || '').toLowerCase();
+  const title = win.getTitle() || 'Hannah';
+  const tries = [];
+  if (de.includes('hyprland')) tries.push(['hyprctl', ['dispatch', 'pin', `title:${title}`]]);
+  if (de.includes('kde') || de.includes('plasma')) tries.push(['kdotool', ['search', '--name', title, 'windowstate', '--add', 'above']]);
+  // Genérico X11/XWayland: sirve en GNOME, XFCE, Cinnamon, MATE, i3, KDE/GNOME sobre X11.
+  tries.push(['wmctrl', ['-r', title, '-b', 'add,above,sticky,skip_taskbar,skip_pager']]);
+  for (const [cmd, args] of tries) {
+    if (await run(cmd, args)) { console.log(`[overlay] reforzado con ${cmd}`); return; }
+  }
+  console.log('[overlay] sin refuerzo externo (Electron/XWayland debería alcanzar)');
+}
+
+function createWindow() {
+  const start = startBounds();
+  win = new BrowserWindow({
+    ...start,
+    frame: false, transparent: true, resizable: true,
+    skipTaskbar: true,     // es un widget flotante, no una app de la barra de tareas
+    hasShadow: false,      // la sombra del WM delata el rectángulo de la ventana
     alwaysOnTop: true, backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -50,6 +122,13 @@ function createWindow() {
   });
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // Recordar dónde la dejó el usuario (posición y tamaño) para el próximo arranque.
+  const saveSoon = debounce(() => saveBounds(win.getBounds()), 500);
+  win.on('moved', saveSoon);
+  win.on('resize', saveSoon);
+  // Refuerzo por escritorio: si Electron no alcanzara, se pide el always-on-top por la vía
+  // nativa del entorno (wmctrl / kdotool / hyprctl). Silencioso si la herramienta no está.
+  win.once('ready-to-show', () => setTimeout(reinforceOverlay, 600));
 
   if (DEV) {
     win.loadURL(DEV_URL);
