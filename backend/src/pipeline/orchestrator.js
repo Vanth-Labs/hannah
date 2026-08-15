@@ -43,6 +43,13 @@ const collectStream = (stream) =>
  * El audio de la oración se envía como UN solo mensaje con el WAV completo:
  * el frontend decodifica con decodeAudioData, que necesita el archivo entero.
  */
+// Si el usuario dio un comando de movimiento DETERMINISTA en el turno, ignoramos el [MOVE:]
+// que el modelo pueda emitir después (revertía "pantalla completa" a una esquina compacta,
+// porque "fullscreen" no está en el vocabulario de [MOVE:]).
+const recentUserMove = new Map();   // sessionId -> timestamp
+const markUserMove = (sessionId) => recentUserMove.set(sessionId || 'default', Date.now());
+const userMovedRecently = (sessionId) => Date.now() - (recentUserMove.get(sessionId || 'default') || 0) < 15000;
+
 const processAndSendSegment = async (rawText, sendCallback, sessionId = '', signal) => {
     if (signal?.aborted) return;
     // Director de gestos: MOTION:acción marca un gesto DELIBERADO. Esa oración
@@ -53,9 +60,10 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     const motionMatch = rawText.match(/[[(*]\s*MOTION:\s*([^\])*\n]+?)\s*[\])*]/i);
     const action = motionMatch ? (motionMatch[1] || '').trim() : '';
 
-    // Director de ventana: [MOVE:posición] mueve el overlay por el escritorio/monitores.
+    // Director de ventana: [MOVE:posición] mueve el overlay. PERO si el usuario ya movió por
+    // comando determinista este turno, lo ignoramos (si no, revierte "pantalla completa").
     const moveMatch = rawText.match(/[[(*]\s*MOVE:\s*([^\])*\n]+?)\s*[\])*]/i);
-    if (moveMatch) moveWindow((moveMatch[1] || '').trim());
+    if (moveMatch && !userMovedRecently(sessionId)) moveWindow((moveMatch[1] || '').trim());
 
     // Quitar etiquetas MOTION:/EMOTION:/MOVE: con cualquier delimitador: no deben verse
     // en el subtítulo, oírse en el TTS ni condicionar el co-speech. Incluye variantes
@@ -151,7 +159,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
         const ctx = { sessionId, send: onStreamSegment };
         // Acciones DETERMINISTAS (no dependen de que el LLM acierte): mover / abrir / ejecutar / buscar.
         const moveSpec = parseMoveIntent(asrResult.transcript);
-        if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
+        if (moveSpec) { markUserMove(sessionId); moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
         handleOpenIntent(asrResult.transcript, ctx);                    // "abre X" (sin resultado)
         handleCloseIntent(asrResult.transcript, ctx);                   // "cierra X" (sin resultado)
         // Capa DETERMINISTA siempre primero (fiable en cualquier modelo): skills con `phrases`
@@ -221,7 +229,7 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
         const ctx = { sessionId, send: onStreamSegment };
         // Acciones deterministas: mover / abrir / ejecutar / buscar / leer.
         const moveSpec = parseMoveIntent(text);
-        if (moveSpec) { moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
+        if (moveSpec) { markUserMove(sessionId); moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
         handleOpenIntent(text, ctx);
         handleCloseIntent(text, ctx);
         const dataResult = (await resolveSkillPhrase(text, ctx))
