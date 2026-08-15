@@ -38,6 +38,10 @@ const COMPACT = { w: 400, h: 620 };
 // fija acá y se impide que la página lo cambie: si el <title> del frontend lo pisara, todo el
 // refuerzo del overlay dejaría de encontrarla (y fallaría en silencio).
 const TITLE = 'Hannah';
+// Traza de la colocación (HANNAH_DEBUG=1). Ubicar una ventana acá resultó tener varias capas
+// que se pisan (Electron, XWayland y el compositor), y sin verlas es puro adivinar.
+const DEBUG = process.env.HANNAH_DEBUG === '1';
+const dbg = (...a) => { if (DEBUG) console.error('[dbg]', ...a); };
 let win = null;
 let desired = null;   // bounds que queremos; los WM tiling los pisan y hay que re-aplicarlos
 let settled = false;  // ¿ya terminó la colocación inicial? (antes, los resize son del WM)
@@ -91,15 +95,18 @@ function savedBounds() {
   } catch { return null; }   // primera vez o archivo inválido
 }
 
-// Mueve el overlay a la esquina del monitor donde está el cursor.
-// SOLO es seguro llamarla con una ventana ya creada (ver la nota en createWindow).
-function moveToCursorMonitor() {
-  try {
-    desired = cornerOf(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds);
-    win.setBounds(desired);
-  } catch (e) {
-    console.error('[hannah] no se pudo ubicar según el cursor:', e.message);
-  }
+// Rectángulo donde debe quedar el overlay: lo guardado si sigue siendo visible, si no la
+// esquina del monitor donde está el cursor, y si nada de eso es fiable, el primer monitor.
+// TODO se calcula con la geometría del compositor (ver placeAt).
+async function targetRect() {
+  const mons = await monitorRects();
+  const saved = savedBounds();
+  if (saved && mons.some((m) => saved.x < m.x + m.width && saved.x + saved.width > m.x
+    && saved.y < m.y + m.height && saved.y + saved.height > m.y)) return saved;
+  const pt = await cursorPoint(mons);
+  const home = (pt && monitorContaining(pt, mons)) || mons[0];
+  dbg('objetivo: cursor', JSON.stringify(pt), 'monitor', JSON.stringify(home));
+  return home ? cornerOf(home) : null;
 }
 
 function debounce(fn, ms) {
@@ -142,13 +149,6 @@ async function reinforceOverlay() {
     if (!addr) return null;                                        // todavía no está mapeada
     await run('hyprctl', ['dispatch', 'setfloating', `address:${addr}`]);
     await run('hyprctl', ['dispatch', 'pin', `address:${addr}`]);  // pin: solo si es flotante
-    // Hyprland le asigna SU geometría de flotante, y lo hace después de responder al dispatch:
-    // si se re-aplican los bounds enseguida, los pisa igual y la ventana queda del tamaño
-    // equivocado. Por eso se espera y se re-aplica (medido: sin esto quedaba 630x1060).
-    for (const ms of [150, 400]) {
-      await new Promise((r) => setTimeout(r, ms));
-      win.setBounds(desired);
-    }
     return 'hyprctl (flotante + pin)';
   }
   if (de.includes('sway') || de.includes('i3')) {
@@ -187,6 +187,85 @@ function stopStack() {
   }
 }
 
+// ── Posición del cursor: la de Electron NO sirve en Linux ──────────────────────────────
+// `screen.getCursorScreenPoint()` bajo XWayland se CUELGA si todavía no hay ninguna ventana
+// y, con ventana, DEVUELVE BASURA: medido (210,210) y (310,310) —siempre x==y, pegado al
+// origen de la ventana recién creada— mientras el cursor real estaba en (1832,948). Con ese
+// dato la esquina se calcula sobre el monitor equivocado y la ventana termina donde caiga
+// (llegó a abrir en x=-1806, fuera de todas las pantallas).
+// Por eso se le pregunta al compositor y SOLO se acepta el valor si cae dentro de un monitor.
+async function cursorPoint(mons) {
+  if (process.platform === 'linux') {
+    const hypr = await out('hyprctl', ['cursorpos']);                    // "1832, 948"
+    const h = hypr && hypr.match(/(-?\d+)\s*,\s*(-?\d+)/);
+    if (h) { const pt = { x: +h[1], y: +h[2] }; if (monitorContaining(pt, mons)) return pt; }
+    const xdo = await out('xdotool', ['getmouselocation', '--shell']);
+    const mx = xdo && xdo.match(/X=(-?\d+)/), my = xdo && xdo.match(/Y=(-?\d+)/);
+    if (mx && my) { const pt = { x: +mx[1], y: +my[1] }; if (monitorContaining(pt, mons)) return pt; }
+    return null;              // nada fiable: el que llama se queda en el primer monitor
+  }
+  try { return screen.getCursorScreenPoint(); } catch { return null; }
+}
+
+// Coloca la ventana por la vía que DE VERDAD manda en este entorno. En Hyprland (XWayland) las
+// coordenadas de Electron no coinciden con las del compositor —medido: Electron decía (1480,420)
+// y el compositor veía (1437,1500), 1080px de diferencia en y— así que ahí se mueve con
+// hyprctl. En el resto, setBounds es lo correcto.
+async function placeAt(rect) {
+  desired = rect;
+  const addr = await hyprAddress();
+  if (!addr) { win.setBounds(rect); return; }
+  await run('hyprctl', ['dispatch', 'resizewindowpixel', `exact ${rect.width} ${rect.height},address:${addr}`]);
+  await run('hyprctl', ['dispatch', 'movewindowpixel', `exact ${rect.x} ${rect.y},address:${addr}`]);
+}
+
+// Monitores y rectángulo de la ventana SEGÚN EL COMPOSITOR (que es la verdad), con la vista
+// de Electron como respaldo.
+// ¿Qué monitor CONTIENE este punto? Se calcula acá a propósito: screen.getDisplayNearestPoint()
+// devolvió el monitor equivocado para un punto que caía de lleno dentro de otro (medido: el
+// punto (2400,1400), dentro de DP-2, le daba HDMI-A-1, y la ventana se abría en la pantalla
+// de al lado).
+function monitorContaining(pt, mons) {
+  return mons.find((m) => pt.x >= m.x && pt.x < m.x + m.width
+    && pt.y >= m.y && pt.y < m.y + m.height) || null;
+}
+
+async function monitorRects() {
+  const j = await out('hyprctl', ['monitors', '-j']);
+  try {
+    const ms = JSON.parse(j).map((m) => ({ x: m.x, y: m.y, width: m.width, height: m.height }));
+    if (ms.length) return ms;
+  } catch { /* sin hyprland */ }
+  return screen.getAllDisplays().map((d) => d.bounds);
+}
+
+async function actualRect() {
+  const j = await out('hyprctl', ['clients', '-j']);
+  try {
+    const c = JSON.parse(j).find((w) => (w.title || '') === TITLE);
+    if (c) return { x: c.at[0], y: c.at[1], width: c.size[0], height: c.size[1] };
+  } catch { /* sin hyprland */ }
+  return win && !win.isDestroyed() ? win.getBounds() : null;
+}
+
+// Red de seguridad: si la ventana quedó fuera de TODAS las pantallas, no hay forma de
+// alcanzarla con el mouse. Se comprueba contra el compositor y se reubica.
+async function ensureOnScreen() {
+  if (!win || win.isDestroyed()) return;
+  const rect = await actualRect();
+  const mons = await monitorRects();
+  if (!rect || !mons.length) return;
+  const visible = mons.some((m) => rect.x < m.x + m.width && rect.x + rect.width > m.x
+    && rect.y < m.y + m.height && rect.y + rect.height > m.y);
+  dbg('compositor ve la ventana en', JSON.stringify(rect), '| electron cree', JSON.stringify(win.getBounds()), '| visible:', visible);
+  if (visible) return;
+  const pt = await cursorPoint(mons);
+  const home = (pt && monitorContaining(pt, mons)) || mons[0];
+  const fix = cornerOf(home);
+  console.error(`[overlay] la ventana quedó fuera de pantalla (${rect.x},${rect.y}); reubicando en ${fix.x},${fix.y}`);
+  await placeAt(fix);
+}
+
 function createWindow() {
   // OJO — NO consultar el cursor acá arriba. `screen.getCursorScreenPoint()` se CUELGA (y
   // vuelca core) mientras no exista ninguna ventana: el proceso queda vivo, sin ventana y sin
@@ -195,6 +274,7 @@ function createWindow() {
   // Por eso: se abre en el monitor primario y RECIÉN DESPUÉS se mueve al monitor del cursor.
   const saved = savedBounds();
   const start = saved || cornerOf(screen.getPrimaryDisplay().bounds);
+  dbg('arranque: guardado =', JSON.stringify(saved), '| inicial =', JSON.stringify(start));
   desired = { ...start };
   win = new BrowserWindow({
     ...start,
@@ -212,16 +292,22 @@ function createWindow() {
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.on('page-title-updated', (e) => e.preventDefault());   // el título es la llave, ver TITLE
-  if (!saved) moveToCursorMonitor();   // ya hay ventana: ahora sí se puede preguntar el cursor
   // Recordar dónde la dejó el usuario (posición y tamaño) para el próximo arranque.
   // OJO con `settled`: hasta que el overlay quede colocado, los eventos de resize NO son del
   // usuario sino del WM tileando la ventana. Sin esta guarda se guardaba el tamaño impuesto
   // por el tiling como si fuera el deseado, y el refuerzo lo re-aplicaba: la ventana nunca
   // llegaba a 400x620 (medido: se quedaba en 613x1048, el tamaño del tile).
-  const saveSoon = debounce(() => {
+  const saveSoon = debounce(async () => {
     if (!settled) return;
-    desired = win.getBounds();
-    saveBounds(desired);
+    const rect = await actualRect();   // la posición del COMPOSITOR: es el espacio real
+    if (!rect) return;
+    desired = rect;
+    // "Pantalla completa" es un estado TEMPORAL (se pide por voz), no dónde vive el widget.
+    // Si se guardara, Hannah reabriría tapando un monitor entero, siempre encima y en todos
+    // los escritorios. Se recuerda la última geometría de widget, no el llenado.
+    const mons = await monitorRects();
+    if (mons.some((m) => rect.width >= m.width * 0.9 && rect.height >= m.height * 0.9)) return;
+    saveBounds(rect);
   }, 500);
   win.on('moved', saveSoon);
   win.on('resize', saveSoon);
@@ -232,20 +318,30 @@ function createWindow() {
   // NO llega, y sin refuerzo la ventana se queda tileada y del tamaño equivocado.
   // Se reintenta porque la ventana tarda en aparecer para el compositor: al primer intento
   // puede no existir todavía.
-  let reinforced = false;
-  const reinforceOnce = async () => {
-    if (reinforced) return;
-    reinforced = true;
-    for (let i = 0; i < 6; i++) {
-      const via = await reinforceOverlay();
-      if (via) { console.log(`[overlay] reforzado con ${via}`); break; }
-      await new Promise((r) => setTimeout(r, 500));
-      if (i === 5) console.log('[overlay] sin refuerzo externo (Electron/XWayland debería alcanzar)');
+  // Orden que importa: 1) flotar (si no, un WM tiling ignora el tamaño), 2) recién entonces
+  // colocar y 3) comprobar que quedó a la vista.
+  let settling = false;
+  const settleWindow = async () => {
+    if (settling) return;
+    settling = true;
+    let via = null;
+    for (let i = 0; i < 6 && !via; i++) {
+      via = await reinforceOverlay();
+      if (!via) await new Promise((r) => setTimeout(r, 500));
     }
+    console.log(via ? `[overlay] reforzado con ${via}`
+      : '[overlay] sin refuerzo externo (Electron/XWayland debería alcanzar)');
+    const target = await targetRect();
+    if (target) {
+      await placeAt(target);
+      await new Promise((r) => setTimeout(r, 250));   // el compositor aplica su propia geometría
+      await placeAt(target);                          // por eso se re-aplica una vez
+    }
+    await ensureOnScreen();   // nunca dejarla donde el mouse no la alcance
     settled = true;   // desde acá, mover/redimensionar SÍ es decisión del usuario: se guarda
   };
-  win.once('ready-to-show', () => setTimeout(reinforceOnce, 600));
-  setTimeout(reinforceOnce, 2500);
+  win.once('ready-to-show', () => setTimeout(settleWindow, 600));
+  setTimeout(settleWindow, 2500);
 
   // Si el frontend no carga, la ventana queda transparente y vacía: es indistinguible de "la
   // app no arrancó". Decir qué pasó y mostrarla igual, así el fallo se ve.
@@ -266,6 +362,11 @@ function createWindow() {
   }
 
   // Mirada global: empuja la dirección del cursor (relativa a la ventana) al renderer.
+  // OJO: acá SÍ se usa la API de Electron, a diferencia de la colocación de la ventana.
+  // La mirada es RELATIVA —dirección del cursor respecto del centro de la ventana— y ambos
+  // valores salen del mismo espacio de coordenadas, así que el desfase de XWayland se cancela
+  // y el resultado es correcto. Mezclar acá el cursor del compositor con los bounds de
+  // Electron (o al revés) es lo que la rompe.
   const gaze = setInterval(() => {
     // Si el renderer se cayó, `send` tira "Render frame was disposed" 12 veces por segundo y
     // tapa la consola justo cuando hay que leerla. Se comprueba antes y se ignora el resto.
@@ -320,7 +421,7 @@ function doMove(spec) {
   }
 }
 
-ipcMain.handle('hannah:move', (_e, spec) => { doMove(spec); return true; });
+ipcMain.handle('hannah:move', (_e, spec) => { doMove(spec); ensureOnScreen().catch(() => {}); return true; });
 ipcMain.handle('hannah:monitors', () => screen.getAllDisplays().map((d, i) => ({ index: i + 1, name: d.label || `screen ${i + 1}` })));
 
 // Instancia única: Super+H se aprieta muchas veces. La segunda vez hay que traer la ventana
