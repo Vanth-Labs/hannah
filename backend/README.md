@@ -1,928 +1,380 @@
-# Hannah — Real-Time AI Avatar · Backend (Node.js)
+# Hannah — backend
 
-> ⚠️ **Vigencia.** Este documento es el diseño ORIGINAL y detallado del backend. El proyecto
-> evolucionó bastante desde entonces, así que **partes de este README están desactualizadas**
-> (dependencias, algunos puertos y rutas, el bloque `.env`, la lista de mensajes WS, el idioma
-> del avatar, y sistemas nuevos que no figuran: skills, reference, memoria SQLite, capa
-> determinista de acciones, ESLint/tests).
->
-> **La fuente de verdad operativa es `../CLAUDE.md` (mantenido al día) y, ante cualquier duda,
-> el código.** Este archivo sigue siendo útil para entender el *porqué* de las decisiones de
-> arquitectura y los contratos originales; para *cómo correr y qué existe hoy*, usá CLAUDE.md.
+Servidor del pipeline de Hannah: recibe voz (o texto, o un frame de cámara), decide qué hacer,
+y devuelve al avatar **audio + visemas + gestos + emoción**, en streaming por oración. También
+es quien **actúa sobre la máquina**: abre y cierra ventanas, corre comandos en una terminal
+real, busca en internet.
 
-> **For AI coding agents:** read `../CLAUDE.md` first. Every module, route, technology decision, and constraint described here was intentional; check it against the code before relying on it.
+Node.js (ESM) + Express + `ws`, con **sidecars Python** para el trabajo de GPU (Whisper, Kokoro,
+YOLO/VLM, EMAGE). Todo el stack por defecto corre **local**: Ollama para el LLM y los
+embeddings, y los sidecars en localhost.
 
----
-
-## Table of Contents
-
-0. [Quick Start](#0-quick-start)
-1. [Project Overview](#1-project-overview)
-2. [System Architecture](#2-system-architecture)
-3. [Repository Structure](#3-repository-structure)
-4. [Technology Stack](#4-technology-stack)
-5. [Module Specifications](#5-module-specifications)
-   - 5.1 [ASR — Speech Recognition](#51-asr--speech-recognition)
-   - 5.2 [LLM — Dialogue & Intent](#52-llm--dialogue--intent)
-   - 5.3 [TTS — Voice Synthesis](#53-tts--voice-synthesis)
-   - 5.4 [Lip-Sync Data Generation](#54-lip-sync-data-generation)
-   - 5.5 [WebSocket Gateway](#55-websocket-gateway)
-   - 5.6 [REST API](#56-rest-api)
-   - 5.7 [State Manager](#57-state-manager)
-   - 5.8 [Privacy & Security Layer](#58-privacy--security-layer)
-6. [Data Flow](#6-data-flow)
-7. [Latency Targets](#7-latency-targets)
-8. [Environment Variables](#8-environment-variables)
-9. [API Reference](#9-api-reference)
-10. [MVP Scopes](#10-mvp-scopes)
-11. [Roadmap & Phases](#11-roadmap--phases)
-12. [Development Rules for Agents](#12-development-rules-for-agents)
-13. [Repository Setup Instructions](#13-repository-setup-instructions)
+> Este documento describe el backend **tal como está**. Para el mapa del workspace completo
+> (frontend, app de escritorio, motion-lab, launcher) mirá `../CLAUDE.md`; para levantar todo en
+> una máquina nueva, `../SETUP.md`.
 
 ---
 
-## 0. Quick Start
-
-If you have cloned this repository, follow these steps to get the backend running:
-
-1.  **Install Dependencies**:
-    ```bash
-    npm install
-    ```
-2.  **Configure Environment**:
-    ```bash
-    cp .env.example .env
-    ```
-    The default `.env.example` targets a **fully local stack** (Ollama LLM + local sidecars). For cloud providers, set `ASR_PROVIDER=cloud` + `OPENAI_API_KEY`, and point `LLM_BASE_URL`/`LLM_API_KEY` at Groq.
-3.  **Start the Python sidecars** (each in its own terminal; venv lives at `sidecar/.venv`):
-    ```bash
-    npm run sidecar:asr      # faster-whisper on :8001 (only if ASR_PROVIDER=local)
-    npm run sidecar:tts      # Kokoro TTS on :8002 (required for voice output)
-    npm run sidecar:vision   # YOLOv8 on :8003 (only for camera vision)
-    npm run sidecar:motion   # EMAGE gestures on :8004 (venv at <workspace>/.venv; needs ~/PantoMatrix)
-    ```
-4.  **Start Development Server**:
-    ```bash
-    npm run dev
-    ```
-    The server will be live at `http://localhost:3001`.
-5.  **Run tests**:
-    ```bash
-    npm test
-    ```
-
----
-
-## 1. Project Overview
-
-**Hannah** is a real-time interactive AI avatar system. The backend is a Node.js server that acts as the central pipeline coordinator between:
-
-- A browser/app client (frontend — separate repo)
-- External AI services (Whisper ASR, Claude/GPT LLM, ElevenLabs/Coqui TTS)
-- A Python sidecar process (for ML tasks Node.js cannot handle natively)
-
-**What the backend does:**
-
-- Receives raw audio chunks from the client via WebSocket
-- Streams audio to ASR → gets transcript text
-- Sends transcript to LLM → gets response text
-- Sends response text to TTS → gets synthesized audio
-- Extracts viseme/phoneme data from the TTS output for lip-sync
-- Sends synthesized audio + lip-sync data + emotion tags back to the client in real time
-- Manages conversation state (multi-turn context)
-- Enforces privacy rules (no raw audio/video stored)
-
-**What the backend does NOT do:**
-
-- Render any 3D/2D graphics (that is the frontend's job)
-- Run MediaPipe face tracking (runs in the browser)
-- Store permanent user data without explicit consent
-
----
-
-## 2. System Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        CLIENT (Browser/App)                  │
-│  Microphone → WebAudio → WebSocket client                    │
-│  Three.js avatar ← audio + visemes + emotion ← WebSocket     │
-└─────────────────────────┬───────────────────────────────────┘
-                          │  WebSocket (binary audio chunks + JSON)
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   NODE.JS BACKEND SERVER                      │
-│                                                               │
-│  ┌─────────────┐   ┌──────────────┐   ┌──────────────────┐  │
-│  │  WebSocket  │   │  REST API    │   │  State Manager   │  │
-│  │  Gateway    │   │  (Express)   │   │  (conversation   │  │
-│  │  (Port 3001)│   │              │   │   context/turns) │  │
-│  └──────┬──────┘   └──────────────┘   └──────────────────┘  │
-│         │                                                      │
-│         ▼                                                      │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │                    PIPELINE ORCHESTRATOR                  │ │
-│  │                                                           │ │
-│  │  [1] ASR Module → [2] LLM Module → [3] TTS Module        │ │
-│  │        ↓                                  ↓               │ │
-│  │  transcript text              audio buffer + visemes       │ │
-│  └──────┬────────────────────────────────────┬─────────────┘ │
-│         │                                    │                 │
-│         ▼                ▼               ▼             ▼       │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────┐ │
-│  │ Whisper    │  │ YOLO       │  │ Kokoro     │  │ EMAGE    │ │
-│  │ ASR (8001) │  │ Vis (8003) │  │ TTS (8002) │  │ Mo (8004)│ │
-│  └────────────┘  └────────────┘  └────────────┘  └──────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                          │  External HTTPS calls
-          ┌───────────────┼────────────────────┐
-          ▼               ▼                    ▼
-   OpenAI Whisper   Groq LLaMA 3.1       ElevenLabs TTS
-   (ASR Cloud)      (LLM Cloud)          (Fallback Cloud)
-```
-
-### Streaming Strategy
-
-All pipeline stages stream output — do NOT wait for a full response before passing to the next stage:
-
-```
-Audio chunks → ASR partial transcript → LLM token stream → TTS audio chunks → Client
-```
-
-This is mandatory to achieve the <500ms latency target.
-
----
-
-## 3. Repository Structure
-
-```
-hannah-backend/
-│
-├── src/
-│   ├── server.js                  # Entry point — starts HTTP + WS server
-│   ├── config.js                  # Loads and validates env vars
-│   │
-│   ├── gateway/
-│   │   └── websocket.js           # WebSocket connection handler
-│   │
-│   ├── pipeline/
-│   │   ├── orchestrator.js        # Coordinates ASR → LLM → TTS flow (voice + text turns)
-│   │   ├── asr.js                 # ASR module (Whisper cloud or local sidecar)
-│   │   ├── llm.js                 # LLM module (OpenAI-compatible: Groq / Ollama)
-│   │   ├── tts.js                 # TTS module (Kokoro sidecar / ElevenLabs fallback)
-│   │   ├── lipsync.js             # Viseme extraction (Phonetic heuristic mapping)
-│   │   ├── vision.js              # YOLO sidecar client (analyze-scene)
-│   │   └── visionLoop.js          # Per-session camera frame loop (4s cadence)
-│   │
-│   ├── state/
-│   │   └── conversationManager.js # Multi-turn context, session store
-│   │
-│   ├── api/
-│   │   ├── router.js              # Express router — mounts all routes
-│   │   ├── health.js              # GET /health
-│   │   └── sessions.js            # POST /session, DELETE /session/:id
-│   │
-│   ├── privacy/                   # (Planned) Sanitizer and privacy filters
-│   │
-│   └── utils/
-│       ├── logger.js              # Structured logging
-│       └── timer.js               # Latency measurement per pipeline stage
-│
-├── sidecar/                       # Python FastAPI sidecars (venv at sidecar/.venv)
-│   ├── asr/main.py                # faster-whisper — port 8001 (npm run sidecar:asr)
-│   ├── tts/main.py                # Kokoro ONNX — port 8002 (npm run sidecar:tts)
-│   ├── vision/main.py             # YOLOv8 — port 8003 (npm run sidecar:vision)
-│   ├── motion/                    # EMAGE gestures — port 8004 (npm run sidecar:motion)
-│   │   ├── main.py                #   venv aparte en <workspace>/.venv (uv, py3.12, torch cu128)
-│   │   ├── build_avatar.py        #   one-time: SMPL-X GLB texturizado para el frontend
-│   │   └── requirements.txt
-│   └── requirements.txt
-│
-├── tests/
-│   └── unit/                      # jest (ESM) — lipsync, llm parsing, conversationManager
-│
-├── .env.example                   # Template for all required env vars
-├── .env                           # Local secrets — NEVER commit this
-├── .gitignore
-├── package.json
-├── package-lock.json
-└── README.md                      # This file
-```
-
----
-
-## 4. Technology Stack
-
-### Core Runtime
-
-| Layer           | Technology   | Version  | Why                                            |
-| --------------- | ------------ | -------- | ---------------------------------------------- |
-| Runtime         | Node.js      | ≥ 20 LTS | Long-term support, native fetch, async streams |
-| HTTP server     | Express      | 4.x      | Minimal, well-supported                        |
-| WebSocket       | `ws` library | 8.x      | Low-level, performant, works with raw binary   |
-| Process manager | PM2          | Latest   | Restart on crash, cluster mode                 |
-
-### AI Services
-
-| Module | Primary (Cloud)                             | Fallback (Local/Sidecar)          | Why                                                        |
-| ------ | ------------------------------------------- | --------------------------------- | ---------------------------------------------------------- |
-| ASR    | OpenAI Whisper API                          | faster-whisper via Python sidecar | Whisper best multilingual accuracy; local for offline/cost |
-| LLM    | Groq (LLaMA 3.1 8B)                         | —                                 | Ultra-low latency inference; essential for <500ms target   |
-| TTS    | Kokoro TTS (Port 8002)                      | ElevenLabs (Cloud Fallback)       | Kokoro best speed/quality balance; local execution         |
-| Vision | YOLO v8 (Port 8001)                         | —                                 | Real-time scene analysis and object detection              |
-
-### Supporting Libraries
-
-```json
-{
-  "dependencies": {
-    "express": "^4.18.0",
-    "ws": "^8.16.0",
-    "dotenv": "^16.0.0",
-    "@anthropic-ai/sdk": "^0.24.0",
-    "openai": "^4.47.0",
-    "axios": "^1.6.0",
-    "uuid": "^9.0.0",
-    "winston": "^3.13.0",
-    "cors": "^2.8.5",
-    "helmet": "^7.1.0",
-    "express-rate-limit": "^7.3.0"
-  },
-  "devDependencies": {
-    "jest": "^29.0.0",
-    "nodemon": "^3.1.0",
-    "supertest": "^7.0.0"
-  }
-}
-```
-
-### Python Sidecar Dependencies (`sidecar/requirements.txt`)
-
-```
-fastapi==0.111.0
-uvicorn==0.30.0
-faster-whisper==1.0.1
-TTS==0.22.0
-python-multipart==0.0.9
-numpy==1.26.4
-```
-
----
-
-## 5. Module Specifications
-
-### 5.1 ASR — Speech Recognition
-
-**File:** `src/pipeline/asr.js`
-
-**Responsibility:** Convert raw audio (PCM/WAV/WebM chunks) to text transcript.
-
-**Primary path (cloud):** OpenAI Whisper API
-
-- Endpoint: `https://api.openai.com/v1/audio/transcriptions`
-- Model: `whisper-1`
-- Language: auto-detect (supports Spanish — primary language of this project)
-- Input: audio buffer (WAV, WebM, MP3 — max 25MB per request)
-
-**Fallback path (local):** Python sidecar at `http://localhost:8001/asr`
-
-- Model: `faster-whisper` with `small` model on CPU, `medium` on GPU
-- Triggered when: `ASR_PROVIDER=local` in env, or cloud call fails
-
-**Streaming behavior:**
-
-- Client sends audio in chunks via WebSocket
-- Chunks are buffered until a silence threshold is detected (VAD)
-- Then the buffer is sent to ASR as one segment
-- Partial transcripts are NOT streamed from Whisper (it returns full segment)
-
-**Output contract:**
-
-```js
-{
-  transcript: "string",       // recognized text
-  language: "es",             // detected language code
-  confidence: 0.97,           // float 0–1 (if available)
-  duration_ms: 240            // time spent in ASR
-}
-```
-
-**Error handling:** On timeout (>3s) or API error, send `{ error: "asr_failed" }` to client and skip this turn.
-
----
-
-### 5.2 LLM — Dialogue & Intent
-
-**File:** `src/pipeline/llm.js`
-
-**Responsibility:** Receive transcript text + conversation history → return response text + optional emotion tag.
-
-**Primary:** Groq (`llama-3.1-8b-instant`) via OpenAI-compatible SDK.
-
-**System prompt:** `llm.persona` (editable) + `llm.protocol` (fijo: tags de emoción/gestos/acciones) en `src/config.js`. HOY el protocolo fuerza INGLÉS. Diseño original:
-
-```
-You are Hannah, a helpful and expressive AI avatar.
-Respond conversationally and concisely (1–3 sentences).
-Respond in the same language the user speaks.
-At the end of each response, append an emotion tag on a new line in the format:
-[EMOTION:neutral|happy|surprised|thinking|sad]
-```
-
-**Streaming:** YES — stream tokens as they arrive and pipe directly to TTS module. Do not wait for full response.
-
-**Context window management:**
-
-- Keep last N turns (default: `CONTEXT_TURNS=10` from env)
-- Managed by `conversationManager.js`
-- On session start, inject system prompt as first message
-
-**Output contract:**
-
-```js
-{
-  text: "string",             // response text (without emotion tag)
-  emotion: "happy",           // parsed from [EMOTION:...] tag
-  tokens_used: 142,           // for monitoring
-  duration_ms: 380
-}
-```
-
----
-
-### 5.3 TTS — Voice Synthesis
-
-**File:** `src/pipeline/tts.js`
-
-**Responsibility:** Convert response text → synthesized speech audio buffer.
-
-**Primary:** Kokoro TTS via Python sidecar at `TTS_SIDECAR_URL` (default `http://127.0.0.1:8002`)
-
-- Endpoint: `POST /v1/audio/speech`
-- Output format: `wav`, 24000 Hz
-- Voice ID: configurable via `ELEVENLABS_VOICE_ID` (legacy env var name; default `af_bella`)
-
-**Fallback:** ElevenLabs cloud (`TTS_PROVIDER` other than `kokoro`, requires `ELEVENLABS_API_KEY`)
-
-Each sentence's audio is accumulated into a complete WAV before being sent to the client as one `audio_chunk` message — the browser decodes with `decodeAudioData`, which needs the whole file.
-
-**Output contract:**
-
-```js
-{
-  audioBuffer: Buffer,        // raw audio bytes (mp3 or wav)
-  format: "wav",              // or "mp3"
-  duration_ms: 1200,          // estimated audio duration
-  sample_rate: 24000,         // Kokoro typical sample rate
-  tts_latency_ms: 150         // time to first byte
-}
-```
-
----
-
-### 5.4 Lip-Sync Data Generation
-
-**File:** `src/pipeline/lipsync.js`
-
-**Responsibility:** Generate viseme timing data synchronized with TTS audio, to drive avatar mouth animation on the frontend.
-
-**Approach (two options, configurable):**
-
-**Option A — Text-based viseme mapping (default, fast):**
-
-- Parse response text into phonemes using a phoneme library (`phoneme` npm package or custom rules)
-- Map phonemes → ARKit viseme names (standardized set of 15 blendshape targets)
-- Estimate timing based on TTS audio duration and syllable count
-- Cheap and fast (<5ms); acceptable quality for MVP
-
-**Option B — Audio-based viseme extraction (higher quality):**
-
-- Analyze TTS audio buffer with `Web Audio API`-equivalent processing
-- Extract energy/frequency per time window (10ms frames)
-- Map frequency bands → viseme weights
-- Higher realism; adds ~50ms processing time
-
-**ARKit Viseme targets used:**
-
-```
-sil, PP, FF, TH, DD, kk, CH, SS, nn, RR, aa, E, I, O, U
-```
-
-**Output contract:**
-
-```js
-{
-  visemes: [
-    { time_ms: 0,   viseme: "sil", weight: 0.0 },
-    { time_ms: 80,  viseme: "aa",  weight: 0.9 },
-    { time_ms: 160, viseme: "PP",  weight: 0.7 },
-    // ...
-  ],
-  duration_ms: 1200
-}
-```
-
-This array is sent to the frontend alongside the audio buffer so the avatar can animate in sync.
-
----
-
-### 5.5 WebSocket Gateway
-
-**File:** `src/gateway/websocket.js`
-
-**Responsibility:** Manage real-time bidirectional communication with the client.
-
-**Connection flow:**
-
-1. Client connects to `ws://host/ws?sessionId=<uuid>`
-2. Server validates session via `ConversationManager`.
-3. Client streams raw audio chunks as binary WebSocket frames.
-4. Server emits JSON messages back to the client.
-
-**Incoming message types (client → server):**
-
-| Type         | Payload           | Description                                      |
-| ------------ | ----------------- | ------------------------------------------------ |
-| `binary`     | raw audio bytes   | Audio chunk from microphone (PCM/WAV)            |
-| `JSON`       | `{ command: "SPEECH_START" }` | Resets buffers for a new utterance. |
-| `JSON`       | `{ command: "SPEECH_END" }`   | Triggers the pipeline processing.   |
-
-**Outgoing message types (server → client):**
-
-```js
-// Transcript acknowledgment (ASR result)
-{ type: "user_transcript", text: "Hola, ¿cómo estás?" }
-
-// Audio Segment (Sent per sentence as they are generated)
-{ 
-  type: "audio_chunk", 
-  text: "Hola, soy Hannah.", 
-  visemes: [ { time_ms, viseme, weight }, ... ],
-  audioBase64: "..." // Base64 encoded MP3/WAV chunk
-}
-
-// Turn completion
-{ 
-  type: "turn_complete", 
-  emotion: "happy", 
-  metrics: { llm_ms: 450 } 
-}
-
-// Error
-{ type: "error", message: "Error interno de procesamiento" }
-```
-
-**Concurrency:** Each WebSocket connection is independent. Sessions are tied to the `sessionId` query parameter.
-
----
-
-### 5.6 REST API
-
-**File:** `src/api/router.js`
-
-**Base URL:** `http://host:PORT/api/v1`
-
-| Method   | Path           | Description                                                        |
-| -------- | -------------- | ------------------------------------------------------------------ |
-| `GET`    | `/health`      | Server health + dependency status                                  |
-| `POST`   | `/session`     | Create new session, returns `sessionId` and TTL                    |
-| `DELETE` | `/session/:id` | End session, purge from memory                                     |
-| `POST`   | `/text`        | HTTP fallback — send text, get full response envelope (validation) |
-
----
-
-### 5.7 State Manager
-
-**File:** `src/state/conversationManager.js`
-
-**Responsibility:** Maintain per-session conversation history and metadata.
-
-**Rules:**
-- Sessions expire after `SESSION_TTL_MINUTES`.
-- Automatic garbage collection runs every 5 minutes.
-- Strictly maintains `CONTEXT_TURNS` window (default 10).
-- Data is kept in RAM using a `Map`.
-
----
-
-### 5.8 Privacy & Security Layer
-
-**Rules (mandatory):**
-1. **No raw audio stored.** Audio is processed in memory and buffers are cleared immediately after `SPEECH_END` processing.
-2. **No video processed server-side.**
-3. **Logs contain no PII.** Transcripts and responses are never logged.
-4. **GDPR/CCPA Compliance.** API consumers must obtain consent before creating a session.
-
----
-
-## 6. Data Flow
-
-Complete end-to-end flow for one conversational turn:
-
-```
-[1] Client sends { command: "SPEECH_START" }
-[2] Client streams binary audio chunks via WebSocket
-[3] Client sends { command: "SPEECH_END" }
-[4] Server ASR (Whisper) transcribes full buffer
-[5] Server emits { type: "user_transcript", text }
-[6] Server LLM (Groq) generates response text (buffered per sentence)
-[7] For each sentence:
-    a. TTS (Kokoro) synthesizes audio chunk
-    b. LipSync generates viseme timeline
-    c. Server emits { type: "audio_chunk", text, visemes, audioBase64 }
-[8] Server emits { type: "turn_complete", emotion }
-```
-
-Target total latency (step 3 to first step 7c): **< 500ms**.
-
----
-
-## 7. Latency Targets
-
-Based on the MascotBot benchmark (7-stage pipeline achieving ~340ms P50):
-
-| Stage                                | Budget      | Notes                  |
-| ------------------------------------ | ----------- | ---------------------- |
-| Audio capture + send                 | ~50ms       | Client-side            |
-| ASR (Whisper API)                    | ~150ms      | Cloud; local is slower |
-| LLM (Groq, time to first token)      | ~100ms      | Streaming helps        |
-| TTS (Kokoro, time to first byte)     | ~100ms      | Streaming endpoint     |
-| Viseme generation                    | <10ms       | Text-based method      |
-| **Total end-to-end (P50 target)**    | **< 400ms** |                        |
-
-**Mandatory:** measure and log latency for every stage, every turn, using `src/utils/timer.js`. Alert (log warning) if any stage exceeds its budget by 2×.
-
----
-
-## 8. Environment Variables
-
-Copy `.env.example` to `.env`. Never commit `.env`.
-
-```bash
-# Server
-PORT=3001
-HOST=127.0.0.1        # el backend NO escucha en 0.0.0.0; la LAN entra por Vite :5173
-NODE_ENV=development
-LOG_LEVEL=info
-
-# ASR (Whisper) — cloud (OpenAI) o local (sidecar :8001)
-ASR_PROVIDER=local
-WHISPER_MODEL=small
-# OPENAI_API_KEY=sk-...           # solo con ASR_PROVIDER=cloud
-ASR_SIDECAR_URL=http://127.0.0.1:8001
-
-# LLM — cualquier endpoint OpenAI-compatible (Groq, Ollama, OpenRouter)
-LLM_PROVIDER=openai-compatible
-LLM_API_KEY=ollama                # Groq: gsk_...
-LLM_BASE_URL=http://localhost:11434/v1   # Groq: https://api.groq.com/openai/v1
-LLM_MODEL=llama3.1:8b             # Groq: llama-3.1-8b-instant
-CONTEXT_TURNS=10
-
-# TTS (Kokoro, sidecar :8002)
-TTS_PROVIDER=kokoro
-TTS_SIDECAR_URL=http://127.0.0.1:8002
-ELEVENLABS_VOICE_ID=af_bella # Kokoro uses this variable for voice ID
-
-# Vision (YOLO, sidecar :8003)
-VISION_SIDECAR_URL=http://127.0.0.1:8003
-
-# Motion (dos providers con URLs propias; ver .env.example)
-MOTION_PROVIDER=lab
-MOTION_LAB_URL=http://127.0.0.1:8005
-MOTION_EMAGE_URL=http://127.0.0.1:8004
-MOTION_ENABLED=true
-# PANTOMATRIX_DIR=~/PantoMatrix   # repo con los pesos (por defecto ~/PantoMatrix)
-
-# Session
-SESSION_TTL_MINUTES=30
-
-# Security — lista separada por comas (Vite dev server usa https)
-CORS_ORIGIN=https://localhost:5173,http://localhost:5173
-```
-
-**Canonical sidecar port map: ASR 8001 · TTS 8002 · Vision 8003 · Motion-lab 8005 (default) · EMAGE 8004 (fallback)** (matches the `sidecar:*` npm scripts).
-
-### Motion sidecar (EMAGE) — notes
-
-- Venv separado en la **raíz del workspace** (`Hannah-Motion/.venv`, creado con `uv`, Python 3.12): la GPU (RTX 50xx / Blackwell) exige torch ≥ 2.7 con wheels **cu128**, incompatible con el stack py3.9/torch2.0 que fija el repo PantoMatrix.
-- Pesos y modelo SMPL-X se cargan **offline** desde `~/PantoMatrix` (`PANTOMATRIX_DIR`).
-- Salida por oración: `poses (T×165 axis-angle, 55 joints SMPL-X, 30fps)` + `trans (T×3)`, adjunta como campo `motion` del mensaje `audio_chunk`.
-- El avatar del frontend (`hannah-frontend/public/smplx_avatar.glb`) se genera con `build_avatar.py`: esqueleto = joints SMPL-X con rotación de reposo identidad → el axis-angle de EMAGE se aplica 1:1, **sin retargeting**. Textura albedo oficial del addon de Blender de SMPL-X.
-- ⚠️ Licencia del modelo SMPL-X (MPI): **uso no comercial / investigación**.
-
----
-
-## 9. API Reference
-
-### WebSocket: `ws://localhost:3001/ws`
-
-Query params: `?sessionId=<uuid>` (get from `POST /api/v1/session` first)
-
-### `GET /api/v1/health`
-
-```json
-{
-  "status": "ok",
-  "version": "0.1.0",
-  "services": {
-    "asr": "cloud",
-    "llm": "groq",
-    "tts": "kokoro",
-    "sidecar": "disabled"
-  },
-  "uptime_s": 3421
-}
-```
-
-### `POST /api/v1/session`
-
-Request: `{}` (empty body for now)
-
-Response:
-
-```json
-{
-  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
-  "expiresIn": 1800
-}
-```
-
-### `POST /api/v1/text` (HTTP fallback, non-streaming)
-
-Request:
-
-```json
-{
-  "sessionId": "...",
-  "text": "Hola, ¿cómo te llamas?"
-}
-```
-
-Response:
-
-```json
-{
-  "transcript": "Hola, ¿cómo te llamas?",
-  "response": "Me llamo Hannah. ¿En qué puedo ayudarte?",
-  "emotion": "happy",
-  "audioBase64": "...",
-  "audioFormat": "mp3",
-  "visemes": [ ... ],
-  "latency": {
-    "llm_ms": 380,
-    "tts_ms": 290,
-    "total_ms": 710
-  }
-}
-```
-
----
-
-## 10. MVP Scopes
-
-### MVP Básico (Target: ~3 months from start)
-
-- [x] WebSocket gateway running
-- [x] Audio chunk buffering with end-of-utterance detection
-- [x] ASR via Whisper cloud
-- [x] LLM via Claude with multi-turn context
-- [x] TTS via ElevenLabs streaming
-- [x] Text-based viseme generation
-- [x] Session management (in-memory)
-- [x] Emotion tags parsed and emitted
-- [ ] Python sidecar (not needed for MVP básico)
-- [ ] Face tracking integration (frontend only)
-
-**Success criteria:** Full voice conversation with <1s latency, lip-sync data delivered, runs on PC with standard internet connection.
-
-### MVP Avanzado (Target: +4–6 months)
-
-- [x] Python sidecar for offline ASR + TTS (no external API dependency)
-- [ ] Audio-based viseme extraction (Option B in lipsync.js)
-- [x] **Co-speech body gesture generation via PantoMatrix/EMAGE** — motion sidecar (:8004) turns each sentence's TTS audio into SMPL-X gestures, rendered on the native SMPL-X avatar (HUD toggle)
-- [ ] EMAGE → VRM/GLB retargeting (drive avatar.glb / a .vrm with SMPL-X motion; hard: rest-pose + bone-frame conversion)
-- [ ] EMAGE facial expressions (100-d FLAME coeffs currently unused; only the jaw bone moves)
-- [ ] Cross-sentence gesture continuity (feed previous window tail as masked_motion to EmageAudioModel.inference)
-- [ ] Body gesture intent tags added to LLM output
-- [ ] Avatar facial expression mapping (sad/happy/surprised)
-- [ ] MediaPipe face mirroring data accepted from client and forwarded to avatar
-- [ ] Persistent session storage (Redis or SQLite for context across reconnects)
-- [ ] Rate limiting per session
-- [ ] Admin dashboard endpoint for metrics
-
----
-
-## 11. Roadmap & Phases
-
-| Phase                     | Dates        | Backend Goal                                                                                |
-| ------------------------- | ------------ | ------------------------------------------------------------------------------------------- |
-| **1 — Research & Design** | Jun–Aug 2026 | Finalize this architecture, set up repo, validate all API keys work                         |
-| **2 — Prototypes**        | Sep–Dec 2026 | Working pipeline: Whisper → Groq → Kokoro, WS gateway live, latency baseline measured        |
-| **3 — Unity Integration** | Jan–Mar 2027 | Backend stable; provide viseme + emotion data consumed by Unity frontend                    |
-| **4 — Iteration**         | Apr–Jun 2027 | Optimize streaming, reduce latency, add sidecar for offline mode                            |
-| **5 — MVP Launch**        | Jul–Aug 2027 | Deploy to production, monitor metrics, gather user feedback                                 |
-
----
-
-## 12. Development Rules for Agents
-
-> These rules apply to every coding agent working on this codebase. Follow them without exception.
-
-1. **Never store audio buffers to disk.** They exist in memory only, for the duration of one pipeline turn.
-2. **Never log user content.** Log timing, errors, and metadata only. No transcripts, no LLM responses in logs.
-3. **Always stream.** Every module that supports streaming must stream. Do not accumulate full responses before forwarding.
-4. **One pipeline per WebSocket connection.** Do not share pipeline state between users/sessions.
-5. **Measure latency for every stage.** Use `src/utils/timer.js`. Add timing to every module's output contract.
-6. **English-language code, Spanish-language avatar.** Variable names, comments, and docs are in English. The LLM system prompt and avatar persona are in Spanish.
-7. **LLM model comes from env (`LLM_MODEL`).** Default is `llama-3.1-8b-instant` (Groq); local dev uses Ollama (`llama3.1:8b`). Never hardcode model strings outside `src/config.js`.
-8. **Fail gracefully.** If ASR fails, tell the client with `{ type: "error", code: "asr_failed" }` and do not proceed to LLM. Never let an unhandled exception crash the server.
-9. **Environment variables for all secrets and configuration.** No hardcoded API keys, URLs, or model names outside of `src/config.js`.
-10. **All new routes must be registered in `src/api/router.js`.** Never add routes directly in `server.js`.
-11. **Tests are required for every pipeline module.** Add unit tests to `tests/unit/` before marking any module complete.
-12. **The Python sidecar is optional and disabled by default.** All code paths must work without it (`SIDECAR_ENABLED=false`).
-
----
-
-## 13. Repository Setup Instructions
-
-Follow these steps exactly to initialize the project from scratch.
-
-### Prerequisites
-
-```bash
-node --version   # must be >= 20
-npm --version    # must be >= 10
-python --version # must be >= 3.10 (for sidecar, optional)
-git --version
-```
-
-### Step 1 — Initialize the repository
-
-```bash
-mkdir hannah-backend
-cd hannah-backend
-git init
-npm init -y
-```
-
-### Step 2 — Install dependencies
-
-```bash
-# Production dependencies
-npm install express ws dotenv openai axios uuid winston cors helmet express-rate-limit
-
-# Dev dependencies
-npm install --save-dev jest nodemon supertest
-```
-
-### Step 3 — Set up the folder structure
-
-```bash
-mkdir -p src/gateway src/pipeline src/state src/api src/privacy src/utils
-mkdir -p sidecar
-mkdir -p tests/unit tests/integration
-mkdir -p scripts
-```
-
-### Step 4 — Create the .gitignore
-
-```bash
-cat > .gitignore << 'EOF'
-node_modules/
-.env
-*.log
-dist/
-coverage/
-sidecar/__pycache__/
-sidecar/.venv/
-*.wav
-*.mp3
-EOF
-```
-
-### Step 5 — Create the .env.example file
-
-```bash
-cat > .env.example << 'EOF'
-PORT=3001
-NODE_ENV=development
-LOG_LEVEL=info
-
-# 1. Speech to Text (Whisper)
-ASR_PROVIDER=cloud
-OPENAI_API_KEY=sk-...
-WHISPER_MODEL=whisper-1
-
-# 2. Dialogue Brain (Groq LLaMA 3)
-LLM_PROVIDER=openai-compatible
-LLM_API_KEY=gsk_...
-LLM_BASE_URL=https://api.groq.com/openai/v1
-LLM_MODEL=llama-3.1-8b-instant
-CONTEXT_TURNS=10
-
-# 3. Audio Output (Kokoro)
-TTS_PROVIDER=kokoro
-ELEVENLABS_VOICE_ID=af_bella
-
-SIDECAR_URL=http://localhost:8001
-SIDECAR_ENABLED=false
-
-SESSION_TTL_MINUTES=30
-CORS_ORIGIN=http://localhost:5173
-EOF
-
-cp .env.example .env
-# Now edit .env and fill in your real API keys
-```
-
-### Step 6 — Add npm scripts to package.json
-
-Edit `package.json` and replace the `"scripts"` section with:
-
-```json
-"scripts": {
-  "start": "node src/server.js",
-  "dev": "nodemon src/server.js",
-  "test": "jest",
-  "test:watch": "jest --watch",
-  "test:coverage": "jest --coverage",
-  "sidecar": "cd sidecar && uvicorn main:app --port 8001 --reload"
-}
-```
-
-### Step 7 — (Optional) Set up Python sidecar
-
-```bash
-cd sidecar
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install fastapi uvicorn faster-whisper TTS python-multipart numpy
-# Create sidecar/requirements.txt
-pip freeze > requirements.txt
-cd ..
-```
-
-### Step 8 — Validate the setup
-
-```bash
-# Start the dev server
-npm run dev
-
-# In another terminal, test your API keys (Groq):
-node -e "
-const OpenAI = require('openai');
-const client = new OpenAI({ apiKey: process.env.LLM_API_KEY, baseURL: process.env.LLM_BASE_URL });
-client.chat.completions.create({ model: 'llama-3.1-8b-instant', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }] })
-  .then(r => console.log('Groq OK:', r.choices[0].message.content))
-  .catch(e => console.error('Groq FAIL:', e.message));
-"
-```
-
-### Step 9 — First commit
-
-```bash
-git add .
-git commit -m "chore: initial project structure for Hannah backend"
-```
-
-### Step 10 — (Optional) Push to GitHub
-
-```bash
-gh repo create hannah-backend --private --source=. --remote=origin --push
-# or manually:
-git remote add origin https://github.com/YOUR_USERNAME/hannah-backend.git
-git push -u origin main
-```
-
----
-
-## Quick Reference — Key Files for Each Agent Task
-
-| Task                                 | Primary file                                 | Secondary files                |
-| ------------------------------------ | -------------------------------------------- | ------------------------------ |
-| Add a new WebSocket message type     | `src/gateway/websocket.js`                   | `src/pipeline/orchestrator.js` |
-| Change ASR provider                  | `src/pipeline/asr.js`                        | `src/config.js`, `.env`        |
-| Change LLM model or prompt           | `src/pipeline/llm.js`                        | `src/config.js`                |
-| Change TTS voice                     | `src/pipeline/tts.js`                        | `.env` (ELEVENLABS_VOICE_ID)   |
-| Tune lip-sync quality                | `src/pipeline/lipsync.js`                    | —                              |
-| Add a REST endpoint                  | `src/api/router.js` + new file in `src/api/` | `src/server.js`                |
-| Adjust session TTL or context length | `src/state/conversationManager.js`           | `.env`                         |
-| Add latency logging                  | `src/utils/timer.js`                         | relevant pipeline module       |
-| Enable Python sidecar                | `src/utils/sidecar.js`                       | `.env` (SIDECAR_ENABLED=true)  |
-
----
-
-_Last updated: July 2026 — Hannah v0.1 — Backend architecture document_
-
-## Setup / assets not included
+## Arrancar
 
 ```bash
 npm install
-cp .env.example .env     # defaults to the local stack (Ollama + sidecars)
-npm start                # port 3001
+cp .env.example .env        # el default ya apunta al stack local (Ollama + sidecars)
+npm run dev                 # nodemon en :3001   (npm start = node src/server.js)
 ```
 
-Excluded from the repo (obtain locally):
-- Sidecar model weights: `sidecar/tts/kokoro-v1.0.onnx`, `voices-v1.0.bin`,
-  `sidecar/vision/yolov8n.pt`.
-- Python venvs (`sidecar/.venv`, and the motion sidecar's root venv), `node_modules`, `.env`.
+El backend **solo** hace falta que esté vivo; los sidecars se levantan según lo que quieras usar:
+
+```bash
+npm run sidecar:tts         # Kokoro en :8002  ← imprescindible para que hable
+npm run sidecar:asr         # faster-whisper en :8001 (si ASR_PROVIDER=local)
+npm run sidecar:vision      # YOLOv8 en :8003 (solo si VISION_PROVIDER=yolo)
+npm run sidecar:motion      # EMAGE en :8004 (solo si MOTION_PROVIDER=emage)
+```
+
+El proveedor de movimiento por defecto (`lab`, :8005) vive en el otro repo:
+
+```bash
+cd ../hannah-motion-lab && .venv/bin/python -m uvicorn serve.main:app --port 8005
+```
+
+### Puertos
+
+| Servicio | Puerto | |
+|---|---|---|
+| Backend (REST + WS) | 3001 | escucha en **127.0.0.1** por defecto (`HOST`) |
+| ASR · TTS · Visión | 8001 · 8002 · 8003 | sidecars de este repo |
+| Motion | 8005 (`lab`) · 8004 (`emage`) | cada provider con su URL propia |
+| Ollama | 11434 | LLM, VLM y embeddings |
+| Vite (frontend) | 5173 | proxea `/api` y `/ws` hacia acá |
+
+---
+
+## El turno de voz, de punta a punta
+
+Es el recorrido central del proyecto. Todo lo demás orbita alrededor.
+
+**0. Handshake.** El cliente hace `POST /api/v1/session` y abre `ws://host/ws?sessionId=<uuid>`.
+El handler de `upgrade` valida la sesión y escribe un **401** crudo al socket si no existe o
+expiró (`gateway/websocket.js`). Crear la sesión ya **precarga la ventana de contexto** desde
+SQLite, así que Hannah arranca recordando.
+
+**1. Audio.** `SPEECH_START` aborta el turno en curso (barge-in) y vacía el buffer. Llegan los
+frames binarios, que se acumulan con un **tope duro de 5MB**. `SPEECH_END` los concatena, crea
+un `AbortController` nuevo y llama a `processVoiceTurn`.
+
+**2. ASR.** `pipeline/asr.js` transcribe con el sidecar faster-whisper (`local`) o con OpenAI
+Whisper (`cloud`). Al volver se comprueba `signal.aborted`: si el usuario ya interrumpió, el
+turno se abandona en silencio.
+
+**3. Capa determinista — antes del modelo.** `runDeterministicLayer()` parsea *las palabras del
+usuario* y ejecuta lo que reconozca, en este orden:
+
+1. `parseMoveIntent()` — mover el overlay (ES/EN) → `moveWindow()` + `window_move`.
+2. `handleOpenIntent()` / `handleCloseIntent()` — abrir apps y sitios, cerrar ventanas.
+3. `resolveSkillPhrase()` — skills con `phrases` declaradas.
+4. `resolveDataAction()` — limpiar la terminal, `cat`, crear archivo, borrar (con confirmación),
+   `ls`, "corré `<cmd>`", "leé `<url>`", "buscá X".
+
+Lo que se ejecute devuelve su **salida real**, que se inyecta en el turno junto con una coletilla
+explícita de *no inventes esto*. Es lo que impide que un modelo de 7B **diga** que hizo algo sin
+haberlo hecho — el problema que motivó toda esta capa.
+
+**4. Historial.** El turno se guarda **con el resultado inyectado**: ventana en RAM + SQLite +
+embedding en segundo plano para el recall. Recién ahí se emite `user_transcript` al cliente, con
+la transcripción **original** (no la enriquecida).
+
+**5. LLM.** Se arma el system prompt: persona + resumen de memoria + recall vectorial + protocolo
+de emoción + índice de skills + cheat-sheets de `reference/`. Dos caminos:
+
+- **Con tools y sin acción determinista previa**: hasta 3 pasadas sin streaming, ejecutando los
+  tags que el modelo escriba y realimentando los resultados reales.
+- **Si la capa determinista ya actuó** (`noActions`): streaming directo, token a token, y el
+  prompt **ni siquiera incluye el índice de skills** — para no tentar al modelo a repetir un
+  `ssh` o un comando que ya se ejecutó.
+
+**6. Streaming por oración.** Los tokens se acumulan en un buffer que corta en `.!?` (con más de
+10 caracteres). Cada oración completa dispara **en paralelo** TTS, visemas y motion, y sale como
+un único `audio_chunk`. Los segmentos se serializan en una cadena de promesas, así que **llegan
+en orden hablado** y `turn_complete` solo se emite después del último.
+
+**7. Fin.** `turn_complete` con la emoción parseada del tag `[EMOTION:...]` y las métricas. Si el
+turno fue abortado, **no se emite**.
+
+---
+
+## Acciones: por qué hay cuatro capas
+
+Conviven a propósito. La motivación es la fiabilidad con modelos locales chicos.
+
+| Capa | Qué es | Fiabilidad |
+|---|---|---|
+| **Intents deterministas** | Se parsean las palabras del usuario y se ejecuta | 100%, no depende del modelo |
+| **Tags de acción** | El modelo escribe `[RUN:]`, `[SKILL:]`, `[SEARCH:]`, `[OPEN:]`… y el backend ejecuta | depende del modelo |
+| **Skills** (`skills/<n>/SKILL.md`) | Markdown con frontmatter: una acción (`run`/`terminal`/`open`/`search`), variantes por SO y `phrases` opcionales | el modelo elige, el **backend** construye el comando |
+| **Reference** (`reference/*.md`) | Cheat-sheets inyectados en el prompt | no ejecutable: es conocimiento |
+
+El vocabulario de tags tiene **una sola fuente**: `ACTION_TOOL` en `llm.js`. Tanto `ACTION_RE`
+como `stripActionTags` derivan de ahí — si se agrega un tag en otro lado, el TTS termina leyendo
+la etiqueta en voz alta.
+
+Las skills son **agnósticas del modelo**: el modelo dice *qué* skill quiere, no *cómo* se ejecuta.
+Detalle en `../SKILLS.md`.
+
+---
+
+## Contrato WebSocket
+
+`ws://localhost:3001/ws?sessionId=<uuid>`. Se acepta indistintamente el campo `command` o `type`.
+Un JSON inválido se ignora en silencio (se loguea solo el tamaño, nunca el contenido).
+
+### Cliente → servidor
+
+| Comando | Payload | Efecto |
+|---|---|---|
+| `SPEECH_START` | — | Barge-in: aborta el turno en curso y vacía el buffer de audio |
+| *(binario)* | frames de audio | Se acumulan hasta **5MB**; lo que exceda se descarta con un warning |
+| `SPEECH_END` | — | Concatena el audio y procesa el turno. Sin audio → `error` |
+| `TEXT_INPUT` | `text` | Mismo pipeline sin ASR. El texto **sí** se guarda en el historial |
+| `INTERRUPT` | — | Aborta el turno: corta el LLM y la reproducción a mitad de frase |
+| `GAZE_ON` / `GAZE_OFF` | — | Arranca/para el sondeo de mirada (80 ms) |
+| `VISION_START` | — | Loop de visión cada 4 s. Responde `vision_started` |
+| `VISION_FRAME` | `frame` (JPEG base64) | Guarda **solo el último** frame de la sesión |
+| `VISION_STOP` | — | Para el loop y borra el frame |
+| `TRIGGER_YOLO` | — | Analiza el último frame y genera un turno hablado |
+| `TERMINAL_START` | — | Adjunta el pty de la sesión. **Requiere `TOOLS_SYSTEM_CONTROL`** |
+| `TERMINAL_IN` | `data` | Escribe en el pty. Sin el flag, no hace nada |
+| `TERMINAL_RESIZE` | `cols`, `rows` | Redimensiona el pty |
+| `CONFIRM_COMMAND` | `id`, `approved` | Responde al diálogo de comando destructivo |
+
+### Servidor → cliente
+
+| Tipo | Campos | Cuándo |
+|---|---|---|
+| `user_transcript` | `text` | Tras el ASR (solo en turnos de voz) |
+| `audio_chunk` | `text`, `visemes[]`, `audioBase64`, `format`, `sample_rate`, `motion?`, `action?` | **Uno por oración** |
+| `turn_complete` | `emotion`, `metrics` | Al final. No se emite si el turno se abortó |
+| `error` | `message` | Fallo por etapa; nunca tumba el servidor |
+| `gaze` | `x`, `y` | Cada 80 ms con `GAZE_ON`; normalizado a `[-1,1]` |
+| `vision_started` | — | Confirmación de `VISION_START` |
+| `window_move` / `window_close` | `spec` / — | La ventana se movió o se cerraron ventanas |
+| `confirm_command` | `id`, `command` | Comando destructivo esperando confirmación (**40 s**) |
+| `command_run` | — | Aviso de que se ejecutó un comando |
+| `terminal_out` / `terminal_clear` | `data` / — | Stream del pty y limpieza de pantalla |
+| `open_terminal` | — | Pedido de abrir el panel de terminal en la UI |
+
+**El WAV viaja completo en base64**, no troceado: el navegador decodifica con `decodeAudioData`,
+que necesita el archivo entero. Con Kokoro es `wav`/24000; con ElevenLabs, `mp3`/44100.
+
+**`motion`** lleva `poses` (T×165, ejes-ángulo de 55 joints SMPL-X) y `trans` (T×3) como float32
+en base64, a 30fps. Si el sidecar está caído, el chunk simplemente viaja sin ese campo.
+
+---
+
+## API REST
+
+Todo bajo `/api/v1`. Cada ruta va envuelta en `handler(slug, fn)` (`api/handler.js`), que
+centraliza el sobre de error 500 — nunca en `server.js`.
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| `GET` | `/health` | Estado, versión, proveedores activos y URLs de sidecars |
+| `POST` | `/session` | Crea sesión → `{sessionId, expiresIn}`. **Obligatorio antes del WS** |
+| `DELETE` | `/session/:id` | Borra el estado en memoria (el historial en SQLite queda) |
+| `GET` | `/settings` | Config de proveedores, **con las API keys redactadas** |
+| `POST` | `/settings` | Aplica un patch whitelisteado y lo persiste en `data/settings.json` |
+| `GET` | `/shortcuts` | Atajos de voz: `{sites, apps}` |
+| `POST` | `/shortcuts` | Reemplaza el set completo y persiste |
+| `GET` | `/skills` | Lista las skills con su markdown crudo |
+| `POST` | `/skills` | Crea o edita una skill en `data/skills/<n>/SKILL.md` y recarga |
+| `DELETE` | `/skills/:name` | Borra la skill del usuario |
+| `GET` | `/tts/voices` | Proxy al sidecar Kokoro para poblar el selector de voces |
+| `POST` | `/text` | Turno de texto **sin sesión ni WS**. Ruta de pruebas |
+
+**Middleware**: `helmet` (con CSP desactivada a propósito para pruebas locales), CORS por lista
+de orígenes (`CORS_ORIGIN`), y rate limit **que exime a localhost** — si no, el propio uso normal
+agotaba la cuota y todo devolvía 429.
+
+**Archivos estáticos: uno solo, deliberadamente.** El servidor expone `test-client.html` en `/` y
+`/test-client.html`, y nada más. Nunca reintroducir `express.static('.')`: exponía
+`data/settings.json` (API keys) y `data/memory.db`.
+
+---
+
+## Mapa de módulos
+
+```
+src/
+├── server.js               Express + montaje del gateway. Antes de servir aplica el estado
+│                           persistido: settings, shortcuts, skills y reference
+├── config.js               ÚNICA lectura de process.env. Todo lo demás lee `config`
+├── gateway/websocket.js    Protocolo WS, auth en el upgrade, barge-in, buffer de audio
+├── pipeline/
+│   ├── orchestrator.js     El turno: capa determinista, LLM, buffer de oraciones, emisión
+│   ├── asr.js              Transcripción (sidecar local u OpenAI)
+│   ├── llm.js              SDK OpenAI-compatible; prompt, tags de acción, parseo de emoción
+│   ├── tts.js              Kokoro (sidecar) o ElevenLabs
+│   ├── lipsync.js          Visemas DESDE EL TEXTO, no del audio
+│   ├── motion.js           Los dos providers de gestos, con protocolos incompatibles
+│   ├── tools.js            Catálogo de tools + capa determinista + guard de destructivos
+│   ├── terminal.js         Pty real por sesión (node-pty)
+│   ├── windowControl.js    Lógica agnóstica de mover el overlay y de la mirada
+│   ├── vision.js / vlm.js  Los dos proveedores de visión (YOLO / modelo local)
+│   ├── visionLoop.js       Awareness continua: reacciona solo si la escena cambió
+│   └── desktop/            Adaptadores por escritorio: hyprland → kde → x11, más env.js
+│                           (detección única) y sh.js (ejecutar comandos del compositor)
+├── state/
+│   ├── conversationManager.js  Sesiones en RAM; precarga contexto desde SQLite
+│   ├── memoryStore.js      SQLite (WAL): turnos, resumen rodante, embeddings
+│   ├── embeddings.js       Embeddings locales vía Ollama
+│   ├── settings.js         Config mutable en caliente, con whitelist
+│   ├── skills.js           Parser de SKILL.md, ejecución y disparo por frase
+│   ├── reference.js        Carga de los cheat-sheets
+│   ├── shortcuts.js        Atajos de voz (sitios y apps)
+│   ├── frameStore.js       Último frame de cámara por sesión
+│   └── dataDir.js          Única fuente de verdad de data/
+├── api/                    Rutas REST (router.js las registra todas)
+└── utils/                  logger (winston) y timer (métricas de latencia)
+```
+
+---
+
+## Configuración
+
+Todo el acceso a variables de entorno pasa por **`src/config.js`**. Nunca leer `process.env` en
+otro módulo — las dos excepciones están documentadas en su lugar: el shell del pty
+(`terminal.js`) y la detección de compositor (`desktop/*.js`).
+
+### Lo que vas a tocar
+
+| Variable | Default | Para qué |
+|---|---|---|
+| `HOST` / `PORT` | `127.0.0.1` / `3001` | **Local a propósito.** El acceso LAN entra por Vite |
+| `LLM_BASE_URL` | `null` | Endpoint OpenAI-compatible (Ollama, Groq, OpenRouter…) |
+| `LLM_MODEL` | `llama-3.1-8b-instant` | El dev local usa `qwen2.5:7b` |
+| `LLM_API_KEY` | — | Obligatoria solo si el proveedor la pide |
+| `ASR_PROVIDER` | `cloud` | `local` = sidecar faster-whisper |
+| `ASR_LANGUAGE` | *(vacío)* | Vacío = autodetección |
+| `TTS_PROVIDER` | `kokoro` | Sidecar local; cualquier otro valor = ElevenLabs |
+| `ELEVENLABS_VOICE_ID` | `af_heart` | Nombre heredado: es la voz para **ambos** proveedores. El prefijo elige idioma (`af_`/`am_` inglés, `ef_`/`em_` español) |
+| `VISION_PROVIDER` | `vlm` | `vlm` describe la escena; `yolo` da etiquetas de objetos |
+| `MOTION_PROVIDER` | `lab` | `lab` (texto→movimiento, :8005) o `emage` (audio→movimiento, :8004) |
+| `MOTION_ENABLED` | `true` | Solo el string exacto `false` lo apaga |
+| `TOOLS_ENABLED` | `false` | Deja que el modelo actúe por tags |
+| `TOOLS_SYSTEM_CONTROL` | `false` | **Master flag de la terminal real** |
+| `CORS_ORIGIN` | localhost:5173 | Lista separada por comas |
+| `SESSION_TTL_MINUTES` | `30` | Vida de la sesión |
+| `CONTEXT_TURNS` | `10` | Turnos de historia en la ventana de contexto |
+| `MEMORY_RECALL` | `true` | Recall vectorial de largo plazo |
+| `MEMORY_DB_PATH` | `data/memory.db` | Los tests lo fuerzan a `:memory:` |
+
+La lista completa está en `.env.example`, con las de los sidecars Python (que el backend **no**
+lee: `ASR_DEVICE`, `TTS_DEVICE`, `PANTOMATRIX_DIR`).
+
+### Configuración en caliente
+
+El panel ⚙ escribe `data/settings.json`, que **pisa al `.env`** y se aplica **sin reiniciar**
+(muta `config` en memoria y todo el pipeline lo lee en cada llamada). Solo se aceptan los campos
+de la whitelist de `state/settings.js`, y **las API keys nunca se devuelven al navegador**: la
+vista de `GET /settings` va redactada.
+
+---
+
+## Sidecars Python
+
+Cuatro apps FastAPI en `sidecar/`. **ASR, TTS y visión comparten el venv `sidecar/.venv`**; el de
+**motion (EMAGE) usa el venv de la raíz del workspace** (`../.venv`), porque la RTX 5070 Ti
+(Blackwell, sm_120) necesita torch ≥ 2.7 con CUDA 12.8. `sidecar/common.py` centraliza la
+precarga de las librerías CUDA.
+
+Los scripts invocan `<venv>/bin/python -m uvicorn` y **no** el console script `uvicorn`: su
+shebang quedó roto cuando el repo cambió de ruta. Mantenerlo así.
+
+**Los pesos no están en git** (gitignorados, ~700MB). Un clon nuevo necesita bajarlos:
+
+| Pesos | Para qué | ¿Imprescindible? |
+|---|---|---|
+| `sidecar/tts/kokoro-v1.0.onnx` + `voices-v1.0.bin` | Voz | **Sí**, sin eso no habla |
+| `sidecar/vision/yolov8n.pt` | Visión por objetos | Solo con `VISION_PROVIDER=yolo` |
+| `../hannah-motion-lab/runs/*/latest.pt` | Gestos co-speech | Sí, para que gesticule |
+| faster-whisper | ASR local | Se baja solo en el primer arranque |
+
+---
+
+## Seguridad
+
+- **La terminal está apagada por defecto.** `run_command`, las skills de tipo `terminal` y los
+  comandos `TERMINAL_*` requieren `TOOLS_SYSTEM_CONTROL=true`.
+- **No hay allowlist de comandos.** Con el flag activo corre cualquier cosa en un pty real. La
+  única red es `confirmIfDangerous()`: la regex `DANGER` (`rm`, `dd`, `mkfs`, `shutdown`,
+  `git --force`…) manda un `confirm_command` y espera respuesta, con timeout de 40 s que resuelve
+  *no*. Es **best-effort, no una barrera de seguridad** — está cubierta por
+  `tests/unit/danger.test.js`.
+- **El backend escucha en 127.0.0.1.** Desde el celular se entra por Vite (`:5173`, que sí escucha
+  en `0.0.0.0`) y proxea. Así la terminal, las API keys y la memoria nunca quedan expuestas.
+  `HOST=0.0.0.0` solo a conciencia.
+- **Nunca se loguea contenido del usuario**: transcripciones, respuestas del modelo ni payloads.
+  Solo tiempos, errores y metadata.
+- **El audio nunca toca el disco**: se procesa en memoria y se descarta al terminar el turno.
+
+---
+
+## Decisiones de diseño (el porqué)
+
+**Streaming por oración, no por token ni por respuesta completa.** El objetivo es <500 ms hasta
+el primer sonido. Por token no se puede sintetizar (hace falta prosodia); por respuesta completa
+se esperaría segundos. La oración es la unidad natural.
+
+**Visemas desde el texto, no del audio.** Analizar el WAV costaría más latencia que sintetizarlo.
+Con el texto los visemas salen gratis y en paralelo al TTS.
+
+**Los `audio_chunk` se serializan en una cadena de promesas.** Sin eso, una oración corta puede
+sintetizarse antes que una larga anterior y Hannah hablaría desordenada.
+
+**Un `AbortController` por turno.** Es lo que hace posible el barge-in real: interrumpirla a
+mitad de frase, no al final.
+
+**Sin retargeting de movimiento a rigs ajenos.** Un intento previo de mapear SMPL-X sobre nombres
+de huesos mixamo/VRM produjo la "pose zombie". El mapeo SMPL-X→VRoid se **calcula desde la
+geometría**, en el frontend.
+
+**Fallo por etapa.** Cada etapa manda su `{type:'error'}` y sigue. Una excepción no capturada
+nunca debe tumbar el servidor: `await` y `.catch` en todo lo que se dispare en segundo plano.
+
+---
+
+## Tests y lint
+
+```bash
+npm test              # jest en modo ESM
+npm run lint          # eslint sobre src y tests
+```
+
+`tests/setup.js` **aísla los tests de tus datos reales** (`MEMORY_DB_PATH=':memory:'`,
+`MEMORY_RECALL=false`). Sin eso, la suite escribía en la memoria real y llamaba a Ollama —
+mantenerlo así.
+
+Las suites cubren lo que decide comportamiento: el guard de comandos destructivos, los parsers
+(intents de movimiento, limpieza de tags, frontmatter de SKILL.md, argumentos de ssh), más `llm`,
+`lipsync` y `conversationManager`. `parseLlmResponse`, `parseFrontmatter` y `sshArg` se exportan
+como helpers puros justamente para poder testearlos; `conversationManager.dispose()` existe para
+que las corridas terminen limpias.
+
+---
+
+## Límites conocidos
+
+Cosas que **no** son como uno esperaría, verificadas en el código:
+
+- **`/health` no hace ping a los sidecars.** Refleja la configuración en memoria, así que un `ok`
+  no significa que ASR/TTS/visión/motion estén vivos.
+- **Las rutas REST no tienen autenticación.** Es una app self-hosted de un usuario escuchando en
+  localhost; quien llegue al puerto puede borrar una sesión o cambiar los settings. Si algún día
+  se expone a la red, esto hay que resolverlo primero.
+- **`POST /settings` no valida los valores** (no comprueba que el proveedor exista ni que la URL
+  sea válida).
+- **El turno de `TRIGGER_YOLO` no es abortable**: se lanza sin `signal`, así que `INTERRUPT` no
+  lo corta.
+- **`VISION_STOP` no confirma nada** al cliente (no existe un `vision_stopped`).
+- **La lista de apps permitidas está horneada en `config.js`** (`appAllowlist`): no se configura
+  por entorno ni por el panel.
