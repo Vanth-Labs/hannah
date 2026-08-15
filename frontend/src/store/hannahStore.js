@@ -15,10 +15,8 @@ export const useHannahStore = create((set, get) => ({
 
     // Visión
     visionActive: false,
-    lastDetection: null,       // resumen del último análisis YOLO
 
     // Avatar y movimiento corporal (EMAGE / SMPL-X)
-    avatarMode: 'vrm',         // 'vrm' (VRoid anime, cara+cuerpo) | 'smplx' (debug SMPL-X) | 'rpm'
     avatarLoaded: false,
     currentMotion: null,       // { fps, numFrames, poses: Float32Array, trans: Float32Array, startedAt }
     gestureTrigger: null,      // { name, startedAt } — gesto deliberado (Mixamo) sobre el co-speech
@@ -43,8 +41,6 @@ export const useHannahStore = create((set, get) => ({
     setTranscript: (transcript) => set({ transcript }),
     setUserTranscript: (userTranscript) => set({ userTranscript }),
     setVisionActive: (visionActive) => set({ visionActive }),
-    setLastDetection: (lastDetection) => set({ lastDetection }),
-    setAvatarMode: (avatarMode) => set({ avatarMode }),
     setAvatarLoaded: (avatarLoaded) => set({ avatarLoaded }),
     setCurrentMotion: (currentMotion) => set({ currentMotion }),
     setGestureTrigger: (gestureTrigger) => set({ gestureTrigger }),

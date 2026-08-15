@@ -3,10 +3,7 @@ import { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Environment, ContactShadows, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import { Avatar } from './Avatar.jsx';
-import { SmplxAvatar } from './SmplxAvatar.jsx';
 import { VrmAvatar } from './VrmAvatar.jsx';
-import { useHannahStore } from '../store/hannahStore.js';
 
 function Lights() {
     return (
@@ -49,8 +46,7 @@ function Floor() {
     );
 }
 
-export function Scene({ avatarUrl }) {
-    const avatarMode = useHannahStore(s => s.avatarMode);
+export function Scene() {
     return (
         <Canvas
             camera={{ position: [0, 0.15, 2.15], fov: 36, near: 0.1, far: 100 }}
@@ -67,9 +63,7 @@ export function Scene({ avatarUrl }) {
             <Floor />
 
             <Suspense fallback={null}>
-                {avatarMode === 'vrm' && <VrmAvatar url="/avatar.glb" />}
-                {avatarMode === 'smplx' && <SmplxAvatar url="/smplx_avatar.glb" />}
-                {avatarMode === 'rpm' && avatarUrl && <Avatar url={avatarUrl} />}
+                <VrmAvatar url="/avatar.glb" />
                 <Environment preset="city" background={false} />
             </Suspense>
 

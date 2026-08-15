@@ -5,8 +5,8 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 // Overlay/desktop: servir HTTP (localhost sigue siendo "secure context", el mic/cámara
 // funcionan) para que el navegador en modo-app no rechace el cert autofirmado del
 // basic-ssl. En el navegador normal (LAN) mantenemos HTTPS para getUserMedia fuera de
-// localhost. Flag: HANNAH_HTTP=1 (o TAURI por compat).
-const httpMode = !!process.env.HANNAH_HTTP || !!process.env.TAURI;
+// localhost. Flag: HANNAH_HTTP=1.
+const httpMode = !!process.env.HANNAH_HTTP;
 
 export default defineConfig({
     plugins: [react(), ...(httpMode ? [] : [basicSsl()])],

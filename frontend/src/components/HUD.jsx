@@ -74,7 +74,7 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
     const { emotion, isSpeaking, visionActive, transcript, userTranscript, connected, logs,
-        avatarMode, setAvatarMode, handsFree, setHandsFree, pendingConfirm, setPendingConfirm,
+        handsFree, setHandsFree, pendingConfirm, setPendingConfirm,
         commandRun, setCommandRun, terminalOpen, setTerminalOpen } = useHannahStore();
 
     const toggleTerminal = () => {

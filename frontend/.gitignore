@@ -30,4 +30,3 @@ public/smplx_avatar.glb
 public/animations/*.fbx
 # Se CONSERVAN: public/avatar.glb (VRM necesario) y public/animations/baked/*.json
 public/vad/
-src-tauri/

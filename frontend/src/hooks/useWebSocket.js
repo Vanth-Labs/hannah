@@ -5,25 +5,6 @@ import { emitTerminalOut } from '../lib/terminalBus.js';
 import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
 import { DESKTOP, API_BASE } from '../lib/api.js';
 
-// Mapa de visemas del backend a morph targets de Ready Player Me / modelos estándar
-export const VISEME_MAP = {
-    'sil': 'viseme_sil',
-    'PP':  'viseme_PP',
-    'FF':  'viseme_FF',
-    'TH':  'viseme_TH',
-    'DD':  'viseme_DD',
-    'kk':  'viseme_kk',
-    'CH':  'viseme_CH',
-    'SS':  'viseme_SS',
-    'nn':  'viseme_nn',
-    'RR':  'viseme_RR',
-    'aa':  'viseme_aa',
-    'E':   'viseme_E',
-    'I':   'viseme_I',
-    'O':   'viseme_O',
-    'U':   'viseme_U',
-};
-
 export function useWebSocket() {
     const ws = useRef(null);
     const audioCtx = useRef(null);

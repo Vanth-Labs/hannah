@@ -7,7 +7,7 @@ export function useVision(sendCommand) {
     const intervalRef = useRef(null);
     const streamRef = useRef(null);
 
-    const { setVisionActive, setLastDetection, addLog } = useHannahStore.getState();
+    const { setVisionActive, addLog } = useHannahStore.getState();
 
     const startVision = useCallback(async () => {
         try {

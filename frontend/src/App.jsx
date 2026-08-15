@@ -7,10 +7,6 @@ import { useVision } from './hooks/useVision.js';
 import { useVoiceActivity } from './hooks/useVoiceActivity.js';
 import { useHannahStore } from './store/hannahStore.js';
 
-// ¿Corriendo dentro de la app de escritorio (Tauri)? -> overlay transparente.
-const isTauri = typeof window !== 'undefined'
-    && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__);
-
 // ── Fondo: gradiente oscuro con sutil vignette ──────────────────────────────
 const BG = () => (
     <div style={{
@@ -135,9 +131,6 @@ export default function App() {
         else startVision();
     }, [visionActive, startVision, stopVision]);
 
-    // Avatar URL — pon tu .glb aquí en /public/avatar.glb
-    const avatarUrl = '/avatar.glb';
-
     return (
         <>
             <BG />
@@ -157,7 +150,7 @@ export default function App() {
                 position: 'fixed', top: 0, left: 0, right: 0,
                 bottom: terminalOpen ? '40%' : 0, zIndex: 1, transition: 'bottom 0.18s',
             }}>
-                <Scene avatarUrl={avatarUrl} />
+                <Scene />
             </div>
 
             <AvatarLoadingHint />
