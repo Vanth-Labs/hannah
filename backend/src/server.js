@@ -36,10 +36,14 @@ app.use(cors({
 // 2. Rate Limiting (Protects the infrastructure against flooding)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per window
+  max: 1000,                // por IP (antes 100: se agotaba en uso normal)
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' }
+  message: { error: 'Too many requests, please try again later.' },
+  // LOCALHOST EXENTO: es la propia app (panel ⚙, sesiones, reconexiones). Limitarla solo
+  // servía para romperse solo — con el backend en 127.0.0.1 no hay nada de qué protegerse.
+  // El límite queda para cuando alguien pone HOST=0.0.0.0 y lo expone a la red.
+  skip: (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip),
 });
 app.use('/api/', limiter);
 
