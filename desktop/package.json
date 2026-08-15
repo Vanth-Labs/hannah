@@ -5,7 +5,8 @@
   "main": "main.js",
   "type": "commonjs",
   "scripts": {
-    "start": "electron .",
+    "start": "electron . --no-sandbox",
+    "start:dev": "HANNAH_DEV=1 electron . --no-sandbox",
     "build:linux": "electron-builder --linux AppImage deb",
     "build:win": "electron-builder --win nsis",
     "build:mac": "electron-builder --mac dmg",
@@ -33,7 +34,10 @@
         "AppImage",
         "deb"
       ],
-      "category": "Utility"
+      "category": "Utility",
+      "executableArgs": [
+        "--no-sandbox"
+      ]
     },
     "win": {
       "target": [

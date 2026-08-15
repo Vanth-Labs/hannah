@@ -8,8 +8,12 @@ const http = require('http');
 const fs = require('fs');
 const { execFile } = require('child_process');
 
-// El sandbox de Chromium en AppImage necesita SUID; para una app local de confianza
-// lo desactivamos así el usuario no tiene que pasar --no-sandbox.
+// El sandbox de Chromium necesita SUID/namespaces; para una app local de confianza se apaga.
+// OJO: desde acá NO alcanza. Cuando corre este archivo, Chromium ya bifurcó el zygote, y el
+// hijo se queda sin poder crear memoria compartida: muere el renderer con un FATAL sobre
+// /dev/shm que despista (el /dev/shm del sistema está perfecto). El flag TIENE que venir en
+// argv: va en el script `start` y, para los builds, en linux.executableArgs (package.json).
+// Esto queda como red de seguridad para los procesos hijos que se lanzan después.
 app.commandLine.appendSwitch('no-sandbox');
 
 // ── LINUX: forzar X11/XWayland. Esto es lo que hace que el overlay funcione IGUAL en
@@ -230,7 +234,9 @@ function createWindow() {
 
   // Mirada global: empuja la dirección del cursor (relativa a la ventana) al renderer.
   const gaze = setInterval(() => {
-    if (!win || win.isDestroyed()) return;
+    // Si el renderer se cayó, `send` tira "Render frame was disposed" 12 veces por segundo y
+    // tapa la consola justo cuando hay que leerla. Se comprueba antes y se ignora el resto.
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
     let c;
     try { c = screen.getCursorScreenPoint(); } catch { return; }   // sin mirada, pero sin morir
     const b = win.getBounds();
