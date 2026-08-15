@@ -1,142 +1,142 @@
 # hannah-desktop
 
-App **Electron** de Hannah: el overlay flotante, la vía universal para que se comporte igual en
-Windows, macOS y en cualquier escritorio de Linux (GNOME, KDE, XFCE, Cinnamon, Hyprland…).
+Hannah's **Electron** app: the floating overlay, and the universal path to making it behave the
+same on Windows, macOS and every Linux desktop (GNOME, KDE, XFCE, Cinnamon, Hyprland…).
 
-Carga el frontend y se encarga de lo que una página web no puede hacer sola: **flotar encima de
-todo**, aparecer en todos los escritorios, moverse entre monitores y seguir el cursor **aunque
-esté fuera de la ventana**.
+It loads the frontend and handles what a web page cannot do on its own: **float above
+everything**, show up on every workspace, move between monitors, and follow the cursor **even
+when it is outside the window**.
 
 ```bash
 npm install
-npm run start:dev     # usa el servidor de Vite en :5173 (lo levanta ./hannah)
-npm start             # sirve el dist empaquetado; antes: (cd ../hannah-frontend && npm run build)
+npm run start:dev     # uses the Vite dev server on :5173 (started by ./hannah)
+npm start             # serves the packaged dist; first: (cd ../hannah-frontend && npm run build)
 npm run lint
 npm run build:linux   # .AppImage / .deb
-npm run build:win     # .exe  — requiere Windows o Wine
-npm run build:mac     # .dmg  — requiere macOS
+npm run build:win     # .exe  — requires Windows or Wine
+npm run build:mac     # .dmg  — requires macOS
 ```
 
-Necesita el **backend en `localhost:3001`**. Lo habitual es no arrancarla a mano: `./hannah`
-(Super+H) levanta todo el stack y abre esta app.
+It needs the **backend on `localhost:3001`**. Normally you don't start it by hand: `./hannah`
+(Super+H) brings up the whole stack and opens this app.
 
 ---
 
-## Por qué XWayland, y por qué no es negociable
+## Why XWayland, and why it is not negotiable
 
-**En Wayland nativo ninguna aplicación puede ponerse encima de las demás ni moverse sola.** No es
-un bug ni una limitación de Electron: el protocolo lo prohíbe por diseño. `alwaysOnTop` queda en
-no-op y `setBounds` no hace nada. La vía de los overlays tipo waybar (`wlr-layer-shell`) no la
-implementa Mutter/GNOME ni la habla Chromium.
+**Under native Wayland no application can put itself above the others or move itself.** This is
+not a bug, nor an Electron limitation: the protocol forbids it by design. `alwaysOnTop` becomes a
+no-op and `setBounds` does nothing. The route used by waybar-style overlays (`wlr-layer-shell`)
+is not implemented by Mutter/GNOME and is not spoken by Chromium.
 
-El único denominador común es **X11/EWMH**, y se alcanza corriendo la app bajo **XWayland**. Ahí
-la ventana es X11 real y todos los compositores respetan `_NET_WM_STATE_ABOVE`. Con eso, el mismo
-código flota igual en todos lados.
+The only common denominator is **X11/EWMH**, and you reach it by running the app under
+**XWayland**. There the window is a real X11 window and every compositor honors
+`_NET_WM_STATE_ABOVE`. With that, the same code floats everywhere.
 
-Por eso la app **fuerza `--ozone-platform=x11`**. No quitarlo: Electron ≤33 elegía XWayland solo,
-pero **desde Electron 38 el default es Wayland nativo**, así que una actualización rompería el
-overlay en silencio.
+That is why the app **forces `--ozone-platform=x11`**. Do not remove it: Electron ≤33 picked
+XWayland on its own, but **since Electron 38 the default is native Wayland**, so an upgrade would
+silently break the overlay.
 
-> **Lo que NO se puede** (para no perder tiempo intentándolo): overlay en Wayland *nativo*.
+> **What is NOT possible** (so nobody wastes time trying): an overlay under *native* Wayland.
 
-## Los flags van en argv, no en `appendSwitch`
+## Flags belong in argv, not in `appendSwitch`
 
-Cuando corre `main.js`, Chromium **ya bifurcó el zygote y ya eligió plataforma**. Desde ahí,
-`app.commandLine.appendSwitch(...)` llega tarde y no surte efecto. El síntoma es engañoso:
+By the time `main.js` runs, Chromium **has already forked the zygote and already picked a
+platform**. From there, `app.commandLine.appendSwitch(...)` arrives too late and has no effect.
+The symptom is misleading:
 
-- Sin `--no-sandbox` en argv: el renderer muere con un **FATAL sobre permisos de `/dev/shm`**
-  que despista mucho, porque el `/dev/shm` del sistema está perfecto. El problema real es que el
-  proceso hijo no puede crear memoria compartida **en ningún lado**.
-- Sin `--ozone-platform` en argv: `hyprctl clients` reporta `xwayland=false`, o sea Wayland
-  nativo, donde el tamaño y la posición de la ventana simplemente se ignoran.
+- Without `--no-sandbox` in argv: the renderer dies with a **FATAL about `/dev/shm` permissions**
+  that sends you down the wrong path, because the system's `/dev/shm` is perfectly fine. The real
+  problem is that the child process cannot create shared memory **anywhere**.
+- Without `--ozone-platform` in argv: `hyprctl clients` reports `xwayland=false`, i.e. native
+  Wayland, where the window's size and position are simply ignored.
 
-Por eso los flags viven en `scripts/run.js` (que los arma **según el sistema operativo**, para no
-aplicar parches de Linux en Windows y macOS) y en `build.linux.executableArgs` para los paquetes.
+So the flags live in `scripts/run.js` (which assembles them **per operating system**, to avoid
+applying Linux patches on Windows and macOS) and in `build.linux.executableArgs` for packages.
 
-| Flag | Por qué | Escape |
+| Flag | Why | Escape hatch |
 |---|---|---|
-| `--no-sandbox` | El sandbox de Chromium necesita SUID/namespaces; es una app local de confianza | — |
-| `--ozone-platform=x11` | Ver arriba | `HANNAH_OZONE=wayland` |
-| `--in-process-gpu` | En una RTX 5070 Ti el proceso GPU moría por SIGSEGV en bucle y la ventana no llegaba a mapearse | `HANNAH_GPU=separate` |
+| `--no-sandbox` | Chromium's sandbox needs SUID/namespaces; this is a trusted local app | — |
+| `--ozone-platform=x11` | See above | `HANNAH_OZONE=wayland` |
+| `--in-process-gpu` | On an RTX 5070 Ti the GPU process kept dying with SIGSEGV and the window never got mapped | `HANNAH_GPU=separate` |
 
-## La geometría sale del compositor, no de Electron
+## Geometry comes from the compositor, not from Electron
 
-Bajo XWayland **la geometría que reporta Electron no es la del compositor**. Medido en una máquina
-con tres monitores:
+Under XWayland **the geometry Electron reports is not the compositor's**. Measured on a machine
+with three monitors:
 
-- `screen.getCursorScreenPoint()` **se cuelga** si todavía no existe ninguna ventana, y con
-  ventana **devuelve basura** (valores pegados al origen de la ventana, con el cursor real a
-  1500px de distancia). Además solo responde mientras el puntero está **encima de la propia
-  ventana**: fuera de ella se congela.
-- `screen.getDisplayNearestPoint()` devuelve el monitor equivocado para puntos que caen de lleno
-  dentro de otro.
-- `win.getBounds()` llegó a diferir **1080px en y** de lo que veía el compositor.
-- `screen.getPrimaryDisplay()` devolvió un monitor que no existía en el layout: la lista **cambia
-  entre arranques**.
+- `screen.getCursorScreenPoint()` **hangs** if no window exists yet, and once a window exists it
+  **returns garbage** (values glued to the window's origin, with the real cursor 1500px away).
+  It also only answers while the pointer is **over the app's own window**: outside it, it freezes.
+- `screen.getDisplayNearestPoint()` returns the wrong monitor for points that fall squarely
+  inside another one.
+- `win.getBounds()` was off by **1080px in y** from what the compositor saw.
+- `screen.getPrimaryDisplay()` returned a monitor that did not exist in the layout: the list
+  **changes between runs**.
 
-Con esos datos la ventana abría fuera de todas las pantallas, inalcanzable con el mouse. Así que
-monitores, cursor y posición se consultan al **compositor** (en Hyprland, por su socket de
-control: ~0.01ms contra ~2.8ms de lanzar `hyprctl`), y la ventana se coloca por ahí. Fuera de
-Hyprland se cae a las APIs de Electron, validando siempre que el punto caiga dentro de un monitor
-conocido.
+With that data the window opened outside every screen, unreachable with the mouse. So monitors,
+cursor and window position are queried from the **compositor** (on Hyprland, through its control
+socket: ~0.01ms versus ~2.8ms for spawning `hyprctl`), and the window is placed through it.
+Off Hyprland it falls back to Electron's APIs, always validating that the point lands inside a
+known monitor.
 
-**La excepción deliberada es la mirada**: es una dirección *relativa* entre cursor y ventana, y
-mientras ambos valores salgan del mismo espacio de coordenadas el desfase se cancela. Mezclar los
-dos espacios ahí es justo lo que la rompe.
+**The deliberate exception is the gaze**: it is a *relative* direction between cursor and window,
+and as long as both values come from the same coordinate space the offset cancels out. Mixing the
+two spaces there is exactly what breaks it.
 
-## Colocación: flotar, después colocar, después verificar
+## Placement: float, then place, then verify
 
-El orden importa. En un WM **tiling** (Hyprland, sway, i3) la ventana se tilea y el tamaño pedido
-se ignora: hay que pedir que flote **primero** y **re-aplicar** los bounds (el compositor asigna
-su propia geometría *después* de responder al comando). En los WM stacking (GNOME, KDE, XFCE) las
-ventanas ya flotan y solo hace falta el always-on-top.
+Order matters. On a **tiling** WM (Hyprland, sway, i3) the window gets tiled and the requested
+size is ignored: you have to ask for floating **first** and **re-apply** the bounds (the
+compositor assigns its own geometry *after* answering the command). On stacking WMs (GNOME, KDE,
+XFCE) windows already float and only the always-on-top is needed.
 
-Al final siempre se **verifica** que la ventana quedó dentro de algún monitor y, si no, se
-reubica. Es la red de seguridad: una ventana fuera de pantalla no se puede recuperar con el mouse.
+At the end it always **verifies** that the window ended up inside some monitor and, if not,
+relocates it. That is the safety net: a window off-screen cannot be recovered with the mouse.
 
-Dos trampas que costaron tiempo y conviene no repetir:
+Two traps that cost time and are worth not repeating:
 
-- **`hyprctl dispatch` responde `ok` y sale 0 SIEMPRE**, encuentre o no la ventana. Su código de
-  salida no sirve como señal de éxito: hay que ubicar la ventana en `hyprctl clients` y despachar
-  por dirección.
-- **El título es la llave** con la que `wmctrl`/`kdotool`/`hyprctl` encuentran la ventana. Se fija
-  a `Hannah` y se impide que la página lo cambie; si el `<title>` del frontend lo pisara, todo el
-  refuerzo dejaría de encontrarla y fallaría en silencio.
+- **`hyprctl dispatch` answers `ok` and exits 0 ALWAYS**, whether or not it found the window. Its
+  exit code is useless as a success signal: you have to locate the window in `hyprctl clients` and
+  dispatch by address.
+- **The title is the key** that `wmctrl`/`kdotool`/`hyprctl` use to find the window. It is pinned
+  to `Hannah` and the page is prevented from changing it; if the frontend's `<title>` overwrote
+  it, the whole reinforcement would stop finding the window and fail silently.
 
-## Comportamiento de la ventana
+## Window behavior
 
-- **Widget de 400×620** en la esquina inferior derecha del monitor donde está el cursor. Recuerda
-  dónde la dejaste (`userData/window-bounds.json`), en coordenadas del compositor.
-- **No se persiste "pantalla completa"**: es un estado temporal que se pide por voz. Si se
-  guardara, Hannah reabriría tapando un monitor entero, siempre encima y en todos los escritorios.
-- **Instancia única**: apretar Super+H otra vez trae la ventana al frente en vez de abrir una
-  segunda Hannah (dos avatares, dos sesiones, dos micrófonos peleando).
-- **Cerrar la ventana apaga todo el stack** cuando la lanzó el launcher (`HANNAH_STOP_ON_EXIT=1`),
-  delegando en `./hannah stop`. Los sidecars y los modelos retienen VRAM mientras viven: sin esto
-  quedaban ~14GB tomados sin nada usándolos. Arrancarla a mano **no** apaga nada, para no llevarse
-  puestos servicios que estabas usando.
-- **Movimiento por voz**: el backend mueve la ventana con su propio adaptador y solo delega en la
-  app si no pudo (Windows, macOS, o Linux sin `hyprctl`/`wmctrl`). Si movieran los dos, un comando
-  relativo como "andá a la otra pantalla" saltearía un monitor.
+- **400×620 widget** in the bottom-right corner of the monitor where the cursor is. It remembers
+  where you left it (`userData/window-bounds.json`), in compositor coordinates.
+- **"Fullscreen" is not persisted**: it is a temporary state requested by voice. If it were saved,
+  Hannah would reopen covering an entire monitor, always on top and on every workspace.
+- **Single instance**: pressing Super+H again brings the window to the front instead of opening a
+  second Hannah (two avatars, two sessions, two microphones fighting each other).
+- **Closing the window shuts down the whole stack** when the launcher started it
+  (`HANNAH_STOP_ON_EXIT=1`), delegating to `./hannah stop`. Sidecars and loaded models hold VRAM
+  for as long as they live: without this, ~14GB stayed taken with nothing using them. Starting the
+  app by hand does **not** shut anything down, so it won't take out services you were using.
+- **Voice-driven moves**: the backend moves the window with its own adapter and only delegates to
+  the app when it couldn't (Windows, macOS, or Linux without `hyprctl`/`wmctrl`). If both moved
+  it, a relative command like "go to the other screen" would skip a monitor.
 
-## Variables de entorno
+## Environment variables
 
-| Variable | Para qué |
+| Variable | Purpose |
 |---|---|
-| `HANNAH_DEV=1` | Cargar el servidor de Vite (`:5173`) en vez del `dist` empaquetado |
-| `HANNAH_STOP_ON_EXIT=1` | Al cerrar la ventana, apagar el stack. Lo pone el launcher |
-| `HANNAH_OZONE` | Plataforma de ozone (default `x11`) |
-| `HANNAH_GPU=separate` | No forzar el GPU en proceso |
-| `HANNAH_DEBUG=1` | Traza de la colocación: cursor, monitores, bounds pedidos y reales |
+| `HANNAH_DEV=1` | Load the Vite dev server (`:5173`) instead of the packaged `dist` |
+| `HANNAH_STOP_ON_EXIT=1` | On window close, shut down the stack. Set by the launcher |
+| `HANNAH_OZONE` | Ozone platform (default `x11`) |
+| `HANNAH_GPU=separate` | Don't force the in-process GPU |
+| `HANNAH_DEBUG=1` | Placement trace: cursor, monitors, requested and actual bounds |
 
-## Empaquetado
+## Packaging
 
-En modo empaquetado la app sirve el `dist` con un mini servidor estático propio en un puerto
-aleatorio, **sin proxy de Vite** — por eso el frontend habla con el backend por URL absoluta
-(`window.__HANNAH_DESKTOP__.backendBase`, ver `src/lib/api.js` del frontend).
+When packaged, the app serves `dist` with its own tiny static server on a random port, **with no
+Vite proxy** — which is why the frontend talks to the backend through an absolute URL
+(`window.__HANNAH_DESKTOP__.backendBase`, see the frontend's `src/lib/api.js`).
 
-La app es **solo el overlay**: sigue necesitando el backend, Ollama y los sidecars corriendo.
-Empaquetar el backend como servicio es trabajo futuro.
+The app is **only the overlay**: it still needs the backend, Ollama and the sidecars running.
+Packaging the backend as a service is future work.
 
-Ver también `../README.md` (mapa del workspace) y `../SETUP.md` (levantar todo en una máquina
-nueva, con la matriz por escritorio y el diagnóstico `./hannah doctor`).
+See also `../README.md` (workspace map) and `../SETUP.md` (bringing everything up on a new
+machine, with the per-desktop matrix and the `./hannah doctor` diagnostic).
