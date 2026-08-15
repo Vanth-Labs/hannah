@@ -5,6 +5,7 @@ import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
 import { toolSchemas, runTool } from './tools.js';
 import { skillsPromptSection, resolveSkill } from '../state/skills.js';
+import { referencePromptSection } from '../state/reference.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
 
@@ -50,7 +51,7 @@ async function buildSystemPrompt(history, withActions = true) {
     let memorySection = '';
     if (summary) memorySection += `\n\n[What you remember about the user and past conversations]\n${summary}`;
     if (recalled) memorySection += `\n\n[Relevant things from earlier conversations]\n${recalled}`;
-    const skillsSection = withActions ? skillsPromptSection() : '';
+    const skillsSection = withActions ? skillsPromptSection() + referencePromptSection() : '';
     return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}${skillsSection}`;
 }
 
