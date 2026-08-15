@@ -7,7 +7,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('__HANNAH_DESKTOP__', {
   isDesktop: true,
   backendBase: 'http://localhost:3001',   // el frontend usa esto en vez de rutas relativas
-  onGaze: (cb) => ipcRenderer.on('hannah:gaze', (_e, g) => cb(g)),
+  // Devuelve un unsubscribe para que el consumidor pueda limpiar (React StrictMode monta
+  // y desmonta los efectos dos veces: sin esto quedaban listeners duplicados).
+  onGaze: (cb) => {
+    const handler = (_e, g) => cb(g);
+    ipcRenderer.on('hannah:gaze', handler);
+    return () => ipcRenderer.removeListener('hannah:gaze', handler);
+  },
   moveWindow: (spec) => ipcRenderer.invoke('hannah:move', spec),
   getMonitors: () => ipcRenderer.invoke('hannah:monitors'),
 });
