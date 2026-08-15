@@ -14,6 +14,25 @@ import { getShortcuts } from '../state/shortcuts.js';
 // Comandos DESTRUCTIVOS que requieren confirmación del usuario (lo demás corre libre).
 export const DANGER = /\brm\s+\S|\brmdir\b|\bunlink\b|\bRemove-Item\b|\bdel\s+\S|\bmkfs|\bdd\s+.*\bof=|:\(\)\s*\{\s*:|>\s*\/dev\/(?!null)|\bchmod\s+-R\s+0|\b(shutdown|reboot|poweroff|halt|fdisk|wipefs|userdel|mkswap)\b|\bgit\s+.*--force|\bmv\s+\S+\s+\/\s*$/i;
 
+/**
+ * Gate de seguridad ÚNICO para todo lo que ejecuta comandos (run_command y las skills
+ * `terminal`): si el comando matchea DANGER, le pide confirmación al usuario y espera.
+ * Devuelve { approved, message } — `message` es la respuesta a darle al modelo si se niega.
+ */
+export async function confirmIfDangerous(command, ctx) {
+  if (!DANGER.test(command)) return { approved: true };
+  if (!ctx?.send) return { approved: false, message: `refused for safety (no way to ask you to confirm): ${command}` };
+  const { id, promise } = requestConfirm();
+  ctx.send({ type: 'confirm_command', id, command });
+  const approved = await promise;
+  return approved
+    ? { approved: true }
+    : { approved: false, message: `the user did NOT approve running: ${command}` };
+}
+
+// Normaliza a URL absoluta https:// si el modelo/usuario dio solo el dominio.
+const ensureHttps = (url) => (/^https?:\/\//i.test(url || '') ? url : `https://${url}`);
+
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36';
 
 const fn = (name, description, properties = {}, required = []) => ({
@@ -56,7 +75,7 @@ const TOOLS = {
       { url: { type: 'string', description: 'the URL to read' } }, ['url']),
     handler: async ({ url }) => {
       try {
-        const u = /^https?:\/\//i.test(url || '') ? url : `https://${url}`;
+        const u = ensureHttps(url);
         const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(9000) });
         const html = await r.text();
         const text = html
@@ -74,7 +93,7 @@ const TOOLS = {
     schema: fn('open_url', 'Open a URL in the default browser (a VISIBLE window, to show the user a page).',
       { url: { type: 'string', description: 'the URL to open' } }, ['url']),
     handler: async ({ url }) => {
-      const u = /^https?:\/\//i.test(url || '') ? url : `https://${url}`;
+      const u = ensureHttps(url);
       // Validar y NO pasar por shell: execFile con args -> la URL nunca se interpreta (sin inyección).
       let parsed;
       try { parsed = new URL(u); } catch { return `invalid url: ${url}`; }
@@ -149,14 +168,8 @@ const TOOLS = {
       if (!config.tools.systemControl) return 'terminal access is off (enable system control to allow it)';
       const cmd = String(command || '').trim();
       if (!cmd) return 'no command given';
-      // Confirmación SOLO para comandos destructivos.
-      if (DANGER.test(cmd)) {
-        if (!ctx?.send) return `refused for safety (no way to ask you to confirm): ${cmd}`;
-        const { id, promise } = requestConfirm();
-        ctx.send({ type: 'confirm_command', id, command: cmd });
-        const approved = await promise;
-        if (!approved) return `the user did NOT approve running: ${cmd}`;
-      }
+      const gate = await confirmIfDangerous(cmd, ctx);
+      if (!gate.approved) return gate.message;
       let out = await runCommand(ctx?.sessionId || 'default', cmd);
       // Limpiar líneas de prompt del shell y mostrar el toast (para CUALQUIER origen: el
       // modelo con [RUN:], la capa determinista o una skill).

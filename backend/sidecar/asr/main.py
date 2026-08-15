@@ -12,25 +12,12 @@ from faster_whisper import WhisperModel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+import sys as _sys, pathlib as _pathlib
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent.parent))
+from common import preload_cuda_libs   # noqa: E402  (helper compartido de los sidecars)
+
 app = FastAPI(title="Hannah ASR Sidecar", version="1.0.0")
 
-
-def preload_cuda_libs():
-    """CTranslate2 (faster-whisper) necesita cuBLAS/cuDNN 9. No están instaladas
-    en el sistema, pero el venv del sidecar de motion (torch cu128) las trae:
-    precargarlas con RTLD_GLOBAL antes de crear el modelo."""
-    nvidia_dir = Path(__file__).resolve().parents[3] / ".venv" / "lib"
-    libs = []
-    for pkg in ("nvjitlink", "cuda_runtime", "cublas", "cudnn", "cufft", "curand"):
-        libs += sorted(glob.glob(str(nvidia_dir / "python3*" / "site-packages" / "nvidia" / pkg / "lib" / "*.so*")))
-    loaded = 0
-    for lib in libs:
-        try:
-            ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
-            loaded += 1
-        except OSError:
-            pass
-    logger.info(f"Preloaded {loaded} CUDA libs from motion venv")
 
 
 WHISPER_SIZE = os.environ.get("WHISPER_MODEL", "small")

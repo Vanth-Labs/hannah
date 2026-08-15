@@ -14,21 +14,12 @@ import soundfile as sf
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+import sys as _sys, pathlib as _pathlib
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent.parent))
+from common import preload_cuda_libs   # noqa: E402  (helper compartido de los sidecars)
+
 app = FastAPI(title="Hannah TTS Sidecar", version="1.0.0")
 
-
-def preload_cuda_libs():
-    """El CUDA EP de onnxruntime necesita cuBLAS/cuDNN 9; se toman prestadas
-    del venv de motion (torch cu128) precargándolas con RTLD_GLOBAL."""
-    nvidia_dir = Path(__file__).resolve().parents[3] / ".venv" / "lib"
-    libs = []
-    for pkg in ("nvjitlink", "cuda_runtime", "cublas", "cudnn", "cufft", "curand"):
-        libs += sorted(glob.glob(str(nvidia_dir / "python3*" / "site-packages" / "nvidia" / pkg / "lib" / "*.so*")))
-    for lib in libs:
-        try:
-            ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
-        except OSError:
-            pass
 
 
 kokoro_model = None

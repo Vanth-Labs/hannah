@@ -110,7 +110,18 @@ const ACTION_TOOL = {
     browse: ['open_url', 'url'], close: ['close_window', 'target'], weather: ['get_weather', 'location'], look: ['look_now', null],
     time: ['get_datetime', null], open: ['open_app', 'name'],
 };
-const ACTION_RE = /\[\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|SKILL)\b\s*(?::\s*([^\]\n]*))?\]/gi;
+// ÚNICA fuente del vocabulario de tags: de acá salen tanto el parseo (ACTION_RE) como la
+// limpieza previa al TTS (stripActionTags, que usa el orchestrator). Antes eran dos regex
+// escritas a mano: agregar un tag y olvidar la otra hacía que el TTS lo leyera en voz alta.
+// RECALL sigue en la lista de STRIP (la tool ya no existe, pero si el modelo lo emite igual
+// no debe llegar al audio).
+export const ACTION_TAGS = [...Object.keys(ACTION_TOOL).map((k) => k.toUpperCase()), 'SKILL'];
+const STRIP_TAGS = [...ACTION_TAGS, 'RECALL'];
+const ACTION_RE = new RegExp(`\\[\\s*(${ACTION_TAGS.join('|')})\\b\\s*(?::\\s*([^\\]\\n]*))?\\]`, 'gi');
+
+/** Quita los tags de acción del texto hablado (con [ ], ( ) o * * como delimitador). */
+export const stripActionTags = (text) => String(text).replace(
+    new RegExp(`[[(*]\\s*(${STRIP_TAGS.join('|')})\\b\\s*:?[^\\])*\\n]*[\\])*]`, 'gi'), '');
 
 function parseActions(text) {
     const acts = []; let m; ACTION_RE.lastIndex = 0;

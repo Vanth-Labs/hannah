@@ -8,11 +8,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
+import { DATA_DIR } from './dataDir.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIRS = [
   path.resolve(__dirname, '../../reference'),        // defaults del repo
-  path.resolve(__dirname, '../../data/reference'),   // del usuario (gitignored)
+  path.join(DATA_DIR, 'reference'),   // del usuario (gitignored)
 ];
 const MAX_CHARS = 6000;   // cota para no inflar el prompt
 

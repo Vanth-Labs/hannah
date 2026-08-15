@@ -2,9 +2,8 @@
 // Adaptador de ventana para X11 (Xorg / XWayland) vía xdotool + wmctrl. Cubre la mayoría
 // del Linux no-Wayland. Misma interfaz que el adaptador Hyprland.
 // NOTA: probado en el layout estándar de xdotool/wmctrl; requiere `xdotool` y `wmctrl`.
-import { exec } from 'child_process';
+import { sh } from './sh.js';
 
-const sh = (cmd) => new Promise((res) => exec(cmd, { timeout: 3000 }, (e, out) => res(e ? null : out)));
 
 export async function probe() {
   return !!process.env.DISPLAY && !!(await sh('command -v xdotool'));

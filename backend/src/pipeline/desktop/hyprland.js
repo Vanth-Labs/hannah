@@ -1,9 +1,8 @@
 // src/pipeline/desktop/hyprland.js
 // Adaptador de ventana para Hyprland (Wayland) vía hyprctl. Implementa la interfaz
 // { probe, getMonitors, getCursor, findWindow, place } que consume windowControl.js.
-import { exec } from 'child_process';
+import { sh } from './sh.js';
 
-const sh = (cmd) => new Promise((res) => exec(cmd, { timeout: 3000 }, (e, out) => res(e ? null : out)));
 const isHannah = (w) => (w.title || '').startsWith('Hannah') || (w.initialTitle || '').startsWith('Hannah');
 
 async function hypr(json) {

@@ -11,6 +11,15 @@ const EMOTION_MAP = {
     thinking: 'neutral', sad: 'sadness',
 };
 
+// Envelope de respuesta del sidecar de motion (mismo contrato para los dos providers).
+const toMotionResult = (data, timer) => ({
+    fps: data.fps,
+    num_frames: data.num_frames,
+    poses_b64: data.poses_b64,
+    trans_b64: data.trans_b64,
+    motion_latency_ms: timer.stop(),
+});
+
 /**
  * Genera movimiento SMPL-X con el modelo de hannah-motion-lab (texto→movimiento).
  * Nunca lanza excepciones: en caso de fallo devuelve { error }.
@@ -39,13 +48,7 @@ export const generateMotionFromText = async (
             },
             { timeout: 15000 }
         );
-        return {
-            fps: response.data.fps,
-            num_frames: response.data.num_frames,
-            poses_b64: response.data.poses_b64,
-            trans_b64: response.data.trans_b64,
-            motion_latency_ms: timer.stop(),
-        };
+        return toMotionResult(response.data, timer);
     } catch (error) {
         logger.error('Motion-lab sidecar failed', { message: error.message });
         return { error: 'motion_failed', message: error.message };
@@ -80,13 +83,7 @@ export const generateMotion = async (wavBuffer) => {
             { headers: form.getHeaders(), timeout: 15000, maxBodyLength: Infinity }
         );
 
-        return {
-            fps: response.data.fps,
-            num_frames: response.data.num_frames,
-            poses_b64: response.data.poses_b64,
-            trans_b64: response.data.trans_b64,
-            motion_latency_ms: timer.stop(),
-        };
+        return toMotionResult(response.data, timer);
     } catch (error) {
         logger.error('Motion sidecar (EMAGE) failed', { message: error.message });
         return { error: 'motion_failed', message: error.message };

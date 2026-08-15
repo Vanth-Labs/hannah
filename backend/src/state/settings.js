@@ -3,15 +3,11 @@
 // El pipeline lee siempre `config.*`, así que aquí solo mutamos ese objeto in-place.
 // Precedencia: defaults de .env (seed) -> data/settings.json (lo que el user cambió) ->
 // PATCH en runtime vía POST /settings.
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
+import { jsonFile } from './dataDir.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../data');
-const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const SETTINGS_FILE = jsonFile('settings.json');
 
 // Campos editables por sección (whitelist). Nada fuera de esto se toca desde la API.
 const ALLOWED = {
@@ -73,22 +69,13 @@ function snapshot() {
 
 /** Escribe data/settings.json (gitignored, como .env). */
 export function persist() {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(snapshot(), null, 2));
-  } catch (error) {
-    logger.error('No se pudo persistir settings.json', { message: error.message });
-  }
+  SETTINGS_FILE.write(snapshot());
 }
 
 /** Al boot: aplica data/settings.json POR ENCIMA de los defaults de .env. */
 export function loadPersisted() {
-  try {
-    if (!fs.existsSync(SETTINGS_FILE)) return;
-    const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-    applySettings(saved);
-    logger.info('Settings de usuario cargados desde data/settings.json');
-  } catch (error) {
-    logger.error('No se pudo cargar settings.json', { message: error.message });
-  }
+  const saved = SETTINGS_FILE.read();
+  if (!saved) return;
+  applySettings(saved);
+  logger.info('Settings de usuario cargados desde data/settings.json');
 }

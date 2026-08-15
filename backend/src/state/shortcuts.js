@@ -8,14 +8,10 @@
 //
 // Precedencia: DEFAULTS (horneados aquí) se escriben al archivo la primera vez; a partir
 // de ahí el archivo es la fuente de verdad (lo que el usuario agregó/quitó se respeta).
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
+import { jsonFile } from './dataDir.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../data');
-const FILE = path.join(DATA_DIR, 'shortcuts.json');
+const FILE = jsonFile('shortcuts.json');
 
 // Defaults que se envían de fábrica: varias páginas y apps comunes ya listas.
 export const DEFAULTS = {
@@ -64,29 +60,21 @@ export function setShortcuts(next = {}) {
 }
 
 function persist() {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(shortcuts, null, 2));
-  } catch (error) {
-    logger.error('No se pudo persistir shortcuts.json', { message: error.message });
-  }
+  FILE.write(shortcuts);
 }
 
 /** Al boot: carga data/shortcuts.json; si no existe, lo crea con los defaults. */
 export function loadShortcuts() {
-  try {
-    if (!fs.existsSync(FILE)) {
-      persist();   // sembrar con defaults la primera vez
-      logger.info('shortcuts.json creado con defaults');
-      return;
-    }
-    const saved = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    shortcuts = {
-      sites: normalize(saved.sites || {}),
-      apps: normalize(saved.apps || {}),
-    };
-    logger.info('Atajos de usuario cargados desde data/shortcuts.json');
-  } catch (error) {
-    logger.error('No se pudo cargar shortcuts.json (uso defaults)', { message: error.message });
+  if (!FILE.exists()) {
+    persist();   // sembrar con defaults la primera vez
+    logger.info('shortcuts.json creado con defaults');
+    return;
   }
+  const saved = FILE.read();
+  if (!saved) return;   // corrupto: se conservan los defaults (jsonFile ya logueó)
+  shortcuts = {
+    sites: normalize(saved.sites || {}),
+    apps: normalize(saved.apps || {}),
+  };
+  logger.info('Atajos de usuario cargados desde data/shortcuts.json');
 }

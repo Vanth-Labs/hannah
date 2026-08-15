@@ -1,6 +1,6 @@
 // src/pipeline/orchestrator.js
 import { transcribeAudio } from './asr.js';
-import { generateDialogueStream } from './llm.js';
+import { generateDialogueStream, stripActionTags } from './llm.js';
 import { synthesizeSpeechStream } from './tts.js';
 import { generateVisemesFromText } from './lipsync.js';
 import { generateMotion, generateMotionFromText } from './motion.js';
@@ -68,10 +68,9 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     // Quitar etiquetas MOTION:/EMOTION:/MOVE: con cualquier delimitador: no deben verse
     // en el subtítulo, oírse en el TTS ni condicionar el co-speech. Incluye variantes
     // sin cerrar (streaming parcial) para que nunca se filtre un corchete suelto.
-    const text = rawText
-        // con o sin corchetes (llama3.1:8b a veces los omite), cerrada o no
-        // Acciones: SIEMPRE con corchete (son palabras comunes; jamás estripar "look"/"time" sueltos).
-        .replace(/[[(*]\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|RECALL|SKILL)\b\s*:?[^\])*\n]*[\])*]/gi, '')
+    // Acciones: SIEMPRE con corchete (son palabras comunes; jamás estripar "look"/"time"
+    // sueltos). El vocabulario viene de llm.js -> una sola fuente con el parser.
+    const text = stripActionTags(rawText)
         // Gestos/emoción/mover: con o sin corchete (el 8B a veces los omite).
         .replace(/[[(*]?\s*(MOTION|EMOTION|MOVE)\s*:[^\])*\n]*[\])*]?/gi, '')
         // Tags inventados por el modelo, tipo [FULLSCREEN] / [DONE] (corchete + MAYÚSCULAS, sin :).
@@ -142,6 +141,31 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
 };
 
 /**
+ * Capa DETERMINISTA del turno (misma para voz y texto): mover / abrir / cerrar ventana, y
+ * luego skills con `phrases` o intents genéricos (ejecutá/creá/listá/busca/lee X). Es lo que
+ * hace que un modelo débil no "finja" que corrió algo. Si nada matchea, el modelo actuará por
+ * tags ([RUN:]/[SKILL:]).
+ * Devuelve { turnText, dataResult }: turnText lleva el resultado real inyectado si lo hubo.
+ */
+async function runDeterministicLayer(text, sessionId, onStreamSegment) {
+    const ctx = { sessionId, send: onStreamSegment };
+    const moveSpec = parseMoveIntent(text);
+    if (moveSpec) { markUserMove(sessionId); moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
+    // await + catch: son async; sin esto un throw se volvía unhandledRejection (mata el proceso).
+    await handleOpenIntent(text, ctx).catch((e) => logger.error('handleOpenIntent falló', { message: e.message }));
+    await handleCloseIntent(text, ctx).catch((e) => logger.error('handleCloseIntent falló', { message: e.message }));
+
+    const dataResult = (await resolveSkillPhrase(text, ctx))
+        || (await resolveDataAction(text, ctx));
+    const turnText = dataResult
+        ? `${text}\n\n${dataResult}\n${NO_INVENTAR}`
+        : text;
+    return { turnText, dataResult };
+}
+// Instrucción que acompaña al resultado real inyectado (única fuente).
+const NO_INVENTAR = '(Responde al usuario con este resultado real; no lo inventes.)';
+
+/**
  * Orquesta un turno completo de conversación desde audio entrante hasta streaming de respuesta.
  */
 export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, signal) => {
@@ -158,20 +182,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
             throw new Error(asrResult.message || 'No se detectó voz clara en el audio');
         }
 
-        const ctx = { sessionId, send: onStreamSegment };
-        // Acciones DETERMINISTAS (no dependen de que el LLM acierte): mover / abrir / ejecutar / buscar.
-        const moveSpec = parseMoveIntent(asrResult.transcript);
-        if (moveSpec) { markUserMove(sessionId); moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
-        handleOpenIntent(asrResult.transcript, ctx);                    // "abre X" (sin resultado)
-        handleCloseIntent(asrResult.transcript, ctx);                   // "cierra X" (sin resultado)
-        // Capa DETERMINISTA siempre primero (fiable en cualquier modelo): skills con `phrases`
-        // y luego intents genéricos (ejecutá/creá/listá/busca/lee X). Así el modelo débil no
-        // "finge" que corrió algo. Si nada matchea, el modelo actúa por tags ([RUN:]/[SKILL:]).
-        const dataResult = (await resolveSkillPhrase(asrResult.transcript, ctx))
-            || (await resolveDataAction(asrResult.transcript, ctx));
-        const turnText = dataResult
-            ? `${asrResult.transcript}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
-            : asrResult.transcript;
+        const { turnText, dataResult } = await runDeterministicLayer(asrResult.transcript, sessionId, onStreamSegment);
 
         // Guardar el turno (con el resultado inyectado si hubo acción de datos).
         conversationManager.addTurn(sessionId, 'user', turnText);
@@ -228,17 +239,7 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
         const session = conversationManager.getSession(sessionId);
         if (!session) throw new Error('La sesión no existe o ha expirado');
 
-        const ctx = { sessionId, send: onStreamSegment };
-        // Acciones deterministas: mover / abrir / ejecutar / buscar / leer.
-        const moveSpec = parseMoveIntent(text);
-        if (moveSpec) { markUserMove(sessionId); moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
-        handleOpenIntent(text, ctx);
-        handleCloseIntent(text, ctx);
-        const dataResult = (await resolveSkillPhrase(text, ctx))
-            || (await resolveDataAction(text, ctx));
-        const turnText = dataResult
-            ? `${text}\n\n${dataResult}\n(Responde al usuario con este resultado real; no lo inventes.)`
-            : text;
+        const { turnText, dataResult } = await runDeterministicLayer(text, sessionId, onStreamSegment);
         conversationManager.addTurn(sessionId, 'user', turnText);
 
         const updatedSession = conversationManager.getSession(sessionId);

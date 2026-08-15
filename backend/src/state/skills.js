@@ -13,13 +13,13 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
+import { DATA_DIR } from './dataDir.js';
 import { config } from '../config.js';
-import { runTool, DANGER } from '../pipeline/tools.js';
-import { requestConfirm } from '../pipeline/terminal.js';
+import { runTool, confirmIfDangerous } from '../pipeline/tools.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SHIPPED_DIR = path.resolve(__dirname, '../../skills');       // defaults del repo
-const USER_DIR = path.resolve(__dirname, '../../data/skills');     // del usuario (gitignored)
+const SHIPPED_DIR = path.resolve(__dirname, '../../skills');   // defaults del repo
+const USER_DIR = path.join(DATA_DIR, 'skills');                // del usuario (gitignored)
 
 let skills = [];   // [{ name, description, action:{type,template}, confirm, phrases:[], body, raw, source }]
 
@@ -155,13 +155,9 @@ async function execSkill(skill, arg, ctx) {
     // comando; el usuario sigue la sesión (password, etc.). Mismo gate que run_command.
     if (!config.tools.systemControl) return 'terminal access is off (enable system control)';
     // SSH: armar user@host desde lo dictado (más robusto que el {arg} literal).
-    let command = /^\s*ssh\b/i.test(skill.action.template) ? `ssh ${sshArg(arg)}`.trim() : filled;
-    if (DANGER.test(command)) {
-      if (!ctx?.send) return `refused for safety: ${command}`;
-      const { id, promise } = requestConfirm();
-      ctx.send({ type: 'confirm_command', id, command });
-      if (!(await promise)) return `the user did NOT approve running: ${command}`;
-    }
+    const command = /^\s*ssh\b/i.test(skill.action.template) ? `ssh ${sshArg(arg)}`.trim() : filled;
+    const gate = await confirmIfDangerous(command, ctx);   // mismo gate que run_command
+    if (!gate.approved) return gate.message;
     // Con argumento dictado por voz -> NO ejecutar solo: lo escribe y el usuario da Enter
     // (así corrige si la voz falló el host/usuario). Sin argumento -> corre directo.
     const autorun = !/\{[^}]*\}/.test(skill.action.template);

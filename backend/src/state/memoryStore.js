@@ -6,12 +6,10 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
 import { config } from '../config.js';
+import { DATA_DIR } from './dataDir.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../data');
 // Ruta de la DB configurable (MEMORY_DB_PATH): default el archivo persistente;
 // los tests usan ':memory:' para NO tocar la memoria real del usuario.
 const DB_PATH = config.memory.dbPath || path.join(DATA_DIR, 'memory.db');
