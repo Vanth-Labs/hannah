@@ -306,13 +306,27 @@ function doMove(spec) {
 ipcMain.handle('hannah:move', (_e, spec) => { doMove(spec); return true; });
 ipcMain.handle('hannah:monitors', () => screen.getAllDisplays().map((d, i) => ({ index: i + 1, name: d.label || `screen ${i + 1}` })));
 
-// Fallar RUIDOSAMENTE: sin esto, un error al crear la ventana dejaba el proceso vivo, sin
-// ventana y sin un solo mensaje — el arranque parecía "no hacer nada" y no había por dónde
-// agarrarlo. Lo mismo con la carga del frontend: si el dev server no está, hay que decirlo.
-app.whenReady().then(createWindow).catch((e) => {
-  console.error('[hannah] no se pudo crear la ventana:', e);
+// Instancia única: Super+H se aprieta muchas veces. La segunda vez hay que traer la ventana
+// al frente, no abrir una segunda Hannah (dos avatares, dos sesiones, dos micrófonos).
+if (!app.requestSingleInstanceLock()) {
   app.quit();
-});
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.setAlwaysOnTop(true, 'screen-saver');   // por si el WM se lo bajó mientras tanto
+    win.focus();
+  });
+
+  // Fallar RUIDOSAMENTE: sin esto, un error al crear la ventana dejaba el proceso vivo, sin
+  // ventana y sin un solo mensaje — el arranque parecía "no hacer nada" y no había por dónde
+  // agarrarlo. Lo mismo con la carga del frontend: si el dev server no está, hay que decirlo.
+  app.whenReady().then(createWindow).catch((e) => {
+    console.error('[hannah] no se pudo crear la ventana:', e);
+    app.quit();
+  });
+}
 process.on('uncaughtException', (e) => console.error('[hannah] excepción no capturada:', e));
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
