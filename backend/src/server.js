@@ -1,5 +1,7 @@
 // src/server.js
 import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import helmet from 'helmet';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
@@ -44,8 +46,12 @@ app.use('/api/', limiter);
 // 3. Body Parsing Middleware
 app.use(express.json());
 
-// Servir cliente de prueba
-app.use(express.static('.'));
+// Servir SOLO el cliente de prueba (no todo el root: express.static('.') exponía
+// data/settings.json con API keys y data/memory.db con el historial completo).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.get(['/', '/test-client.html'], (req, res) => {
+  res.sendFile(path.resolve(__dirname, '../test-client.html'));
+});
 
 // 4. API Routes
 app.use('/api/v1', apiRouter);

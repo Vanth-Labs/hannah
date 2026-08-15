@@ -2,7 +2,7 @@
 // Tools locales que Hannah puede invocar (function-calling). Cada tool = schema
 // (formato OpenAI) + handler(args, ctx). ctx trae { sessionId } para las que lo
 // necesitan (look_now). SEGURIDAD: system control por allowlist / flag (ver abajo).
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { describeFrame } from './vlm.js';
@@ -90,8 +90,14 @@ const TOOLS = {
       { url: { type: 'string', description: 'the URL to open' } }, ['url']),
     handler: async ({ url }) => {
       const u = /^https?:\/\//i.test(url || '') ? url : `https://${url}`;
-      const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open';
-      exec(`${opener} "${u}"`, (e) => { if (e) logger.error('open_url exec', { message: e.message }); });
+      // Validar y NO pasar por shell: execFile con args -> la URL nunca se interpreta (sin inyección).
+      let parsed;
+      try { parsed = new URL(u); } catch { return `invalid url: ${url}`; }
+      if (!/^https?:$/.test(parsed.protocol)) return 'only http(s) urls are allowed';
+      const done = (e) => { if (e) logger.error('open_url exec', { message: e.message }); };
+      if (process.platform === 'darwin') execFile('open', [u], done);
+      else if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', u], done);
+      else execFile('xdg-open', [u], done);
       return `opening ${u} in the browser`;
     },
   },

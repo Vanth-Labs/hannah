@@ -72,7 +72,8 @@ async def transcribe(
     )
 
     transcript = " ".join(seg.text for seg in segments).strip()
-    logger.info(f"ASR result: {transcript[:80]}")
+    # Solo metadata (regla del proyecto: nunca loguear contenido del usuario).
+    logger.info(f"ASR done: {len(transcript)} chars, lang={info.language} p={info.language_probability:.2f}")
 
     return {
         "transcript": transcript,

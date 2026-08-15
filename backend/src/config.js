@@ -120,6 +120,7 @@ At the end of each response, append an emotion tag on a new line in the format:
   },
   memory: {
     // Recall vectorial (Fase F2): embeddings locales vía Ollama.
+    dbPath: process.env.MEMORY_DB_PATH || null,   // null = data/memory.db; ':memory:' en tests
     embedModel: process.env.EMBED_MODEL || 'nomic-embed-text',
     embedUrl: process.env.EMBED_URL || 'http://localhost:11434/api/embeddings',
     recallK: parseInt(process.env.MEMORY_RECALL_K || '3', 10),

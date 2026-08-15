@@ -78,12 +78,11 @@ export const initWebSocketGateway = (httpServer) => {
             try {
                 data = JSON.parse(message.toString());
             } catch (parseErr) {
-                // Log del contenido crudo para diagnosticar (primeros 300 chars)
-                const raw = message.toString().slice(0, 300);
+                // Solo metadata (regla: nunca loguear contenido del usuario).
                 logger.error('JSON inválido recibido', {
                     sessionId,
-                    preview: raw,
                     byteLength: message.length,
+                    firstChar: message.toString().slice(0, 1),
                 });
                 return; // no mandar error al cliente, solo ignorar
             }
