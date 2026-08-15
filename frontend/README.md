@@ -1,142 +1,143 @@
 # hannah-frontend
 
-Cliente de Hannah: React + Vite + react-three-fiber. Renderiza el avatar **VRoid/VRM**, captura
-micrófono y cámara, y convierte lo que llega del backend en **voz sincronizada con la boca, el
-cuerpo y la mirada**.
+Hannah's client: React + Vite + react-three-fiber. It renders the **VRoid/VRM** avatar, captures
+microphone and camera, and turns whatever arrives from the backend into **voice synced to mouth,
+body and gaze**.
 
 ```bash
-npm install --legacy-peer-deps   # obligatorio: vite 5 vs @vitejs/plugin-basic-ssl 2.3 (peer vite >=6)
-npm run dev                      # https en :5173; el predev copia los assets del VAD
+npm install --legacy-peer-deps   # required: vite 5 vs @vitejs/plugin-basic-ssl 2.3 (peer wants vite >=6)
+npm run dev                      # https on :5173; predev copies the VAD assets
 npm run build
 npm run lint
 ```
 
-Necesita el **backend en `:3001`**. En modo web se entra **siempre a través de Vite**, que proxea
-`/api` y `/ws` hacia allí — el frontend usa rutas relativas y el backend sigue escuchando en
-`127.0.0.1`, así que la terminal, las API keys y la memoria nunca quedan expuestas a la red. Lo
-que se expone es Vite (`host: 0.0.0.0`), que es por donde entra el celular.
+It needs the **backend on `:3001`**. In web mode you always go in **through Vite**, which proxies
+`/api` and `/ws` over there — the frontend uses relative URLs and the backend keeps listening on
+`127.0.0.1`, so the terminal, the API keys and the memory are never exposed to the network. What is
+exposed is Vite (`host: 0.0.0.0`), which is how the phone gets in.
 
-`HANNAH_HTTP=1` sirve HTTP en vez de HTTPS: es el modo que usa el launcher para el overlay. El
-HTTPS existe porque `getUserMedia` (micrófono y cámara) solo funciona en contexto seguro cuando
-entrás por IP desde otro dispositivo.
+`HANNAH_HTTP=1` serves HTTP instead of HTTPS: that is the mode the launcher uses for the overlay.
+HTTPS is there because `getUserMedia` (microphone and camera) only works in a secure context when
+you connect by IP from another device.
 
 ---
 
-## Cómo llega una respuesta hasta la pantalla
+## How a response makes it to the screen
 
-Todo el camino vive en `src/hooks/useWebSocket.js`, que es el **dueño de la conexión**.
+The whole path lives in `src/hooks/useWebSocket.js`, which is the **owner of the connection**.
 
-1. `POST /api/v1/session` → `{sessionId}` → se abre `ws://…/ws?sessionId=…`.
-2. Por cada oración llega un `audio_chunk` con el **WAV completo** en base64 (por eso completo:
-   se decodifica con `decodeAudioData`, que necesita el archivo entero), sus visemas y,
-   opcionalmente, el motion.
-3. El chunk se decodifica y entra en una **cola de reproducción**. `drainQueue` encadena
-   `source.onended = drainQueue`: **una oración a la vez y en orden**.
-4. Justo antes de `source.start()` se sella el tiempo del motion (`startedAt`) y se programan los
-   visemas con `setTimeout`. **Esa es toda la sincronía audio↔cuerpo**: los visemas se programan
-   cuando el chunk *empieza a sonar*, no cuando llega.
-5. `VrmAvatar` lee el estado en su `useFrame` y aplica todo a 60fps.
+1. `POST /api/v1/session` → `{sessionId}` → `ws://…/ws?sessionId=…` is opened.
+2. For each sentence an `audio_chunk` arrives with the **complete WAV** in base64 (complete for a
+   reason: it is decoded with `decodeAudioData`, which needs the whole file), its visemes and,
+   optionally, the motion.
+3. The chunk is decoded and enters a **playback queue**. `drainQueue` chains
+   `source.onended = drainQueue`: **one sentence at a time and in order**.
+4. Right before `source.start()` the motion time is stamped (`startedAt`) and the visemes are
+   scheduled with `setTimeout`. **That is the entirety of the audio↔body sync**: visemes are
+   scheduled when the chunk *starts sounding*, not when it arrives.
+5. `VrmAvatar` reads the state in its `useFrame` and applies everything at 60fps.
 
-**Barge-in**: hablar mientras Hannah habla corta la reproducción y manda `INTERRUPT`. Los timers
-de visemas se registran para poder cancelarlos — incluido el de reposo, porque si no sobrevivía a
-la interrupción y cerraba la boca a mitad de la frase siguiente.
+**Barge-in**: speaking while Hannah speaks cuts the playback and sends `INTERRUPT`. The viseme
+timers are registered so they can be cancelled — including the rest-pose one, which otherwise used
+to survive the interruption and shut the mouth halfway through the next sentence.
 
-## Estado: la regla de los selectores atómicos
+## State: the atomic-selector rule
 
-Todo el estado que ve el avatar vive en un único store zustand (`src/store/hannahStore.js`).
+All the state the avatar sees lives in a single zustand store (`src/store/hannahStore.js`).
 
-> **Siempre suscribirse con selectores atómicos** (`useHannahStore(s => s.campo)`). Nunca
-> `useHannahStore()` a secas.
+> **Always subscribe with atomic selectors** (`useHannahStore(s => s.field)`). Never plain
+> `useHannahStore()`.
 
-No es estilo: en zustand v4 el hook sin selector devuelve el objeto entero y compara por
-identidad, así que **cualquier** escritura re-renderiza a ese consumidor. Y los escritores son de
-alta frecuencia — visemas (dos escrituras por fonema), mirada (~12 Hz), logs, motion por oración.
-Suscribirse al store entero desde `App` re-renderizaba **todo el árbol, incluido el `<Canvas>` de
-r3f**, a ritmo de visema.
+This is not a style preference: in zustand v4 the hook without a selector returns the whole object
+and compares by identity, so **any** write re-renders that consumer. And the writers are
+high-frequency — visemes (two writes per phoneme), gaze (~12 Hz), logs, motion per sentence.
+Subscribing to the whole store from `App` re-rendered **the entire tree, including r3f's
+`<Canvas>`**, at viseme rate.
 
-Fuera de la UI el patrón es no suscribirse en absoluto: los hooks toman las acciones una vez con
-`getState()`, y `VrmAvatar` lee sus seis campos con `getState()` **dentro** del `useFrame` — ese
-bucle ya corre a 60fps, un re-render de React sería puro coste.
+Outside the UI the pattern is not to subscribe at all: the hooks grab the actions once with
+`getState()`, and `VrmAvatar` reads its six fields with `getState()` **inside** the `useFrame` —
+that loop already runs at 60fps, so a React re-render would be pure overhead.
 
-## El retarget: calculado, no adivinado
+## The retarget: computed, not guessed
 
-El movimiento llega como SMPL-X (T×165, axis-angle, 55 joints, 30fps) y el avatar es un VRoid con
-huesos `J_Bip_*`. La corrección por hueso es:
+The motion arrives as SMPL-X (T×165, axis-angle, 55 joints, 30fps) and the avatar is a VRoid with
+`J_Bip_*` bones. The per-bone correction is:
 
 ```
 vroid_local[j] = A_parent⁻¹ · quat(axis_angle[j]) · A_self[j]
 ```
 
-**Los offsets `A` se calculan desde la geometría de los dos esqueletos en reposo**
-(`scripts/compute_retarget_offsets.py`): posiciones reales de SMPL-X (`J_regressor @ v_template`)
-y del VRoid (recorriendo el árbol del `.glb`), dirección hueso→hijo en ambos rigs, y de ahí una
-base ortonormal. Se le pasa a cada rig **su propio eje "adelante"** — SMPL-X mira a +Z, VRoid a
-−Z — así el giro de 180° queda horneado en el offset y los gestos salen por el frente de la malla,
-no por la espalda.
+**The `A` offsets are computed from the geometry of the two skeletons in their rest pose**
+(`scripts/compute_retarget_offsets.py`): real SMPL-X positions (`J_regressor @ v_template`) and
+VRoid ones (walking the `.glb` tree), bone→child direction in both rigs, and from there an
+orthonormal basis. Each rig is given **its own "forward" axis** — SMPL-X faces +Z, VRoid −Z — so the
+180° flip is baked into the offset and the gestures come out the front of the mesh, not out its
+back.
 
-> **La lección "zombie pose"**: un intento anterior mapeó SMPL-X sobre nombres de hueso ajenos
-> adivinando la rotación de corrección. El resultado fue una pose contorsionada. El mapa de
-> nombres existe (`retarget/boneMap.js`), pero **la rotación nunca se adivina**.
+> **The "zombie pose" lesson**: an earlier attempt mapped SMPL-X onto foreign bone names by guessing
+> the correction rotation. The result was a contorted pose. The name map exists
+> (`retarget/boneMap.js`), but **the rotation is never guessed**.
 
-Sobre eso hay **cinco correcciones deliberadas**, todas por un motivo observado en el render:
+On top of that there are **five deliberate corrections**, all of them for a reason observed in the
+render:
 
-| Zona | Qué se hace | Por qué |
+| Zone | What we do | Why |
 |---|---|---|
-| Pelvis | solo se conserva el giro en Y | el offset traía ~28° de pitch que ladeaba el cuerpo entero |
-| Columna | se conserva la mitad | la generación encorva: "parece jorobada" |
-| Pies y puntas | fijos al reposo | el movimiento gira las suelas hacia afuera; de pie van plantados |
-| Dedos (30 índices) | fijos al reposo | el modelo es débil ahí (mucha dimensión, poca varianza): salen crispados |
-| Hombros | abducción de 0.22 rad | el torso VRoid es más angosto que el de SMPL-X |
+| Pelvis | keep only the Y rotation | the offset brought ~28° of pitch that tilted the whole body |
+| Spine | keep half of it | the generated motion hunches: "she looks hunchbacked" |
+| Feet and toes | pin to the rest pose | the motion splays the soles outwards; when she is standing they should stay planted |
+| Fingers (30 indices) | pin to the rest pose | the model is weak there (many dimensions, little variance): they come out clenched |
+| Shoulders | add 0.22 rad of abduction | the VRoid torso is narrower than SMPL-X's |
 
-## El avatar, capa por capa
+## The avatar, layer by layer
 
-`VrmAvatar.jsx` es el **único** componente del avatar, y aplica todo en un solo `useFrame`, en
-este orden: cuerpo co-speech o idle → gesto deliberado encima → auto-lookat → emoción → visemas →
-parpadeo → mirada de ojos → respiración → spring bones. **El orden importa**: la mirada y el
-gesto se mezclan *sobre* lo que dejó el co-speech, no lo reemplazan.
+`VrmAvatar.jsx` is the **only** avatar component, and it applies everything in a single `useFrame`,
+in this order: co-speech or idle body → deliberate gesture on top → auto-lookat → emotion → visemes
+→ blinking → eye gaze → breathing → spring bones. **The order matters**: gaze and gesture are mixed
+*over* whatever the co-speech left behind; they do not replace it.
 
-- **Visemas**: se traduce con `VISEME_TO_FCL` y se interpola rápido; el resto de morphs de boca
-  van a cero. VRoid tiene pocas formas de boca, así que varios fonemas comparten destino.
-- **Emoción**: el tag `[EMOTION:…]` del LLM se mapea a blendshapes `Fcl_*` con peso.
-- **Gestos deliberados**: clips de Mixamo horneados a JSON (`scripts/bake_mixamo.mjs`) que se
-  aplican por encima y reemplazan el co-speech durante esa oración.
-- **Spring bones**: física verlet propia para las cadenas `J_Sec_*` (pelo, falda). No se usa el
-  plugin de `@pixiv/three-vrm` en runtime: el retarget escribe directo sobre los huesos crudos.
-  `pixiv` solo se usa **offline**, dentro del horneado de Mixamo.
+- **Visemes**: translated with `VISEME_TO_FCL` and interpolated fast; the rest of the mouth morphs
+  go to zero. VRoid has few mouth shapes, so several phonemes share a target.
+- **Emotion**: the LLM's `[EMOTION:…]` tag is mapped to `Fcl_*` blendshapes with a weight.
+- **Deliberate gestures**: Mixamo clips baked to JSON (`scripts/bake_mixamo.mjs`) that are applied
+  on top and replace the co-speech during that sentence.
+- **Spring bones**: our own Verlet physics for the `J_Sec_*` chains (hair, skirt). The
+  `@pixiv/three-vrm` plugin is not used at runtime: the retarget writes straight onto the raw bones.
+  `pixiv` is only used **offline**, inside the Mixamo bake.
 
-## Entrada: micrófono y cámara
+## Input: microphone and camera
 
-- **Push-to-talk**: `MediaRecorder` (webm) mientras mantenés el botón.
-- **Manos libres**: VAD Silero local (`@ricky0123/vad-web`) que manda WAV a 16 kHz y, si detecta
-  voz mientras Hannah habla, dispara el barge-in.
-- Ambos usan la misma tripleta: `SPEECH_START` → binario → `SPEECH_END`.
-- **Visión**: `useVision` manda un JPEG base64 cada 2 s reutilizando un solo canvas.
+- **Push-to-talk**: `MediaRecorder` (webm) while you hold the button.
+- **Hands-free**: local Silero VAD (`@ricky0123/vad-web`) that sends WAV at 16 kHz and, if it detects
+  voice while Hannah is speaking, triggers the barge-in.
+- Both use the same triplet: `SPEECH_START` → binary → `SPEECH_END`.
+- **Vision**: `useVision` sends a base64 JPEG every 2 s reusing a single canvas.
 
-## Interfaz
+## Interface
 
-`HUD.jsx` tiene toda la UI 2D: estado de conexión, dock flotante de cuatro botones, toast con la
-salida real de los comandos, y el **modal de confirmación** de comandos destructivos. En modo web
-suma la barra inferior clásica (push-to-talk, entrada de texto, visión) y el transcript flotante.
+`HUD.jsx` holds all the 2D UI: connection status, floating dock of four buttons, toast with the real
+command output, and the **confirmation modal** for destructive commands. In web mode it adds the
+classic bottom bar (push-to-talk, text input, vision) and the floating transcript.
 
-`SettingsPanel.jsx` es el panel ⚙ "traé tu propio modelo": proveedores de LLM/ASR/TTS, selector de
-voces de Kokoro, atajos de voz y skills — todo contra la API del backend, **sin reiniciar nada**.
-`TerminalPanel.jsx` es una terminal real (xterm.js) anclada abajo al 40% de la ventana, para poder
-ver qué hizo Hannah sin abrir otra consola.
+`SettingsPanel.jsx` is the ⚙ "bring your own model" panel: LLM/ASR/TTS providers, Kokoro voice
+picker, voice shortcuts and skills — all against the backend API, **without restarting anything**.
+`TerminalPanel.jsx` is a real terminal (xterm.js) docked at the bottom at 40% of the window, so you
+can see what Hannah did without opening another console.
 
-**Modo overlay**: una sola fuente de verdad, `src/lib/overlay.js` — `window.__HANNAH_DESKTOP__`
-(inyectado por el preload de Electron) o `?overlay=1` en la query. Cambia el layout a widget.
-De la misma manera, `src/lib/api.js` es la única fuente del base URL del backend (vacío en el
-navegador, absoluto en Electron): **todo `fetch` tiene que usarlo**.
+**Overlay mode**: a single source of truth, `src/lib/overlay.js` — `window.__HANNAH_DESKTOP__`
+(injected by Electron's preload) or `?overlay=1` in the query. It switches the layout to widget.
+In the same way, `src/lib/api.js` is the single source of truth for the backend base URL (empty in
+the browser, absolute in Electron): **every `fetch` has to use it**.
 
-## Assets que no están en el repo
+## Assets that are not in the repo
 
-- `public/avatar.glb` — el VRM, el único avatar que se renderiza hoy.
-- `public/vad/` — lo genera `predev` (`scripts/copy-vad-assets.mjs`), gitignorado.
-- `public/animations/*.fbx` — clips crudos de Mixamo (licencia de Adobe). Bajalos de Mixamo
-  (FBX Binary, Without Skin, 30fps) y horneá con `node scripts/bake_mixamo.mjs` → regenera
-  `public/animations/baked/*.json` (esos sí se commitean).
-- `public/smplx_avatar.glb` — solo para depurar, y ya no se renderiza. Se regenera con
-  `hannah-backend/sidecar/motion/build_avatar.py` si alguna vez hace falta.
+- `public/avatar.glb` — the VRM, the only avatar rendered today.
+- `public/vad/` — generated by `predev` (`scripts/copy-vad-assets.mjs`), gitignored.
+- `public/animations/*.fbx` — raw Mixamo clips (Adobe license). Download them from Mixamo
+  (FBX Binary, Without Skin, 30fps) and bake with `node scripts/bake_mixamo.mjs` → it regenerates
+  `public/animations/baked/*.json` (those do get committed).
+- `public/smplx_avatar.glb` — for debugging only, and no longer rendered. It is regenerated with
+  `hannah-backend/sidecar/motion/build_avatar.py` if it is ever needed.
 
-Ver también `../README.md` (mapa del workspace) y `../hannah-backend/README.md` (el otro lado del
+See also `../README.md` (workspace map) and `../hannah-backend/README.md` (the other side of the
 WebSocket).
