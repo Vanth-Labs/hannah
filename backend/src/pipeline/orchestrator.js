@@ -63,7 +63,14 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     // Director de ventana: [MOVE:posición] mueve el overlay. PERO si el usuario ya movió por
     // comando determinista este turno, lo ignoramos (si no, revierte "pantalla completa").
     const moveMatch = rawText.match(/[[(*]\s*MOVE:\s*([^\])*\n]+?)\s*[\])*]/i);
-    if (moveMatch && !userMovedRecently(sessionId)) moveWindow((moveMatch[1] || '').trim());
+    if (moveMatch && !userMovedRecently(sessionId)) {
+        const spec = (moveMatch[1] || '').trim();
+        // Mismo criterio que la capa determinista: mover acá, y delegar en el cliente SOLO si
+        // el adaptador no pudo. Sin el fallback, en Windows/macOS el [MOVE:] no hacía nada.
+        moveWindow(spec)
+            .then((moved) => { if (!moved) sendCallback({ type: 'window_move', spec }); })
+            .catch((e) => logger.error('moveWindow falló', { message: e.message }));
+    }
 
     // Quitar etiquetas MOTION:/EMOTION:/MOVE: con cualquier delimitador: no deben verse
     // en el subtítulo, oírse en el TTS ni condicionar el co-speech. Incluye variantes
@@ -152,7 +159,18 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
 async function runDeterministicLayer(text, sessionId, onStreamSegment) {
     const ctx = { sessionId, send: onStreamSegment };
     const moveSpec = parseMoveIntent(text);
-    if (moveSpec) { markUserMove(sessionId); moveWindow(moveSpec); onStreamSegment({ type: 'window_move', spec: moveSpec }); }
+    if (moveSpec) {
+        markUserMove(sessionId);
+        // UN solo dueño del movimiento. Antes se movía acá Y se le pedía al cliente que se
+        // moviera: con la app de escritorio la ventana se movía DOS veces, y como los specs son
+        // relativos ("la otra pantalla"), se saltaba un monitor. Solo se delega en el cliente
+        // si el adaptador de acá no pudo (Windows/macOS, o Linux sin hyprctl/wmctrl).
+        const moved = await moveWindow(moveSpec).catch((e) => {
+            logger.error('moveWindow falló', { message: e.message });
+            return false;
+        });
+        if (!moved) onStreamSegment({ type: 'window_move', spec: moveSpec });
+    }
     // await + catch: son async; sin esto un throw se volvía unhandledRejection (mata el proceso).
     await handleOpenIntent(text, ctx).catch((e) => logger.error('handleOpenIntent falló', { message: e.message }));
     await handleCloseIntent(text, ctx).catch((e) => logger.error('handleCloseIntent falló', { message: e.message }));
