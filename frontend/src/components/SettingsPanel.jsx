@@ -233,25 +233,11 @@ function SkillsSection() {
     const [skills, setSkills] = useState([]);
     const [editing, setEditing] = useState(null);   // null | { name, content, isNew }
     const [status, setStatus] = useState('cargando…');
-    const [trust, setTrust] = useState(false);       // config.skills.trustModel
 
     const load = () => fetch(`${API_BASE}/api/v1/skills`).then((r) => r.json())
         .then((d) => { setSkills(d.skills || []); setStatus(''); })
         .catch(() => setStatus('backend no disponible'));
-    useEffect(() => {
-        load();
-        fetch(`${API_BASE}/api/v1/settings`).then((r) => r.json()).then((d) => setTrust(!!d.skills?.trustModel)).catch(() => {});
-    }, []);
-
-    const toggleTrust = async (val) => {
-        setTrust(val);
-        try {
-            await fetch(`${API_BASE}/api/v1/settings`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ skills: { trustModel: val } }),
-            });
-        } catch { /* noop */ }
-    };
+    useEffect(() => { load(); }, []);
 
     const save = async () => {
         const name = (editing.name || '').trim();
@@ -302,16 +288,6 @@ function SkillsSection() {
             <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)', marginBottom: '6px' }}>
                 Habilidades que Hannah puede usar (cualquier modelo). El backend las ejecuta.
             </div>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '7px', cursor: 'pointer',
-                background: 'rgba(122,184,232,0.08)', border: '1px solid rgba(122,184,232,0.2)',
-                borderRadius: '8px', padding: '8px 10px', marginBottom: '8px' }}>
-                <input type="checkbox" checked={trust} onChange={(e) => toggleTrust(e.target.checked)} style={{ marginTop: '2px' }} />
-                <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.7)', lineHeight: 1.4 }}>
-                    Dejar que el <b>modelo decida</b> las acciones (en vez de frases exactas). Más
-                    inteligente y puede hacer cosas no pre-definidas; requiere un modelo capaz
-                    (Claude/GPT/Groq-70b). Con el 7B local conviene dejarlo <b>apagado</b>.
-                </span>
-            </label>
             {skills.map((s) => (
                 <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
