@@ -310,7 +310,8 @@ function SkillsSection() {
 }
 
 export function SettingsPanel({ onClose }) {
-    const { autoLookat, setAutoLookat } = useHannahStore();
+    const autoLookat = useHannahStore((s) => s.autoLookat);
+    const setAutoLookat = useHannahStore((s) => s.setAutoLookat);
     const [form, setForm] = useState({ llm: {}, tts: {}, asr: {} });
     const [saved, setSaved] = useState({});   // { llm:{hasApiKey}, ... } desde el backend
     const [status, setStatus] = useState('cargando…');

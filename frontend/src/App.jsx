@@ -6,6 +6,7 @@ import { useWebSocket } from './hooks/useWebSocket.js';
 import { useVision } from './hooks/useVision.js';
 import { useVoiceActivity } from './hooks/useVoiceActivity.js';
 import { useHannahStore } from './store/hannahStore.js';
+import { DESKTOP } from './lib/api.js';
 
 // ── Fondo: gradiente oscuro con sutil vignette ──────────────────────────────
 const BG = () => (
@@ -41,7 +42,13 @@ const AvatarLoadingHint = () => {
 export default function App() {
     const { sendCommand, sendAudio, sendText, stopPlayback } = useWebSocket();
     const { videoRef, startVision, stopVision } = useVision(sendCommand);
-    const { visionActive, connected, handsFree, setHandsFree, terminalOpen } = useHannahStore();
+    // Selectores atómicos: App es la raíz, así que suscribirse al store entero re-renderizaba
+    // TODO el árbol (Scene/Canvas incluido) con cada visema/gaze/log.
+    const visionActive = useHannahStore((s) => s.visionActive);
+    const connected = useHannahStore((s) => s.connected);
+    const handsFree = useHannahStore((s) => s.handsFree);
+    const terminalOpen = useHannahStore((s) => s.terminalOpen);
+    const setHandsFree = useHannahStore((s) => s.setHandsFree);
 
     const [isRecording, setIsRecording] = useState(false);
 
@@ -50,16 +57,14 @@ export default function App() {
         if (isOverlay) setHandsFree(true);
     }, [setHandsFree]);
 
-    // En overlay-navegador, pedir al backend la mirada global (sigue el cursor).
-    useEffect(() => {
-        if (isOverlay && connected && !window.__HANNAH_DESKTOP__) sendCommand({ command: 'GAZE_ON' });
-    }, [connected, sendCommand]);
+    // (El GAZE_ON del overlay-navegador lo manda useWebSocket en su onopen: allí cubre también
+    // las reconexiones. Antes se enviaba dos veces, desde acá y desde el hook.)
 
     // En Electron, la mirada global la empuja el proceso main (cursor del OS).
     useEffect(() => {
-        if (window.__HANNAH_DESKTOP__) {
-            window.__HANNAH_DESKTOP__.onGaze((g) => useHannahStore.getState().setOverlayGaze(g));
-        }
+        if (!DESKTOP) return undefined;
+        const off = DESKTOP.onGaze((g) => useHannahStore.getState().setOverlayGaze(g));
+        return typeof off === 'function' ? off : undefined;   // desuscribir si el preload lo permite
     }, []);
 
     // En overlay, la cámara (visión) arranca sola: que Hannah te vea por defecto.

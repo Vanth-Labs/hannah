@@ -38,10 +38,12 @@ export function useWebSocket() {
         visemes.forEach(({ viseme, time_ms, weight }) => {
             const id = setTimeout(() => {
                 useHannahStore.getState().setVisemes([{ viseme, weight: weight ?? 1.0 }]);
-                // Reset a silencio después de 120ms
-                setTimeout(() => {
+                // Reset a silencio después de 120ms. El id TAMBIÉN se registra: si no, este
+                // timer sobrevivía al barge-in y cerraba la boca a mitad de la frase siguiente.
+                const resetId = setTimeout(() => {
                     useHannahStore.getState().setVisemes([{ viseme: 'sil', weight: 0 }]);
                 }, 120);
+                visemeSchedule.current.push(resetId);
             }, time_ms || 0);
             visemeSchedule.current.push(id);
         });
@@ -68,6 +70,7 @@ export function useWebSocket() {
         if (audioQueue.current.length === 0) {
             isPlaying.current = false;
             useHannahStore.getState().setIsSpeaking(false);
+            visemeSchedule.current = [];   // timers ya disparados: no acumular ids de por vida
             return;
         }
         isPlaying.current = true;
@@ -227,6 +230,10 @@ export function useWebSocket() {
                 body: '{}',
             });
             const { sessionId } = await res.json();
+            // El fetch es async: si el componente se desmontó mientras estaba en vuelo (pasa
+            // siempre con StrictMode), abortar — si no, quedaba un WebSocket huérfano abierto
+            // para siempre, con sus handlers y su propia reconexión.
+            if (unmountedRef.current) return;
             setSession(sessionId);
             addLog(`sesión: ${sessionId}`, 'info');
 
@@ -234,6 +241,8 @@ export function useWebSocket() {
 	    const wsUrl = DESKTOP
 	        ? `ws://localhost:3001/ws?sessionId=${sessionId}`
 	        : `${protocol}//${window.location.host}/ws?sessionId=${sessionId}`;
+            // Cerrar un socket anterior antes de pisar la ref (evita dejarlo colgado).
+            try { ws.current?.close(); } catch { /* noop */ }
             ws.current = new WebSocket(wsUrl);
 
             ws.current.onopen = () => {

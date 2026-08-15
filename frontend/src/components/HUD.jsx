@@ -73,9 +73,23 @@ function CommandToast({ run, onClose }) {
 export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, sendCommand }) {
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
-    const { emotion, isSpeaking, visionActive, transcript, userTranscript, connected, logs,
-        handsFree, setHandsFree, pendingConfirm, setPendingConfirm,
-        commandRun, setCommandRun, terminalOpen, setTerminalOpen } = useHannahStore();
+    // Selectores ATÓMICOS: sin ellos el HUD se re-renderizaba con CUALQUIER cambio del store
+    // (visemas varias veces por segundo, gaze ~12Hz, cada log) aunque no use esos campos.
+    const emotion = useHannahStore((s) => s.emotion);
+    const isSpeaking = useHannahStore((s) => s.isSpeaking);
+    const visionActive = useHannahStore((s) => s.visionActive);
+    const transcript = useHannahStore((s) => s.transcript);
+    const userTranscript = useHannahStore((s) => s.userTranscript);
+    const connected = useHannahStore((s) => s.connected);
+    const handsFree = useHannahStore((s) => s.handsFree);
+    const pendingConfirm = useHannahStore((s) => s.pendingConfirm);
+    const commandRun = useHannahStore((s) => s.commandRun);
+    const terminalOpen = useHannahStore((s) => s.terminalOpen);
+    // Acciones: referencias estables en zustand -> no provocan re-render.
+    const setHandsFree = useHannahStore((s) => s.setHandsFree);
+    const setPendingConfirm = useHannahStore((s) => s.setPendingConfirm);
+    const setCommandRun = useHannahStore((s) => s.setCommandRun);
+    const setTerminalOpen = useHannahStore((s) => s.setTerminalOpen);
 
     const toggleTerminal = () => {
         const next = !terminalOpen;

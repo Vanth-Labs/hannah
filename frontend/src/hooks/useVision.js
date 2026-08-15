@@ -1,11 +1,12 @@
 // src/hooks/useVision.js
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 
 export function useVision(sendCommand) {
     const videoRef = useRef(null);
     const intervalRef = useRef(null);
     const streamRef = useRef(null);
+    const canvasRef = useRef(null);   // un solo canvas reutilizado (antes: uno nuevo cada 2s)
 
     const { setVisionActive, addLog } = useHannahStore.getState();
 
@@ -28,9 +29,13 @@ export function useVision(sendCommand) {
                 const video = videoRef.current;
                 if (!video || !video.videoWidth) return;
 
-                const canvas = document.createElement('canvas');
-                canvas.width = 640;
-                canvas.height = 480;
+                let canvas = canvasRef.current;
+                if (!canvas) {
+                    canvas = document.createElement('canvas');
+                    canvas.width = 640;
+                    canvas.height = 480;
+                    canvasRef.current = canvas;
+                }
                 canvas.getContext('2d').drawImage(video, 0, 0, 640, 480);
                 const frame = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
                 sendCommand({ command: 'VISION_FRAME', frame });
@@ -49,6 +54,14 @@ export function useVision(sendCommand) {
         setVisionActive(false);
         addLog('[visión] detenida', 'vision');
     }, [sendCommand, setVisionActive, addLog]);
+
+    // Al desmontar: cortar el interval y APAGAR la cámara (si no, el stream y su luz seguían
+    // vivos aunque el componente ya no exista).
+    useEffect(() => () => {
+        clearInterval(intervalRef.current);
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+    }, []);
 
     return { videoRef, startVision, stopVision };
 }
