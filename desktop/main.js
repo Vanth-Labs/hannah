@@ -154,9 +154,20 @@ function hyprAsk(cmd) {
   });
 }
 
-// Consulta a Hyprland: socket si está, y si no el binario (que siempre funciona).
+// Consulta a Hyprland: socket si está, y si no el binario. Se RECUERDA que acá no hay
+// Hyprland: sin esta memoria, en GNOME/KDE/XFCE el sondeo de la mirada intentaba el socket y
+// además forkeaba `hyprctl` (inexistente) varias veces por segundo, para siempre — justo el
+// derroche que el socket venía a evitar. La firma de instancia no aparece a mitad de sesión,
+// así que darla por ausente es seguro.
+let hyprOk = null;   // null = sin averiguar · true = hay · false = acá no hay
+let xdoOk = null;    // ídem para xdotool
 async function hyprQuery(cmd, json = false) {
-  return (await hyprAsk(json ? `j/${cmd}` : cmd)) || out('hyprctl', json ? [cmd, '-j'] : [cmd]);
+  if (hyprOk === false) return null;
+  const raw = (await hyprAsk(json ? `j/${cmd}` : cmd))
+    || (await out('hyprctl', json ? [cmd, '-j'] : [cmd]));
+  if (raw) { hyprOk = true; return raw; }
+  if (!hyprSocket()) hyprOk = false;
+  return null;
 }
 
 // `hyprctl dispatch` responde "ok" y sale 0 SIEMPRE, encuentre o no la ventana: su código de
@@ -229,9 +240,12 @@ async function cursorPoint(mons) {
     const hypr = await hyprQuery('cursorpos');                    // "1832, 948"
     const h = hypr && hypr.match(/(-?\d+)\s*,\s*(-?\d+)/);
     if (h) { const pt = { x: +h[1], y: +h[2] }; if (monitorContaining(pt, mons)) return pt; }
-    const xdo = await out('xdotool', ['getmouselocation', '--shell']);
-    const mx = xdo && xdo.match(/X=(-?\d+)/), my = xdo && xdo.match(/Y=(-?\d+)/);
-    if (mx && my) { const pt = { x: +mx[1], y: +my[1] }; if (monitorContaining(pt, mons)) return pt; }
+    if (xdoOk !== false) {
+      const xdo = await out('xdotool', ['getmouselocation', '--shell']);
+      const mx = xdo && xdo.match(/X=(-?\d+)/), my = xdo && xdo.match(/Y=(-?\d+)/);
+      xdoOk = !!xdo;
+      if (mx && my) { const pt = { x: +mx[1], y: +my[1] }; if (monitorContaining(pt, mons)) return pt; }
+    }
     // Último recurso: la API de Electron. En X11 NATIVO (GNOME, KDE, XFCE, Cinnamon…) es
     // correcta; bajo XWayland puede mentir, por eso se acepta solo si cae dentro de un
     // monitor. Sin esto, un escritorio sin hyprctl ni xdotool abría siempre en mons[0].
@@ -286,7 +300,11 @@ async function monitorRects() {
     });
     if (ms.length) { monsCache = ms; monsAt = Date.now(); return ms; }
   } catch { /* sin hyprland */ }
-  return screen.getAllDisplays().map((d) => d.bounds);
+  // El respaldo TAMBIÉN se cachea: si no, en los escritorios sin hyprctl el cache de 10s no se
+  // poblaba nunca y cada tick del sondeo repetía todo el camino caro.
+  monsCache = screen.getAllDisplays().map((d) => d.bounds);
+  monsAt = Date.now();
+  return monsCache;
 }
 
 async function actualRect() {
@@ -359,6 +377,10 @@ function createWindow() {
     if (mons.some((m) => rect.width >= m.width * 0.9 && rect.height >= m.height * 0.9)) return;
     saveBounds(rect);
   }, 500);
+  // 'moved' es @platform darwin,win32 — en Linux NO se emite, así que arrastrar la ventana
+  // nunca guardaba su posición. 'move' sí es de todas las plataformas; el debounce de 500ms
+  // absorbe la ráfaga del arrastre.
+  win.on('move', saveSoon);
   win.on('moved', saveSoon);
   win.on('resize', saveSoon);
   // Refuerzo por escritorio: si Electron no alcanzara, se pide el always-on-top por la vía
