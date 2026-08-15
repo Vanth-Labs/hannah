@@ -71,8 +71,8 @@ app.use((err, req, res, next) => {
 });
 
 // 6. Start Server
-const httpServer = app.listen(config.port, () => {
-  logger.info(`Hannah Backend listening on port ${config.port} [ENV: ${config.env}]`);
+const httpServer = app.listen(config.port, config.host, () => {
+  logger.info(`Hannah Backend listening on ${config.host}:${config.port} [ENV: ${config.env}]`);
 });
 
 initWebSocketGateway(httpServer);

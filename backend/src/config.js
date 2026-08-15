@@ -13,6 +13,11 @@ if (process.env.NODE_ENV === 'production') {
 
 export const config = {
   port: process.env.PORT || 3001,
+  // Interfaz de escucha. Default LOCAL: el acceso desde la LAN (celular/laptop) entra por
+  // el dev-server de Vite (:5173, host 0.0.0.0), que proxea /api y /ws al backend desde
+  // esta máquina — así el backend (terminal, settings con API keys, memoria) nunca queda
+  // expuesto a la red. Poné HOST=0.0.0.0 solo si necesitás hablarle al backend directo.
+  host: process.env.HOST || '127.0.0.1',
   env: process.env.NODE_ENV || 'development',
   logLevel: process.env.LOG_LEVEL || 'info',
   asr: {

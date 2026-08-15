@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 import { processVoiceTurn } from '../pipeline/orchestrator.js';
 import { conversationManager } from '../state/conversationManager.js';
 import { logger } from '../utils/logger.js';
+import { config } from '../config.js';
 
 // Pre-importar en lugar de dynamic import por cada mensaje
 import { startVisionLoop, pushFrame, stopVisionLoop, getLastFrame, describeScene } from '../pipeline/visionLoop.js';
@@ -105,13 +106,21 @@ export const initWebSocketGateway = (httpServer) => {
                         stopGaze();
                         break;
 
+                    // El pty es una shell REAL: mismo gate que run_command (systemControl).
+                    // Sin el flag no se crea ni se escribe en la terminal.
                     case 'TERMINAL_START':
+                        if (!config.tools.systemControl) {
+                            safeSend({ type: 'error', message: 'terminal deshabilitada (activá TOOLS_SYSTEM_CONTROL)' });
+                            break;
+                        }
                         if (!detachTerminal) detachTerminal = terminalAttach(sessionId, safeSend);
                         break;
                     case 'TERMINAL_IN':
+                        if (!config.tools.systemControl) break;
                         terminalInput(sessionId, data.data || '');
                         break;
                     case 'TERMINAL_RESIZE':
+                        if (!config.tools.systemControl) break;
                         terminalResize(sessionId, data.cols, data.rows);
                         break;
                     case 'CONFIRM_COMMAND':
