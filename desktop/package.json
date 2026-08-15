@@ -5,12 +5,12 @@
   "main": "main.js",
   "type": "commonjs",
   "scripts": {
-    "start": "electron . --no-sandbox --in-process-gpu --ozone-platform=${HANNAH_OZONE:-x11}",
-    "start:dev": "HANNAH_DEV=1 npm start",
+    "start": "node scripts/run.js",
+    "start:dev": "node scripts/run.js --dev",
     "build:linux": "electron-builder --linux AppImage deb",
     "build:win": "electron-builder --win nsis",
     "build:mac": "electron-builder --mac dmg",
-    "lint": "eslint main.js preload.js"
+    "lint": "eslint main.js preload.js scripts/run.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
