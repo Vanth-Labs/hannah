@@ -7,8 +7,6 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { describeFrame } from './vlm.js';
 import { getLastFrame } from '../state/frameStore.js';
-import { memoryStore } from '../state/memoryStore.js';
-import { embed, cosine } from '../state/embeddings.js';
 import { runCommand, requestConfirm } from './terminal.js';
 import { closeWindows } from './desktop/index.js';
 import { getShortcuts } from '../state/shortcuts.js';
@@ -27,19 +25,6 @@ const TOOLS = {
   get_datetime: {
     schema: fn('get_datetime', 'Get the current local date and time.'),
     handler: async () => new Date().toLocaleString(),
-  },
-
-  recall_memory: {
-    schema: fn('recall_memory', 'Search your long-term memory for things the user told you in earlier conversations.',
-      { query: { type: 'string', description: 'what to look up' } }, ['query']),
-    handler: async ({ query }) => {
-      const q = await embed(query || '');
-      if (!q) return 'memory unavailable';
-      const top = memoryStore.embeddings(2000)
-        .map((r) => ({ t: r.text, s: cosine(q, r.vec) }))
-        .sort((a, b) => b.s - a.s).filter((r) => r.s > 0.5).slice(0, 3);
-      return top.length ? top.map((r) => r.t).join(' | ') : 'nothing relevant found';
-    },
   },
 
   look_now: {
@@ -323,14 +308,6 @@ export async function resolveDataAction(text, ctx) {
     return `[Resultados de buscar "${q}"]:\n${r}`;
   }
   return null;
-}
-
-// Schemas de las tools habilitadas (respeta config.tools.names y systemControl).
-export function toolSchemas() {
-  if (!config.tools.enabled) return [];
-  return config.tools.names
-    .filter((n) => TOOLS[n] && (n !== 'run_command' || config.tools.systemControl))
-    .map((n) => TOOLS[n].schema);
 }
 
 export async function runTool(name, args, ctx) {

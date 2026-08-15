@@ -3,7 +3,7 @@ import { OpenAI } from 'openai';
 import { config } from '../config.js';
 import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
-import { toolSchemas, runTool } from './tools.js';
+import { runTool } from './tools.js';
 import { skillsPromptSection, resolveSkill } from '../state/skills.js';
 import { referencePromptSection } from '../state/reference.js';
 import { startTimer } from '../utils/timer.js';
@@ -108,9 +108,9 @@ async function streamAnswer(messages, onToken, signal) {
 const ACTION_TOOL = {
     run: ['run_command', 'command'], search: ['web_search', 'query'], fetch: ['fetch_url', 'url'],
     browse: ['open_url', 'url'], close: ['close_window', 'target'], weather: ['get_weather', 'location'], look: ['look_now', null],
-    time: ['get_datetime', null], open: ['open_app', 'name'], recall: ['recall_memory', 'query'],
+    time: ['get_datetime', null], open: ['open_app', 'name'],
 };
-const ACTION_RE = /\[\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|RECALL|SKILL)\b\s*(?::\s*([^\]\n]*))?\]/gi;
+const ACTION_RE = /\[\s*(RUN|SEARCH|FETCH|BROWSE|CLOSE|WEATHER|LOOK|TIME|OPEN|SKILL)\b\s*(?::\s*([^\]\n]*))?\]/gi;
 
 function parseActions(text) {
     const acts = []; let m; ACTION_RE.lastIndex = 0;

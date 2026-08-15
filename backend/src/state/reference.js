@@ -34,10 +34,6 @@ export function loadReference() {
   return docs;
 }
 
-export function getReference() {
-  return docs.map((d) => ({ ...d }));
-}
-
 /** Bloque para inyectar en el system prompt: los cheat-sheets, con tope de tamaño. '' si no hay. */
 export function referencePromptSection() {
   if (!docs.length) return '';
