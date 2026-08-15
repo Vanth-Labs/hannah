@@ -240,8 +240,18 @@ export function useWebSocket() {
 	    const wsUrl = DESKTOP
 	        ? `ws://localhost:3001/ws?sessionId=${sessionId}`
 	        : `${protocol}//${window.location.host}/ws?sessionId=${sessionId}`;
-            // Cerrar un socket anterior antes de pisar la ref (evita dejarlo colgado).
-            try { ws.current?.close(); } catch { /* noop */ }
+            // Cerrar un socket anterior antes de pisar la ref (evita dejarlo colgado). CLAVE:
+            // desarmar sus handlers ANTES de cerrarlo — si no, su onclose agenda otra
+            // reconexión y se entra en un bucle (sesión nueva cada 1.5s, ningún turno llega
+            // a completarse). Mismo patrón que stopPlayback con source.onended.
+            const prev = ws.current;
+            if (prev) {
+                prev.onclose = null;
+                prev.onerror = null;
+                prev.onmessage = null;
+                try { prev.close(); } catch { /* ya cerrado */ }
+            }
+            clearTimeout(reconnectRef.current);   // matar cualquier reconexión ya agendada
             ws.current = new WebSocket(wsUrl);
 
             ws.current.onopen = () => {
@@ -252,7 +262,11 @@ export function useWebSocket() {
                 if (IS_OVERLAY && !DESKTOP) ws.current.send(JSON.stringify({ command: 'GAZE_ON' }));
             };
 
-            ws.current.onclose = () => {
+            const socket = ws.current;   // capturado: este handler es de ESTE socket
+            socket.onclose = () => {
+                // Si ya no es el socket vigente, no tocar nada (evita que un socket viejo
+                // dispare reconexiones y se entre en bucle).
+                if (ws.current !== socket) return;
                 setConnected(false);
                 addLog('WebSocket desconectado, reintentando...', 'error');
                 // Auto-reconexión (compañera siempre-encendida: sobrevive reinicios del backend).
