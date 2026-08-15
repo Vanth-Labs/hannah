@@ -166,7 +166,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
         handleCloseIntent(asrResult.transcript, ctx);                   // "cierra X" (sin resultado)
         // Capa DETERMINISTA siempre primero (fiable en cualquier modelo): skills con `phrases`
         // y luego intents genéricos (ejecutá/creá/listá/busca/lee X). Así el modelo débil no
-        // "finge" que corrió algo. trustModel solo suma la vía por tags del modelo para lo abierto.
+        // "finge" que corrió algo. Si nada matchea, el modelo actúa por tags ([RUN:]/[SKILL:]).
         const dataResult = (await resolveSkillPhrase(asrResult.transcript, ctx))
             || (await resolveDataAction(asrResult.transcript, ctx));
         const turnText = dataResult

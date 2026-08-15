@@ -117,10 +117,18 @@ At the end of each response, append an emotion tag on a new line in the format:
     vlmBaseUrl: process.env.VLM_BASE_URL || 'http://localhost:11434/v1', // Ollama OpenAI-compat
   },
   motion: {
-    // 'lab'   -> hannah-motion-lab (texto→movimiento, JSON, puerto 8005)
-    // 'emage' -> sidecar EMAGE original (audio→movimiento, multipart, puerto 8004)
+    // Dos providers con protocolos INCOMPATIBLES, cada uno con SU url (antes compartían
+    // `sidecarUrl`, así que apuntar a un puerto rompía en silencio al otro):
+    //   'lab'   -> hannah-motion-lab: texto→movimiento, JSON,      :8005 (default)
+    //   'emage' -> sidecar EMAGE:     audio→movimiento, multipart,  :8004 (fallback)
+    // MOTION_SIDECAR_URL (legacy) sigue respetándose para el provider activo.
     provider: process.env.MOTION_PROVIDER || 'lab',
-    sidecarUrl: process.env.MOTION_SIDECAR_URL || 'http://127.0.0.1:8005',
+    labUrl: process.env.MOTION_LAB_URL
+      || ((process.env.MOTION_PROVIDER || 'lab') === 'lab' && process.env.MOTION_SIDECAR_URL)
+      || 'http://127.0.0.1:8005',
+    emageUrl: process.env.MOTION_EMAGE_URL
+      || (process.env.MOTION_PROVIDER === 'emage' && process.env.MOTION_SIDECAR_URL)
+      || 'http://127.0.0.1:8004',
     enabled: process.env.MOTION_ENABLED !== 'false',
   },
   memory: {
@@ -147,16 +155,6 @@ At the end of each response, append an emotion tag on a new line in the format:
       code: 'code', vscode: 'code', files: 'xdg-open ~',
       terminal: 'x-terminal-emulator || konsole || gnome-terminal || alacritty',
     },
-  },
-  skills: {
-    // Quién dispara las acciones/skills:
-    //  false (default) -> DETERMINISTA: las frases (phrases) y el parseo del backend
-    //    disparan; fiable en cualquier modelo, pero solo hace lo que está pre-definido y
-    //    puede meter ruido de la voz (p.ej. mayúsculas).
-    //  true -> CONFÍA EN EL MODELO: se apaga la capa determinista y el modelo decide y
-    //    llena los args (más inteligente, puede hacer cosas no pre-definidas vía [RUN:]/
-    //    [SKILL:]); requiere un modelo capaz (Claude/GPT/Groq-70b; el 7B local falla más).
-    trustModel: process.env.SKILLS_TRUST_MODEL === 'true',
   },
   session: {
     ttl: parseInt(process.env.SESSION_TTL_MINUTES || '30', 10),

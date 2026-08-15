@@ -28,7 +28,7 @@ export const generateMotionFromText = async (
     const timer = startTimer();
     try {
         const response = await axios.post(
-            `${config.motion.sidecarUrl}/motion`,
+            `${config.motion.labUrl}/motion`,
             {
                 text,
                 action,
@@ -75,7 +75,7 @@ export const generateMotion = async (wavBuffer) => {
         });
 
         const response = await axios.post(
-            `${config.motion.sidecarUrl}/motion`,
+            `${config.motion.emageUrl}/motion`,
             form,
             { headers: form.getHeaders(), timeout: 15000, maxBodyLength: Infinity }
         );

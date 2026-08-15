@@ -17,7 +17,7 @@ export const getHealth = (req, res) => {
         asr: config.asr.sidecarUrl,
         tts: config.tts.sidecarUrl,
         vision: config.vision.sidecarUrl,
-        motion: config.motion.enabled ? config.motion.sidecarUrl : 'disabled',
+        motion: config.motion.enabled ? (config.motion.provider === 'lab' ? config.motion.labUrl : config.motion.emageUrl) : 'disabled',
       },
       uptime_s: Math.floor(uptime)
     });
