@@ -8,11 +8,15 @@
     "start": "electron .",
     "build:linux": "electron-builder --linux AppImage deb",
     "build:win": "electron-builder --win nsis",
-    "build:mac": "electron-builder --mac dmg"
+    "build:mac": "electron-builder --mac dmg",
+    "lint": "eslint main.js preload.js"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "electron": "^33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "eslint": "^10.8.1",
+    "globals": "^17.11.0"
   },
   "build": {
     "appId": "ai.hannah.desktop",
