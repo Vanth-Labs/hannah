@@ -1,0 +1,69 @@
+name: build
+
+# Buildea Hannah (Electron) para Linux, Windows y Mac en runners nativos.
+# Dispara al pushear un tag v* (p.ej. v1.0.1) o a mano (workflow_dispatch).
+# NOTA: este repo (hannah-desktop) empaqueta el frontend (repo aparte). El job clona
+# Hannah-Motion-Lab/frontend como hermano, lo buildea, y luego arma el instalador.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            args: --linux AppImage deb
+          - os: windows-latest
+            args: --win nsis
+          - os: macos-latest
+            args: --mac dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout hannah-desktop
+        uses: actions/checkout@v4
+        with:
+          path: hannah-desktop
+
+      # Si el repo frontend es PRIVADO, agregá un secret HANNAH_REPO_TOKEN (PAT con acceso)
+      # y descomentá la línea `token:`.
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+        with:
+          repository: Hannah-Motion-Lab/frontend
+          path: hannah-frontend
+          # token: ${{ secrets.HANNAH_REPO_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build frontend (dist que empaqueta Electron)
+        working-directory: hannah-frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build desktop installer
+        working-directory: hannah-desktop
+        env:
+          # Sin firma de código (personal); evita que electron-builder busque certificados.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: |
+          npm ci
+          npx electron-builder ${{ matrix.args }}
+
+      - name: Subir artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: hannah-${{ matrix.os }}
+          path: |
+            hannah-desktop/dist/*.AppImage
+            hannah-desktop/dist/*.deb
+            hannah-desktop/dist/*.exe
+            hannah-desktop/dist/*.dmg
+          if-no-files-found: ignore
