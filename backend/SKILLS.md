@@ -1,101 +1,101 @@
-# Skills — enseñarle capacidades a Hannah
+# Skills — teaching Hannah new capabilities
 
-Una **skill** es una capacidad que Hannah puede usar (correr un comando, abrir una web,
-buscar). Es **estilo Claude Code**: un archivo `SKILL.md` que describe la habilidad. Es
-**model-agnóstico** — funciona con cualquier LLM (local o por API): el modelo lee el índice
-de skills y decide cuál usar; **el backend la ejecuta** (el modelo no inventa el comando).
+A **skill** is a capability Hannah can use (run a command, open a website,
+search). It follows the **Claude Code style**: a `SKILL.md` file that describes the ability. It is
+**model-agnostic** — it works with any LLM (local or through an API): the model reads the skills
+index and decides which one to use; **the backend runs it** (the model never invents the command).
 
-## Dónde viven
+## Where they live
 
-- Defaults de fábrica: `hannah-backend/skills/<nombre>/SKILL.md` (vienen en el repo).
-- Las tuyas: `hannah-backend/data/skills/<nombre>/SKILL.md` (gitignored, privadas). Una skill
-  tuya con el mismo nombre **pisa** a la incluida.
+- Factory defaults: `hannah-backend/skills/<name>/SKILL.md` (bundled with the repo).
+- Yours: `hannah-backend/data/skills/<name>/SKILL.md` (gitignored, private). One of yours
+  with the same name **overrides** the bundled one.
 
-## Cómo agregar una
+## How to add one
 
-**Desde la app:** ⚙ Ajustes → sección **Skills** → «+ nueva skill», editás el `SKILL.md` y
-Guardás. Aplica sin reiniciar.
+**From the app:** ⚙ Settings → **Skills** section → «+ nueva skill», edit the `SKILL.md` and
+hit Save. It takes effect without a restart.
 
-**A mano:** creás `data/skills/mi-skill/SKILL.md`.
+**By hand:** create `data/skills/my-skill/SKILL.md`.
 
-## Formato
+## Format
 
 ```markdown
 ---
 name: ping
-description: Ver si un host responde
-run: ping -c 3 {arg}          # UNA acción: run | open | search
-phrases: ["hacé ping a", "ping a"]   # opcional (ver abajo)
-confirm: false                 # opcional
+description: Check whether a host responds
+run: ping -c 3 {arg}          # ONE action: run | open | search
+phrases: ["hacé ping a", "ping a"]   # optional (see below)
+confirm: false                 # optional
 ---
-Cuándo usarla y un ejemplo. Este texto lo lee el modelo para decidir.
-Ejemplo: "hacé ping a google.com" -> arg = google.com
+When to use it, plus an example. The model reads this text to decide.
+Example: "hacé ping a google.com" -> arg = google.com
 ```
 
-- **Una** acción por skill:
-  - `run: <comando>` — lo corre y captura la salida (comando que termina rápido).
-  - `terminal: <comando>` — abre el **panel de terminal** y escribe el comando; vos seguís la
-    sesión. Para **interactivos**: `ssh`, `python`, `htop`, `top`, `vim`… (con `run` no sirven,
-    porque no "terminan").
-  - `open: <url>` — abre la web en el navegador (ventana visible).
-  - `search: <query>` — busca en internet y te trae resultados (sin abrir navegador).
-- **Cross-platform** — cualquier acción acepta variante por sistema operativo; se elige por
+- **One** action per skill:
+  - `run: <command>` — runs it and captures the output (for commands that finish quickly).
+  - `terminal: <command>` — opens the **terminal panel** and types the command; you follow the
+    session from there. For **interactive** commands: `ssh`, `python`, `htop`, `top`, `vim`…
+    (`run` is useless for these, because they never "finish").
+  - `open: <url>` — opens the website in the browser (visible window).
+  - `search: <query>` — searches the internet and brings back the results (no browser window).
+- **Cross-platform** — any action accepts a per-OS variant; it is picked by
   `process.platform`:
   ```
   run.linux:   free -h
   run.mac:     vm_stat
   run.windows: Get-CimInstance Win32_OperatingSystem | Select FreePhysicalMemory
   ```
-  Si ponés solo `run:` (sin sufijo) se usa en todos. En Windows el shell es PowerShell.
-- **`{arg}`** (o cualquier `{...}`) se reemplaza por lo que dijiste después de la frase / el
-  input que pasa el modelo. Si la skill no lleva input, no pongas `{arg}`.
-- **`description`**: una línea; es lo que ve el modelo en su índice de skills.
+  If you only write `run:` (no suffix), it applies to every platform. On Windows the shell is PowerShell.
+- **`{arg}`** (or any `{...}`) is replaced by whatever you said after the phrase, or by the
+  input the model passes. If the skill takes no input, leave `{arg}` out.
+- **`description`**: one line; it is what the model sees in its skills index.
 
-## Dos formas de dispararse
+## Two ways to fire
 
-1. **El modelo decide** (siempre): ve tus skills en su prompt y emite
-   `[SKILL: nombre | input]` cuando encaja. Funciona con cualquier modelo; mejor cuanto
-   mejor el modelo.
-2. **Determinista por `phrases`** (opcional, 100% fiable): si el texto contiene una de las
-   `phrases`, la skill se ejecuta sí o sí, sin depender del modelo. Lo que sigue a la frase
-   es el `{arg}`. Útil para que ande parejo hasta en modelos chicos.
+1. **The model decides** (always): it sees your skills in its prompt and emits
+   `[SKILL: name | input]` when one fits. Works with any model, and the better the model, the
+   better it works.
+2. **Deterministic via `phrases`** (optional, 100% reliable): if the text contains one of the
+   `phrases`, the skill runs no matter what, with no dependency on the model. Whatever follows
+   the phrase becomes the `{arg}`. Handy for consistent behavior even on small models.
 
-## Las dos vías conviven (no hay que elegir)
+## Both paths coexist (no need to choose)
 
-La capa determinista corre **siempre primero**: si lo que dijiste matchea una `phrase` (o un
-intent del backend), se ejecuta y listo — fiable hasta con el 7B local. Si **nada** matchea, el
-turno sigue al modelo, que puede usar `[SKILL:]` o `[RUN:]` para cosas no pre-definidas. Con un
-modelo mejor (Claude/GPT/Groq-70b) esa segunda vía acierta más; con uno chico, las `phrases` son
-tu red.
+The deterministic layer runs **first, always**: if what you said matches a `phrase` (or a
+backend intent), it runs and that's the end of it — reliable even with the local 7B. If **nothing**
+matches, the turn falls through to the model, which can use `[SKILL:]` or `[RUN:]` for anything
+not pre-defined. With a better model (Claude/GPT/Groq-70b) that second path gets it right more
+often; with a small one, `phrases` are your safety net.
 
-## Referencia de comandos (además de las skills)
+## Command reference (on top of skills)
 
-Para comandos sueltos no hace falta crear una skill por cada uno: `hannah-backend/reference/*.md`
-son **cheat-sheets** (`linux.md`, `git.md`, `red.md`) con "intención → comando" y notas por SO,
-que se inyectan en el prompt para que el modelo escriba el `[RUN:]` correcto. Agregás un comando
-con **una línea**; las tuyas van en `data/reference/*.md`. Las skills quedan para lo que tiene
-mecanismo propio (sesión interactiva, abrir navegador, buscar) o lo que quieras 100% fiable.
+You don't need a skill for every one-off command: `hannah-backend/reference/*.md`
+are **cheat-sheets** (`linux.md`, `git.md`, `red.md`) with "intent → command" and per-OS notes,
+injected into the prompt so the model writes the right `[RUN:]`. Adding a command takes **one
+line**; yours go in `data/reference/*.md`. Leave skills for what needs its own mechanism
+(interactive session, opening a browser, searching) or for anything you want 100% reliable.
 
-## Seguridad
+## Security
 
-Las acciones `run` y `terminal` **exigen `TOOLS_SYSTEM_CONTROL=true`** (off por defecto; el
-mismo flag que el panel ⌨). No hay allowlist de comandos: con el flag activo corre cualquier
-cosa. La única red es el guard `DANGER` — los destructivos (`rm`, `dd`, `mkfs`, `shutdown`,
-`git --force`, …) piden confirmación en un modal antes de ejecutarse (best-effort, no es una
-barrera de seguridad; ver `tests/unit/danger.test.js`). Aun así, como el
-`{arg}` viene de la conversación y entra al comando, **revisá qué skills creás** (es tu
-máquina; `TOOLS_SYSTEM_CONTROL` es opt-in). No pongas skills con comandos que no quieras que
-se ejecuten con un argumento arbitrario.
+The `run` and `terminal` actions **require `TOOLS_SYSTEM_CONTROL=true`** (off by default; the
+same flag as the ⌨ panel). There is no command allowlist: with the flag on, anything runs.
+The only safety net is the `DANGER` guard — destructive commands (`rm`, `dd`, `mkfs`, `shutdown`,
+`git --force`, …) pop up a confirmation modal before running (best-effort, not a
+security barrier; see `tests/unit/danger.test.js`). Even so, since the
+`{arg}` comes from the conversation and ends up inside the command, **review the skills you create**
+(it is your machine; `TOOLS_SYSTEM_CONTROL` is opt-in). Don't add skills whose command you
+wouldn't want run with an arbitrary argument.
 
-## Ejemplos incluidos
+## Bundled examples
 
-Vienen 11 skills en `hannah-backend/skills/`, útiles como plantilla:
+11 skills ship in `hannah-backend/skills/`, useful as templates:
 
-- **run** (captura la salida): `hostname`, `memory`, `diskspace`, `iplocal`, `topproc`
-- **terminal** (sesión interactiva en el panel): `ssh`, `python`, `monitor`, `salir`
-- **open** (navegador): `youtube` · **search** (lee resultados): `buscar-web`
+- **run** (captures the output): `hostname`, `memory`, `diskspace`, `iplocal`, `topproc`
+- **terminal** (interactive session in the panel): `ssh`, `python`, `monitor`, `salir`
+- **open** (browser): `youtube` · **search** (reads results): `buscar-web`
 
-Notas del formato: si un SKILL.md no declara ninguna acción, se ignora; el frontmatter lo parsea
-un lector propio y mínimo (`src/state/skills.js`, no YAML completo); al guardar desde el panel el
-nombre se sanitiza a `[a-z0-9_-]`; y tus skills viven en `data/`, que está **gitignored** (no se
-suben al repo).
+Format notes: a SKILL.md that declares no action is ignored; the frontmatter is parsed by a
+minimal custom reader (`src/state/skills.js`, not full YAML); saving from the panel sanitizes the
+name to `[a-z0-9_-]`; and your skills live in `data/`, which is **gitignored** (they never get
+pushed to the repo).

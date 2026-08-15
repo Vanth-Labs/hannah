@@ -1,380 +1,394 @@
 # Hannah — backend
 
-Servidor del pipeline de Hannah: recibe voz (o texto, o un frame de cámara), decide qué hacer,
-y devuelve al avatar **audio + visemas + gestos + emoción**, en streaming por oración. También
-es quien **actúa sobre la máquina**: abre y cierra ventanas, corre comandos en una terminal
-real, busca en internet.
+Hannah's pipeline server: it takes voice (or text, or a camera frame), decides what to do,
+and returns **audio + visemes + gestures + emotion** to the avatar, streamed sentence by sentence.
+It is also the piece that **acts on the machine**: it opens and closes windows, runs commands in a
+real terminal, searches the web.
 
-Node.js (ESM) + Express + `ws`, con **sidecars Python** para el trabajo de GPU (Whisper, Kokoro,
-YOLO/VLM, EMAGE). Todo el stack por defecto corre **local**: Ollama para el LLM y los
-embeddings, y los sidecars en localhost.
+Node.js (ESM) + Express + `ws`, with **Python sidecars** for the GPU work (Whisper, Kokoro,
+YOLO/VLM, EMAGE). The whole default stack runs **locally**: Ollama for the LLM and the
+embeddings, and the sidecars on localhost.
 
-> Este documento describe el backend **tal como está**. Para el mapa del workspace completo
-> (frontend, app de escritorio, motion-lab, launcher) mirá `../CLAUDE.md`; para levantar todo en
-> una máquina nueva, `../SETUP.md`.
+> This document describes the backend **as it is**. For the map of the whole workspace
+> (frontend, desktop app, motion-lab, launcher) see `../CLAUDE.md`; to bring everything up on
+> a fresh machine, `../SETUP.md`.
 
 ---
 
-## Arrancar
+## Getting started
 
 ```bash
 npm install
-cp .env.example .env        # el default ya apunta al stack local (Ollama + sidecars)
-npm run dev                 # nodemon en :3001   (npm start = node src/server.js)
+cp .env.example .env        # the default already points at the local stack (Ollama + sidecars)
+npm run dev                 # nodemon on :3001   (npm start = node src/server.js)
 ```
 
-El backend **solo** hace falta que esté vivo; los sidecars se levantan según lo que quieras usar:
+**Only** the backend has to be alive; you start the sidecars depending on what you want to use:
 
 ```bash
-npm run sidecar:tts         # Kokoro en :8002  ← imprescindible para que hable
-npm run sidecar:asr         # faster-whisper en :8001 (si ASR_PROVIDER=local)
-npm run sidecar:vision      # YOLOv8 en :8003 (solo si VISION_PROVIDER=yolo)
-npm run sidecar:motion      # EMAGE en :8004 (solo si MOTION_PROVIDER=emage)
+npm run sidecar:tts         # Kokoro on :8002  ← required for her to speak
+npm run sidecar:asr         # faster-whisper on :8001 (if ASR_PROVIDER=local)
+npm run sidecar:vision      # YOLOv8 on :8003 (only if VISION_PROVIDER=yolo)
+npm run sidecar:motion      # EMAGE on :8004 (only if MOTION_PROVIDER=emage)
 ```
 
-El proveedor de movimiento por defecto (`lab`, :8005) vive en el otro repo:
+The default motion provider (`lab`, :8005) lives in the other repo:
 
 ```bash
 cd ../hannah-motion-lab && .venv/bin/python -m uvicorn serve.main:app --port 8005
 ```
 
-### Puertos
+### Ports
 
-| Servicio | Puerto | |
+| Service | Port | |
 |---|---|---|
-| Backend (REST + WS) | 3001 | escucha en **127.0.0.1** por defecto (`HOST`) |
-| ASR · TTS · Visión | 8001 · 8002 · 8003 | sidecars de este repo |
-| Motion | 8005 (`lab`) · 8004 (`emage`) | cada provider con su URL propia |
-| Ollama | 11434 | LLM, VLM y embeddings |
-| Vite (frontend) | 5173 | proxea `/api` y `/ws` hacia acá |
+| Backend (REST + WS) | 3001 | listens on **127.0.0.1** by default (`HOST`) |
+| ASR · TTS · Vision | 8001 · 8002 · 8003 | this repo's sidecars |
+| Motion | 8005 (`lab`) · 8004 (`emage`) | each provider with its own URL |
+| Ollama | 11434 | LLM, VLM and embeddings |
+| Vite (frontend) | 5173 | proxies `/api` and `/ws` over to the backend |
 
 ---
 
-## El turno de voz, de punta a punta
+## The voice turn, end to end
 
-Es el recorrido central del proyecto. Todo lo demás orbita alrededor.
+It is the project's central path. Everything else orbits around it.
 
-**0. Handshake.** El cliente hace `POST /api/v1/session` y abre `ws://host/ws?sessionId=<uuid>`.
-El handler de `upgrade` valida la sesión y escribe un **401** crudo al socket si no existe o
-expiró (`gateway/websocket.js`). Crear la sesión ya **precarga la ventana de contexto** desde
-SQLite, así que Hannah arranca recordando.
+**0. Handshake.** The client does `POST /api/v1/session` and opens `ws://host/ws?sessionId=<uuid>`.
+The `upgrade` handler validates the session and writes a raw **401** to the socket if it does not
+exist or expired (`gateway/websocket.js`). Creating the session already **preloads the context
+window** from SQLite, so Hannah starts out remembering.
 
-**1. Audio.** `SPEECH_START` aborta el turno en curso (barge-in) y vacía el buffer. Llegan los
-frames binarios, que se acumulan con un **tope duro de 5MB**. `SPEECH_END` los concatena, crea
-un `AbortController` nuevo y llama a `processVoiceTurn`.
+**1. Audio.** `SPEECH_START` aborts the turn in progress (barge-in) and empties the buffer. The
+binary frames arrive and accumulate with a **hard 5MB cap**. `SPEECH_END` concatenates them, creates
+a new `AbortController` and calls `processVoiceTurn`.
 
-**2. ASR.** `pipeline/asr.js` transcribe con el sidecar faster-whisper (`local`) o con OpenAI
-Whisper (`cloud`). Al volver se comprueba `signal.aborted`: si el usuario ya interrumpió, el
-turno se abandona en silencio.
+**2. ASR.** `pipeline/asr.js` transcribes with the faster-whisper sidecar (`local`) or with OpenAI
+Whisper (`cloud`). On the way back `signal.aborted` is checked: if the user already interrupted, the
+turn is abandoned silently.
 
-**3. Capa determinista — antes del modelo.** `runDeterministicLayer()` parsea *las palabras del
-usuario* y ejecuta lo que reconozca, en este orden:
+**3. Deterministic layer — before the model.** `runDeterministicLayer()` parses *the user's own
+words* and executes whatever it recognizes, in this order:
 
-1. `parseMoveIntent()` — mover el overlay (ES/EN) → `moveWindow()` + `window_move`.
-2. `handleOpenIntent()` / `handleCloseIntent()` — abrir apps y sitios, cerrar ventanas.
-3. `resolveSkillPhrase()` — skills con `phrases` declaradas.
-4. `resolveDataAction()` — limpiar la terminal, `cat`, crear archivo, borrar (con confirmación),
+1. `parseMoveIntent()` — move the overlay (ES/EN) → `moveWindow()` + `window_move`.
+2. `handleOpenIntent()` / `handleCloseIntent()` — open apps and sites, close windows.
+3. `resolveSkillPhrase()` — skills with declared `phrases`.
+4. `resolveDataAction()` — clear the terminal, `cat`, create a file, delete (with confirmation),
    `ls`, "corré `<cmd>`", "leé `<url>`", "buscá X".
 
-Lo que se ejecute devuelve su **salida real**, que se inyecta en el turno junto con una coletilla
-explícita de *no inventes esto*. Es lo que impide que un modelo de 7B **diga** que hizo algo sin
-haberlo hecho — el problema que motivó toda esta capa.
+Whatever runs returns its **real output**, which is injected into the turn along with an explicit
+*don't make this up* reminder. That is what stops a 7B model from **saying** it did something without
+having done it — the problem that motivated this whole layer.
 
-**4. Historial.** El turno se guarda **con el resultado inyectado**: ventana en RAM + SQLite +
-embedding en segundo plano para el recall. Recién ahí se emite `user_transcript` al cliente, con
-la transcripción **original** (no la enriquecida).
+**4. History.** The turn is stored **with the injected result**: RAM window + SQLite + a background
+embedding for recall. Only then is `user_transcript` emitted to the client, with the **original**
+transcription (not the enriched one).
 
-**5. LLM.** Se arma el system prompt: persona + resumen de memoria + recall vectorial + protocolo
-de emoción + índice de skills + cheat-sheets de `reference/`. Dos caminos:
+**5. LLM.** The system prompt is assembled: persona + memory summary + vector recall + emotion
+protocol + skills index + cheat-sheets from `reference/`. Two paths:
 
-- **Con tools y sin acción determinista previa**: hasta 3 pasadas sin streaming, ejecutando los
-  tags que el modelo escriba y realimentando los resultados reales.
-- **Si la capa determinista ya actuó** (`noActions`): streaming directo, token a token, y el
-  prompt **ni siquiera incluye el índice de skills** — para no tentar al modelo a repetir un
-  `ssh` o un comando que ya se ejecutó.
+- **With tools and no prior deterministic action**: up to 3 non-streaming passes, executing the
+  tags the model writes and feeding the real results back.
+- **If the deterministic layer already acted** (`noActions`): straight streaming, token by token, and
+  the prompt **does not even include the skills index** — so the model is not tempted to repeat an
+  `ssh` or a command that already ran.
 
-**6. Streaming por oración.** Los tokens se acumulan en un buffer que corta en `.!?` (con más de
-10 caracteres). Cada oración completa dispara **en paralelo** TTS, visemas y motion, y sale como
-un único `audio_chunk`. Los segmentos se serializan en una cadena de promesas, así que **llegan
-en orden hablado** y `turn_complete` solo se emite después del último.
+**6. Sentence-by-sentence streaming.** Tokens accumulate in a buffer that cuts on `.!?` (with more
+than 10 characters). Each complete sentence fires TTS, visemes and motion **in parallel**, and goes
+out as a single `audio_chunk`. The segments are serialized in a promise chain, so they **arrive
+in spoken order** and `turn_complete` is only emitted after the last one.
 
-**7. Fin.** `turn_complete` con la emoción parseada del tag `[EMOTION:...]` y las métricas. Si el
-turno fue abortado, **no se emite**.
-
----
-
-## Acciones: por qué hay cuatro capas
-
-Conviven a propósito. La motivación es la fiabilidad con modelos locales chicos.
-
-| Capa | Qué es | Fiabilidad |
-|---|---|---|
-| **Intents deterministas** | Se parsean las palabras del usuario y se ejecuta | 100%, no depende del modelo |
-| **Tags de acción** | El modelo escribe `[RUN:]`, `[SKILL:]`, `[SEARCH:]`, `[OPEN:]`… y el backend ejecuta | depende del modelo |
-| **Skills** (`skills/<n>/SKILL.md`) | Markdown con frontmatter: una acción (`run`/`terminal`/`open`/`search`), variantes por SO y `phrases` opcionales | el modelo elige, el **backend** construye el comando |
-| **Reference** (`reference/*.md`) | Cheat-sheets inyectados en el prompt | no ejecutable: es conocimiento |
-
-El vocabulario de tags tiene **una sola fuente**: `ACTION_TOOL` en `llm.js`. Tanto `ACTION_RE`
-como `stripActionTags` derivan de ahí — si se agrega un tag en otro lado, el TTS termina leyendo
-la etiqueta en voz alta.
-
-Las skills son **agnósticas del modelo**: el modelo dice *qué* skill quiere, no *cómo* se ejecuta.
-Detalle en `../SKILLS.md`.
+**7. End.** `turn_complete` with the emotion parsed from the `[EMOTION:...]` tag and the metrics. If
+the turn was aborted, it **is not emitted**.
 
 ---
 
-## Contrato WebSocket
+## Actions: why there are four layers
 
-`ws://localhost:3001/ws?sessionId=<uuid>`. Se acepta indistintamente el campo `command` o `type`.
-Un JSON inválido se ignora en silencio (se loguea solo el tamaño, nunca el contenido).
+They coexist on purpose. The motivation is reliability with small local models.
 
-### Cliente → servidor
-
-| Comando | Payload | Efecto |
+| Layer | What it is | Reliability |
 |---|---|---|
-| `SPEECH_START` | — | Barge-in: aborta el turno en curso y vacía el buffer de audio |
-| *(binario)* | frames de audio | Se acumulan hasta **5MB**; lo que exceda se descarta con un warning |
-| `SPEECH_END` | — | Concatena el audio y procesa el turno. Sin audio → `error` |
-| `TEXT_INPUT` | `text` | Mismo pipeline sin ASR. El texto **sí** se guarda en el historial |
-| `INTERRUPT` | — | Aborta el turno: corta el LLM y la reproducción a mitad de frase |
-| `GAZE_ON` / `GAZE_OFF` | — | Arranca/para el sondeo de mirada (80 ms) |
-| `VISION_START` | — | Loop de visión cada 4 s. Responde `vision_started` |
-| `VISION_FRAME` | `frame` (JPEG base64) | Guarda **solo el último** frame de la sesión |
-| `VISION_STOP` | — | Para el loop y borra el frame |
-| `TRIGGER_YOLO` | — | Analiza el último frame y genera un turno hablado |
-| `TERMINAL_START` | — | Adjunta el pty de la sesión. **Requiere `TOOLS_SYSTEM_CONTROL`** |
-| `TERMINAL_IN` | `data` | Escribe en el pty. Sin el flag, no hace nada |
-| `TERMINAL_RESIZE` | `cols`, `rows` | Redimensiona el pty |
-| `CONFIRM_COMMAND` | `id`, `approved` | Responde al diálogo de comando destructivo |
+| **Deterministic intents** | The user's words are parsed and executed | 100%, does not depend on the model |
+| **Action tags** | The model writes `[RUN:]`, `[SKILL:]`, `[SEARCH:]`, `[OPEN:]`… and the backend executes | depends on the model |
+| **Skills** (`skills/<n>/SKILL.md`) | Markdown with frontmatter: one action (`run`/`terminal`/`open`/`search`), per-OS variants and optional `phrases` | the model picks, the **backend** builds the command |
+| **Reference** (`reference/*.md`) | Cheat-sheets injected into the prompt | not executable: it is knowledge |
 
-### Servidor → cliente
+The tag vocabulary has **one single source**: `ACTION_TOOL` in `llm.js`. Both `ACTION_RE` and
+`stripActionTags` derive from it — if a tag is added somewhere else, the TTS ends up reading the
+label out loud.
 
-| Tipo | Campos | Cuándo |
-|---|---|---|
-| `user_transcript` | `text` | Tras el ASR (solo en turnos de voz) |
-| `audio_chunk` | `text`, `visemes[]`, `audioBase64`, `format`, `sample_rate`, `motion?`, `action?` | **Uno por oración** |
-| `turn_complete` | `emotion`, `metrics` | Al final. No se emite si el turno se abortó |
-| `error` | `message` | Fallo por etapa; nunca tumba el servidor |
-| `gaze` | `x`, `y` | Cada 80 ms con `GAZE_ON`; normalizado a `[-1,1]` |
-| `vision_started` | — | Confirmación de `VISION_START` |
-| `window_move` / `window_close` | `spec` / — | La ventana se movió o se cerraron ventanas |
-| `confirm_command` | `id`, `command` | Comando destructivo esperando confirmación (**40 s**) |
-| `command_run` | — | Aviso de que se ejecutó un comando |
-| `terminal_out` / `terminal_clear` | `data` / — | Stream del pty y limpieza de pantalla |
-| `open_terminal` | — | Pedido de abrir el panel de terminal en la UI |
-
-**El WAV viaja completo en base64**, no troceado: el navegador decodifica con `decodeAudioData`,
-que necesita el archivo entero. Con Kokoro es `wav`/24000; con ElevenLabs, `mp3`/44100.
-
-**`motion`** lleva `poses` (T×165, ejes-ángulo de 55 joints SMPL-X) y `trans` (T×3) como float32
-en base64, a 30fps. Si el sidecar está caído, el chunk simplemente viaja sin ese campo.
+Skills are **model-agnostic**: the model says *which* skill it wants, not *how* it runs.
+Details in `../SKILLS.md`.
 
 ---
 
-## API REST
+## WebSocket contract
 
-Todo bajo `/api/v1`. Cada ruta va envuelta en `handler(slug, fn)` (`api/handler.js`), que
-centraliza el sobre de error 500 — nunca en `server.js`.
+`ws://localhost:3001/ws?sessionId=<uuid>`. Either the `command` or the `type` field is accepted.
+Invalid JSON is ignored silently (only the size is logged, never the content).
 
-| Método | Ruta | Qué hace |
+### Client → server
+
+| Command | Payload | Effect |
 |---|---|---|
-| `GET` | `/health` | Estado, versión, proveedores activos y URLs de sidecars |
-| `POST` | `/session` | Crea sesión → `{sessionId, expiresIn}`. **Obligatorio antes del WS** |
-| `DELETE` | `/session/:id` | Borra el estado en memoria (el historial en SQLite queda) |
-| `GET` | `/settings` | Config de proveedores, **con las API keys redactadas** |
-| `POST` | `/settings` | Aplica un patch whitelisteado y lo persiste en `data/settings.json` |
-| `GET` | `/shortcuts` | Atajos de voz: `{sites, apps}` |
-| `POST` | `/shortcuts` | Reemplaza el set completo y persiste |
-| `GET` | `/skills` | Lista las skills con su markdown crudo |
-| `POST` | `/skills` | Crea o edita una skill en `data/skills/<n>/SKILL.md` y recarga |
-| `DELETE` | `/skills/:name` | Borra la skill del usuario |
-| `GET` | `/tts/voices` | Proxy al sidecar Kokoro para poblar el selector de voces |
-| `POST` | `/text` | Turno de texto **sin sesión ni WS**. Ruta de pruebas |
+| `SPEECH_START` | — | Barge-in: aborts the turn in progress and empties the audio buffer |
+| *(binary)* | audio frames | Accumulated up to **5MB**; anything beyond is dropped with a warning |
+| `SPEECH_END` | — | Concatenates the audio and processes the turn. No audio → `error` |
+| `TEXT_INPUT` | `text` | Same pipeline without ASR. The text **is** stored in the history |
+| `INTERRUPT` | — | Aborts the turn: cuts the LLM and playback mid-sentence |
+| `GAZE_ON` / `GAZE_OFF` | — | Starts/stops the gaze polling (80 ms) |
+| `VISION_START` | — | Vision loop every 4 s. Replies `vision_started` |
+| `VISION_FRAME` | `frame` (base64 JPEG) | Stores **only the last** frame of the session |
+| `VISION_STOP` | — | Stops the loop and clears the frame |
+| `TRIGGER_YOLO` | — | Analyzes the last frame and generates a spoken turn |
+| `TERMINAL_START` | — | Attaches the session's pty. **Requires `TOOLS_SYSTEM_CONTROL`** |
+| `TERMINAL_IN` | `data` | Writes to the pty. Without the flag, it does nothing |
+| `TERMINAL_RESIZE` | `cols`, `rows` | Resizes the pty |
+| `CONFIRM_COMMAND` | `id`, `approved` | Answers the destructive-command dialog |
 
-**Middleware**: `helmet` (con CSP desactivada a propósito para pruebas locales), CORS por lista
-de orígenes (`CORS_ORIGIN`), y rate limit **que exime a localhost** — si no, el propio uso normal
-agotaba la cuota y todo devolvía 429.
+### Server → client
 
-**Archivos estáticos: uno solo, deliberadamente.** El servidor expone `test-client.html` en `/` y
-`/test-client.html`, y nada más. Nunca reintroducir `express.static('.')`: exponía
-`data/settings.json` (API keys) y `data/memory.db`.
+| Type | Fields | When |
+|---|---|---|
+| `user_transcript` | `text` | After the ASR (voice turns only) |
+| `audio_chunk` | `text`, `visemes[]`, `audioBase64`, `format`, `sample_rate`, `motion?`, `action?` | **One per sentence** |
+| `turn_complete` | `emotion`, `metrics` | At the end. Not emitted if the turn was aborted |
+| `error` | `message` | Per-stage failure; never takes the server down |
+| `gaze` | `x`, `y` | Every 80 ms with `GAZE_ON`; normalized to `[-1,1]` |
+| `vision_started` | — | Confirmation of `VISION_START` |
+| `window_move` / `window_close` | `spec` / — | The window moved or windows were closed |
+| `confirm_command` | `id`, `command` | Destructive command waiting for confirmation (**40 s**) |
+| `command_run` | — | Notice that a command was executed |
+| `terminal_out` / `terminal_clear` | `data` / — | Pty stream and screen clear |
+| `open_terminal` | — | Request to open the terminal panel in the UI |
+
+**The WAV travels whole in base64**, not chunked: the browser decodes with `decodeAudioData`,
+which needs the entire file. With Kokoro it is `wav`/24000; with ElevenLabs, `mp3`/44100.
+
+**`motion`** carries `poses` (T×165, axis-angle for 55 SMPL-X joints) and `trans` (T×3) as float32
+in base64, at 30fps. If the sidecar is down, the chunk simply travels without that field.
 
 ---
 
-## Mapa de módulos
+## REST API
+
+Everything under `/api/v1`. Each route is wrapped in `handler(slug, fn)` (`api/handler.js`), which
+centralizes the 500 envelope — never in `server.js`.
+
+| Method | Route | What it does |
+|---|---|---|
+| `GET` | `/health` | Status, version, active providers and sidecar URLs |
+| `POST` | `/session` | Creates a session → `{sessionId, expiresIn}`. **Mandatory before the WS** |
+| `DELETE` | `/session/:id` | Deletes the in-memory state (the SQLite history stays) |
+| `GET` | `/settings` | Provider config, **with the API keys redacted** |
+| `POST` | `/settings` | Applies a whitelisted patch and persists it in `data/settings.json` |
+| `GET` | `/shortcuts` | Voice shortcuts: `{sites, apps}` |
+| `POST` | `/shortcuts` | Replaces the whole set and persists |
+| `GET` | `/skills` | Lists the skills with their raw markdown |
+| `POST` | `/skills` | Creates or edits a skill in `data/skills/<n>/SKILL.md` and reloads |
+| `DELETE` | `/skills/:name` | Deletes the user's skill |
+| `GET` | `/tts/voices` | Proxy to the Kokoro sidecar to populate the voice selector |
+| `POST` | `/text` | Text turn **without session or WS**. A testing route |
+
+**Middleware**: `helmet` (with CSP disabled on purpose for local testing), CORS by origin list
+(`CORS_ORIGIN`), and a rate limit **that exempts localhost** — otherwise normal usage itself
+exhausted the quota and everything returned 429.
+
+**Static files: exactly one, deliberately.** The server exposes `test-client.html` at `/` and
+`/test-client.html`, and nothing else. Never reintroduce `express.static('.')`: it exposed
+`data/settings.json` (API keys) and `data/memory.db`.
+
+---
+
+## Module map
 
 ```
 src/
-├── server.js               Express + montaje del gateway. Antes de servir aplica el estado
-│                           persistido: settings, shortcuts, skills y reference
-├── config.js               ÚNICA lectura de process.env. Todo lo demás lee `config`
-├── gateway/websocket.js    Protocolo WS, auth en el upgrade, barge-in, buffer de audio
+├── server.js               Express + gateway mounting. Before serving it applies the persisted
+│                           state: settings, shortcuts, skills and reference
+├── config.js               THE ONLY read of process.env. Everything else reads `config`
+├── gateway/websocket.js    WS protocol, auth on the upgrade, barge-in, audio buffer
 ├── pipeline/
-│   ├── orchestrator.js     El turno: capa determinista, LLM, buffer de oraciones, emisión
-│   ├── asr.js              Transcripción (sidecar local u OpenAI)
-│   ├── llm.js              SDK OpenAI-compatible; prompt, tags de acción, parseo de emoción
-│   ├── tts.js              Kokoro (sidecar) o ElevenLabs
-│   ├── lipsync.js          Visemas DESDE EL TEXTO, no del audio
-│   ├── motion.js           Los dos providers de gestos, con protocolos incompatibles
-│   ├── tools.js            Catálogo de tools + capa determinista + guard de destructivos
-│   ├── terminal.js         Pty real por sesión (node-pty)
-│   ├── windowControl.js    Lógica agnóstica de mover el overlay y de la mirada
-│   ├── vision.js / vlm.js  Los dos proveedores de visión (YOLO / modelo local)
-│   ├── visionLoop.js       Awareness continua: reacciona solo si la escena cambió
-│   └── desktop/            Adaptadores por escritorio: hyprland → kde → x11, más env.js
-│                           (detección única) y sh.js (ejecutar comandos del compositor)
+│   ├── orchestrator.js     The turn: deterministic layer, LLM, sentence buffer, emission
+│   ├── asr.js              Transcription (local sidecar or OpenAI)
+│   ├── llm.js              OpenAI-compatible SDK; prompt, action tags, emotion parsing
+│   ├── tts.js              Kokoro (sidecar) or ElevenLabs
+│   ├── lipsync.js          Visemes FROM THE TEXT, not from the audio
+│   ├── motion.js           The two gesture providers, with incompatible protocols
+│   ├── tools.js            Tool catalog + deterministic layer + destructive-command guard
+│   ├── terminal.js         A real pty per session (node-pty)
+│   ├── windowControl.js    Agnostic logic for moving the overlay and for the gaze
+│   ├── vision.js / vlm.js  The two vision providers (YOLO / local model)
+│   ├── visionLoop.js       Continuous awareness: reacts only if the scene changed
+│   └── desktop/            Per-desktop adapters: hyprland → kde → x11, plus env.js
+│                           (single detection) and sh.js (running compositor commands)
 ├── state/
-│   ├── conversationManager.js  Sesiones en RAM; precarga contexto desde SQLite
-│   ├── memoryStore.js      SQLite (WAL): turnos, resumen rodante, embeddings
-│   ├── embeddings.js       Embeddings locales vía Ollama
-│   ├── settings.js         Config mutable en caliente, con whitelist
-│   ├── skills.js           Parser de SKILL.md, ejecución y disparo por frase
-│   ├── reference.js        Carga de los cheat-sheets
-│   ├── shortcuts.js        Atajos de voz (sitios y apps)
-│   ├── frameStore.js       Último frame de cámara por sesión
-│   └── dataDir.js          Única fuente de verdad de data/
-├── api/                    Rutas REST (router.js las registra todas)
-└── utils/                  logger (winston) y timer (métricas de latencia)
+│   ├── conversationManager.js  Sessions in RAM; preloads context from SQLite
+│   ├── memoryStore.js      SQLite (WAL): turns, rolling summary, embeddings
+│   ├── embeddings.js       Local embeddings via Ollama
+│   ├── settings.js         Hot-mutable config, with a whitelist
+│   ├── skills.js           SKILL.md parser, execution and phrase triggering
+│   ├── reference.js        Loading of the cheat-sheets
+│   ├── shortcuts.js        Voice shortcuts (sites and apps)
+│   ├── frameStore.js       Last camera frame per session
+│   └── dataDir.js          Single source of truth for data/
+├── api/                    REST routes (router.js registers them all)
+└── utils/                  logger (winston) and timer (latency metrics)
 ```
 
 ---
 
-## Configuración
+## Configuration
 
-Todo el acceso a variables de entorno pasa por **`src/config.js`**. Nunca leer `process.env` en
-otro módulo — las dos excepciones están documentadas en su lugar: el shell del pty
-(`terminal.js`) y la detección de compositor (`desktop/*.js`).
+All environment variable access goes through **`src/config.js`**. Never read `process.env` in
+another module — the two exceptions are documented in place: the pty shell
+(`terminal.js`) and the compositor detection (`desktop/*.js`).
 
-### Lo que vas a tocar
+### What you'll actually touch
 
-| Variable | Default | Para qué |
+| Variable | Default | What for |
 |---|---|---|
-| `HOST` / `PORT` | `127.0.0.1` / `3001` | **Local a propósito.** El acceso LAN entra por Vite |
-| `LLM_BASE_URL` | `null` | Endpoint OpenAI-compatible (Ollama, Groq, OpenRouter…) |
-| `LLM_MODEL` | `llama-3.1-8b-instant` | El dev local usa `qwen2.5:7b` |
-| `LLM_API_KEY` | — | Obligatoria solo si el proveedor la pide |
-| `ASR_PROVIDER` | `cloud` | `local` = sidecar faster-whisper |
-| `ASR_LANGUAGE` | *(vacío)* | Vacío = autodetección |
-| `TTS_PROVIDER` | `kokoro` | Sidecar local; cualquier otro valor = ElevenLabs |
-| `ELEVENLABS_VOICE_ID` | `af_heart` | Nombre heredado: es la voz para **ambos** proveedores. El prefijo elige idioma (`af_`/`am_` inglés, `ef_`/`em_` español) |
-| `VISION_PROVIDER` | `vlm` | `vlm` describe la escena; `yolo` da etiquetas de objetos |
-| `MOTION_PROVIDER` | `lab` | `lab` (texto→movimiento, :8005) o `emage` (audio→movimiento, :8004) |
-| `MOTION_ENABLED` | `true` | Solo el string exacto `false` lo apaga |
-| `TOOLS_ENABLED` | `false` | Deja que el modelo actúe por tags |
-| `TOOLS_SYSTEM_CONTROL` | `false` | **Master flag de la terminal real** |
-| `CORS_ORIGIN` | localhost:5173 | Lista separada por comas |
-| `SESSION_TTL_MINUTES` | `30` | Vida de la sesión |
-| `CONTEXT_TURNS` | `10` | Turnos de historia en la ventana de contexto |
-| `MEMORY_RECALL` | `true` | Recall vectorial de largo plazo |
-| `MEMORY_DB_PATH` | `data/memory.db` | Los tests lo fuerzan a `:memory:` |
+| `HOST` / `PORT` | `127.0.0.1` / `3001` | **Local on purpose.** LAN access comes in through Vite |
+| `LLM_BASE_URL` | `null` | OpenAI-compatible endpoint (Ollama, Groq, OpenRouter…) |
+| `LLM_MODEL` | `llama-3.1-8b-instant` | Local dev uses `qwen2.5:7b` |
+| `LLM_API_KEY` | — | Required only if the provider asks for it |
+| `ASR_PROVIDER` | `cloud` | `local` = faster-whisper sidecar |
+| `ASR_LANGUAGE` | *(empty)* | Empty = autodetection |
+| `TTS_PROVIDER` | `kokoro` | Local sidecar; any other value = ElevenLabs |
+| `ELEVENLABS_VOICE_ID` | `af_heart` | Legacy name: it is the voice for **both** providers. The prefix picks the language (`af_`/`am_` English, `ef_`/`em_` Spanish) |
+| `VISION_PROVIDER` | `vlm` | `vlm` describes the scene; `yolo` gives object labels |
+| `MOTION_PROVIDER` | `lab` | `lab` (text→motion, :8005) or `emage` (audio→motion, :8004) |
+| `MOTION_ENABLED` | `true` | Only the exact string `false` turns it off |
+| `TOOLS_ENABLED` | `false` | Lets the model act through tags |
+| `TOOLS_SYSTEM_CONTROL` | `false` | **Master flag for the real terminal** |
+| `CORS_ORIGIN` | localhost:5173 | Comma-separated list |
+| `SESSION_TTL_MINUTES` | `30` | Session lifetime |
+| `CONTEXT_TURNS` | `10` | History turns in the context window |
+| `MEMORY_RECALL` | `true` | Long-term vector recall |
+| `MEMORY_DB_PATH` | `data/memory.db` | The tests force it to `:memory:` |
 
-La lista completa está en `.env.example`, con las de los sidecars Python (que el backend **no**
-lee: `ASR_DEVICE`, `TTS_DEVICE`, `PANTOMATRIX_DIR`).
+The complete list is in `.env.example`, together with the Python sidecars' own variables (which the
+backend does **not** read: `ASR_DEVICE`, `TTS_DEVICE`, `PANTOMATRIX_DIR`).
 
-### Configuración en caliente
+### Why she answers in English
 
-El panel ⚙ escribe `data/settings.json`, que **pisa al `.env`** y se aplica **sin reiniciar**
-(muta `config` en memoria y todo el pipeline lo lee en cada llamada). Solo se aceptan los campos
-de la whitelist de `state/settings.js`, y **las API keys nunca se devuelven al navegador**: la
-vista de `GET /settings` va redactada.
+`llm.protocol` pins the reply language to English. That is **not an arbitrary lock and not an
+architecture limit**: it is a TTS quality decision. `af_heart` is the only Kokoro voice that
+sounds good — English ships 28 voices, Spanish ships 3 and they sound bad enough that answering
+in English is the better outcome.
+
+Input is already multilingual: `ASR_LANGUAGE` is empty (auto-detect) and the sidecar returns the
+detected language plus a confidence score, which `pipeline/asr.js` already receives — **nothing
+downstream consumes it**. Making the output multilingual is three small changes: thread that
+language through the turn, relax the protocol to "reply in the user's language", and pick the
+voice by language. Worth doing the day a better multilingual TTS is plugged in; not before, or
+you trade good audio for bad.
+
+### Runtime configuration
+
+The ⚙ panel writes `data/settings.json`, which **overrides `.env`** and is applied **without a
+restart** (it mutates `config` in memory and the whole pipeline reads it on every call). Only the
+fields in the whitelist of `state/settings.js` are accepted, and **the API keys are never returned
+to the browser**: the `GET /settings` view is redacted.
 
 ---
 
-## Sidecars Python
+## Python sidecars
 
-Cuatro apps FastAPI en `sidecar/`. **ASR, TTS y visión comparten el venv `sidecar/.venv`**; el de
-**motion (EMAGE) usa el venv de la raíz del workspace** (`../.venv`), porque la RTX 5070 Ti
-(Blackwell, sm_120) necesita torch ≥ 2.7 con CUDA 12.8. `sidecar/common.py` centraliza la
-precarga de las librerías CUDA.
+Four FastAPI apps in `sidecar/`. **ASR, TTS and vision share the `sidecar/.venv` venv**; the
+**motion (EMAGE) one uses the venv at the workspace root** (`../.venv`), because the RTX 5070 Ti
+(Blackwell, sm_120) needs torch ≥ 2.7 with CUDA 12.8. `sidecar/common.py` centralizes the
+preload of the CUDA libraries.
 
-Los scripts invocan `<venv>/bin/python -m uvicorn` y **no** el console script `uvicorn`: su
-shebang quedó roto cuando el repo cambió de ruta. Mantenerlo así.
+The scripts invoke `<venv>/bin/python -m uvicorn` and **not** the `uvicorn` console script: its
+shebang broke when the repo changed paths. Keep it that way.
 
-**Los pesos no están en git** (gitignorados, ~700MB). Un clon nuevo necesita bajarlos:
+**The weights are not in git** (gitignored, ~700MB). A fresh clone needs to download them:
 
-| Pesos | Para qué | ¿Imprescindible? |
+| Weights | What for | Required? |
 |---|---|---|
-| `sidecar/tts/kokoro-v1.0.onnx` + `voices-v1.0.bin` | Voz | **Sí**, sin eso no habla |
-| `sidecar/vision/yolov8n.pt` | Visión por objetos | Solo con `VISION_PROVIDER=yolo` |
-| `../hannah-motion-lab/runs/*/latest.pt` | Gestos co-speech | Sí, para que gesticule |
-| faster-whisper | ASR local | Se baja solo en el primer arranque |
+| `sidecar/tts/kokoro-v1.0.onnx` + `voices-v1.0.bin` | Voice | **Yes**, without them she does not speak |
+| `sidecar/vision/yolov8n.pt` | Object detection | Only with `VISION_PROVIDER=yolo` |
+| `../hannah-motion-lab/runs/*/latest.pt` | Co-speech gestures | Yes, for her to gesture |
+| faster-whisper | Local ASR | Downloads itself on first start |
 
 ---
 
-## Seguridad
+## Security
 
-- **La terminal está apagada por defecto.** `run_command`, las skills de tipo `terminal` y los
-  comandos `TERMINAL_*` requieren `TOOLS_SYSTEM_CONTROL=true`.
-- **No hay allowlist de comandos.** Con el flag activo corre cualquier cosa en un pty real. La
-  única red es `confirmIfDangerous()`: la regex `DANGER` (`rm`, `dd`, `mkfs`, `shutdown`,
-  `git --force`…) manda un `confirm_command` y espera respuesta, con timeout de 40 s que resuelve
-  *no*. Es **best-effort, no una barrera de seguridad** — está cubierta por
+- **The terminal is off by default.** `run_command`, skills of type `terminal` and the
+  `TERMINAL_*` commands require `TOOLS_SYSTEM_CONTROL=true`.
+- **There is no command allowlist.** With the flag on, anything runs in a real pty. The
+  only safety net is `confirmIfDangerous()`: the `DANGER` regex (`rm`, `dd`, `mkfs`, `shutdown`,
+  `git --force`…) sends a `confirm_command` and waits for an answer, with a 40 s timeout that resolves
+  to *no*. It is **best-effort, not a security barrier** — it is covered by
   `tests/unit/danger.test.js`.
-- **El backend escucha en 127.0.0.1.** Desde el celular se entra por Vite (`:5173`, que sí escucha
-  en `0.0.0.0`) y proxea. Así la terminal, las API keys y la memoria nunca quedan expuestas.
-  `HOST=0.0.0.0` solo a conciencia.
-- **Nunca se loguea contenido del usuario**: transcripciones, respuestas del modelo ni payloads.
-  Solo tiempos, errores y metadata.
-- **El audio nunca toca el disco**: se procesa en memoria y se descarta al terminar el turno.
+- **The backend listens on 127.0.0.1.** From a phone you come in through Vite (`:5173`, which does
+  listen on `0.0.0.0`) and it proxies. That way the terminal, the API keys and the memory are never
+  exposed. Only set `HOST=0.0.0.0` deliberately.
+- **User content is never logged**: transcriptions, model responses or payloads.
+  Only timings, errors and metadata.
+- **The audio never touches disk**: it is processed in memory and discarded when the turn ends.
 
 ---
 
-## Decisiones de diseño (el porqué)
+## Design decisions (the why)
 
-**Streaming por oración, no por token ni por respuesta completa.** El objetivo es <500 ms hasta
-el primer sonido. Por token no se puede sintetizar (hace falta prosodia); por respuesta completa
-se esperaría segundos. La oración es la unidad natural.
+**Sentence-by-sentence streaming, not per token and not per complete response.** The target is
+<500 ms to the first sound. You cannot synthesize token by token (you need prosody); waiting for the
+complete response would cost seconds. The sentence is the natural unit.
 
-**Visemas desde el texto, no del audio.** Analizar el WAV costaría más latencia que sintetizarlo.
-Con el texto los visemas salen gratis y en paralelo al TTS.
+**Visemes from the text, not from the audio.** Analyzing the WAV would cost more latency than
+synthesizing it. With the text the visemes come for free and in parallel with the TTS.
 
-**Los `audio_chunk` se serializan en una cadena de promesas.** Sin eso, una oración corta puede
-sintetizarse antes que una larga anterior y Hannah hablaría desordenada.
+**The `audio_chunk`s are serialized in a promise chain.** Without that, a short sentence can be
+synthesized before a longer earlier one and Hannah would speak out of order.
 
-**Un `AbortController` por turno.** Es lo que hace posible el barge-in real: interrumpirla a
-mitad de frase, no al final.
+**One `AbortController` per turn.** That is what makes real barge-in possible: interrupting her
+mid-sentence, not at the end.
 
-**Sin retargeting de movimiento a rigs ajenos.** Un intento previo de mapear SMPL-X sobre nombres
-de huesos mixamo/VRM produjo la "pose zombie". El mapeo SMPL-X→VRoid se **calcula desde la
-geometría**, en el frontend.
+**No motion retargeting onto foreign rigs.** A previous attempt to map SMPL-X onto mixamo/VRM bone
+names produced the "zombie pose". The SMPL-X→VRoid mapping is **computed from the
+geometry**, in the frontend.
 
-**Fallo por etapa.** Cada etapa manda su `{type:'error'}` y sigue. Una excepción no capturada
-nunca debe tumbar el servidor: `await` y `.catch` en todo lo que se dispare en segundo plano.
+**Per-stage failure.** Each stage sends its `{type:'error'}` and carries on. An uncaught exception
+must never take the server down: `await` and `.catch` on everything fired in the background.
 
 ---
 
-## Tests y lint
+## Tests and lint
 
 ```bash
-npm test              # jest en modo ESM
-npm run lint          # eslint sobre src y tests
+npm test              # jest in ESM mode
+npm run lint          # eslint over src and tests
 ```
 
-`tests/setup.js` **aísla los tests de tus datos reales** (`MEMORY_DB_PATH=':memory:'`,
-`MEMORY_RECALL=false`). Sin eso, la suite escribía en la memoria real y llamaba a Ollama —
-mantenerlo así.
+`tests/setup.js` **isolates the tests from your real data** (`MEMORY_DB_PATH=':memory:'`,
+`MEMORY_RECALL=false`). Without that, the suite wrote into the real memory and called Ollama —
+keep it that way.
 
-Las suites cubren lo que decide comportamiento: el guard de comandos destructivos, los parsers
-(intents de movimiento, limpieza de tags, frontmatter de SKILL.md, argumentos de ssh), más `llm`,
-`lipsync` y `conversationManager`. `parseLlmResponse`, `parseFrontmatter` y `sshArg` se exportan
-como helpers puros justamente para poder testearlos; `conversationManager.dispose()` existe para
-que las corridas terminen limpias.
+The suites cover what decides behavior: the destructive-command guard, the parsers
+(move intents, tag stripping, SKILL.md frontmatter, ssh arguments), plus `llm`,
+`lipsync` and `conversationManager`. `parseLlmResponse`, `parseFrontmatter` and `sshArg` are exported
+as pure helpers precisely so they can be tested; `conversationManager.dispose()` exists so that
+runs finish cleanly.
 
 ---
 
-## Límites conocidos
+## Known limits
 
-Cosas que **no** son como uno esperaría, verificadas en el código:
+Things that are **not** what you would expect, verified in the code:
 
-- **`/health` no hace ping a los sidecars.** Refleja la configuración en memoria, así que un `ok`
-  no significa que ASR/TTS/visión/motion estén vivos.
-- **Las rutas REST no tienen autenticación.** Es una app self-hosted de un usuario escuchando en
-  localhost; quien llegue al puerto puede borrar una sesión o cambiar los settings. Si algún día
-  se expone a la red, esto hay que resolverlo primero.
-- **`POST /settings` no valida los valores** (no comprueba que el proveedor exista ni que la URL
-  sea válida).
-- **El turno de `TRIGGER_YOLO` no es abortable**: se lanza sin `signal`, así que `INTERRUPT` no
-  lo corta.
-- **`VISION_STOP` no confirma nada** al cliente (no existe un `vision_stopped`).
-- **La lista de apps permitidas está horneada en `config.js`** (`appAllowlist`): no se configura
-  por entorno ni por el panel.
+- **`/health` does not ping the sidecars.** It reflects the in-memory configuration, so an `ok`
+  does not mean ASR/TTS/vision/motion are alive.
+- **The REST routes have no authentication.** It is a self-hosted single-user app listening on
+  localhost; whoever reaches the port can delete a session or change the settings. If it is ever
+  exposed to the network, this has to be solved first.
+- **`POST /settings` does not validate the values** (it does not check that the provider exists or
+  that the URL is valid).
+- **The `TRIGGER_YOLO` turn is not abortable**: it is fired without `signal`, so `INTERRUPT` does not
+  cut it.
+- **`VISION_STOP` confirms nothing** to the client (there is no `vision_stopped`).
+- **The allowed-apps list is baked into `config.js`** (`appAllowlist`): it is not configured
+  by environment nor by the panel.

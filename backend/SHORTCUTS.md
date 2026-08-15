@@ -1,19 +1,19 @@
-# Atajos de voz — abrir/cerrar apps y páginas
+# Voice shortcuts — opening/closing apps and pages
 
-Hannah abre apps y páginas cuando se lo pedís por voz o texto:
+Hannah opens apps and pages when you ask her by voice or text:
 
 - **«abre youtube»**, **«ábreme el navegador»**, **«abre github.com»**
 - **«cierra el navegador»**, **«ciérrame youtube»**, **«cierra la terminal»**
 
-Los **atajos** (qué palabra abre qué) son **editables**. No hace falta tocar código.
+The **shortcuts** (which word opens what) are **editable**. No need to touch code.
 
-## Cómo agregar los tuyos
+## How to add your own
 
-**Opción fácil — desde la app:** abrí el panel **⚙ Ajustes → «Atajos de voz»**, agregá una
-fila (clave → destino) y **Guardar**. Aplica al instante, sin reiniciar.
+**Easy option — from the app:** open the **⚙ Ajustes → «Atajos de voz»** panel, add a
+row (key → target) and hit **Guardar**. It applies instantly, no restart.
 
-**A mano:** editá `data/shortcuts.json` (se crea solo la primera vez con varios defaults).
-Formato:
+**By hand:** edit `data/shortcuts.json` (it's created automatically on first run, with several defaults).
+Format:
 
 ```json
 {
@@ -29,21 +29,22 @@ Formato:
 }
 ```
 
-- **`sites`**: `clave hablada → dominio`. Al decir «abre <clave>» se abre esa web en el
-  navegador. La clave puede tener espacios («mercado libre»). Sin `http://` hace falta.
-- **`apps`**: `clave hablada → clave de app`. El valor **debe existir** en el allowlist del
-  backend (`config.tools.appAllowlist` en `src/config.js`: `browser`, `firefox`, `chrome`,
-  `terminal`, `code`, `vscode`, `files`). Esto es a propósito: el comando real es fijo, así
-  la voz nunca inyecta comandos arbitrarios.
+- **`sites`**: `spoken key → domain`. Saying «abre <key>» opens that site in the
+  browser. The key can contain spaces («mercado libre»). No `http://` needed.
+- **`apps`**: `spoken key → app key`. The value **must exist** in the backend's
+  allowlist (`config.tools.appAllowlist` in `src/config.js`: `browser`, `firefox`, `chrome`,
+  `terminal`, `code`, `vscode`, `files`). This is on purpose: the real command is fixed, so
+  voice input can never inject arbitrary commands.
 
-Si querés una app nueva (p.ej. Spotify de escritorio), agregá primero su comando al
-allowlist en `src/config.js` y luego mapeá la clave hablada en `apps`.
+If you want a new app (e.g. the Spotify desktop app), first add its command to the
+allowlist in `src/config.js` and then map the spoken key in `apps`.
 
-## Notas
+## Notes
 
-- `data/shortcuts.json` está **gitignored** (es tu copia personal, como `.env`). Los
-  defaults viven horneados en `src/state/shortcuts.js`, así que si borrás el archivo se
-  regenera.
-- **Cerrar** usa el mismo criterio pero por título/clase de ventana; los alias de navegador
-  y terminal (para «cierra el navegador») están en `src/pipeline/tools.js` (`CLOSE_ALIAS`).
-- Si decís un dominio explícito («abre notion.so») funciona aunque no esté en la lista.
+- `data/shortcuts.json` is **gitignored** (it's your personal copy, like `.env`). The
+  defaults are baked into `src/state/shortcuts.js`, so deleting the file just regenerates
+  it.
+- **Closing** works the same way, but matches on window title/class; the browser and
+  terminal aliases (for «cierra el navegador») live in `src/pipeline/tools.js`
+  (`CLOSE_ALIAS`).
+- If you say an explicit domain («abre notion.so») it works even if it isn't in the list.
