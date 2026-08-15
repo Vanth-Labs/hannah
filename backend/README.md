@@ -28,11 +28,19 @@ npm run dev                 # nodemon on :3001   (npm start = node src/server.js
 ```bash
 npm run sidecar:tts         # Kokoro on :8002  ← required for her to speak
 npm run sidecar:asr         # faster-whisper on :8001 (if ASR_PROVIDER=local)
-npm run sidecar:vision      # YOLOv8 on :8003 (only if VISION_PROVIDER=yolo)
+npm run sidecar:vision      # YOLOv8 on :8003 — ONLY with VISION_PROVIDER=yolo (see below)
 npm run sidecar:motion      # EMAGE on :8004 (only if MOTION_PROVIDER=emage)
 ```
 
-The default motion provider (`lab`, :8005) lives in the other repo:
+**Two of those you will probably never start**, because the defaults do not use them:
+
+- **Vision** defaults to `vlm`: a local vision model (`moondream`) that runs **inside Ollama**
+  (`:11434`), not in a sidecar — it *describes* the scene in words. The `:8003` sidecar is the
+  other provider, `yolo`, which returns object *labels* instead. Faster and dumber.
+- **Motion** defaults to `lab` (`:8005`), which lives in the other repo. The `:8004` sidecar is
+  EMAGE, the fallback provider.
+
+So the one you do have to start by hand is the motion lab:
 
 ```bash
 cd ../hannah-motion-lab && .venv/bin/python -m uvicorn serve.main:app --port 8005
