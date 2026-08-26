@@ -139,6 +139,27 @@ At the end of each response, append an emotion tag on a new line in the format:
     recallK: parseInt(process.env.MEMORY_RECALL_K || '3', 10),
     recallEnabled: process.env.MEMORY_RECALL !== 'false',
   },
+  // ── Las "manos": el sidecar hannah-agent (:8006) ─────────────────────────────────
+  // Mismo patrón que motion (flag + url). OFF por defecto: sin el flag, para el resto del
+  // sistema el agente NO existe — ni siquiera aparece [TASK:] en el prompt del modelo.
+  // El agente ejecuta tareas de VARIOS pasos con un modelo capaz (Ox Alpha vía OpenRouter);
+  // la persona (el 7B local) es la ÚNICA voz: el agente nunca habla, ella narra sus eventos.
+  agent: {
+    enabled: process.env.AGENT_ENABLED === 'true',
+    url: process.env.AGENT_SIDECAR_URL || 'http://127.0.0.1:8006',
+    // Bearer que el agente exige si HANNAH_AGENT_TOKEN está puesto de su lado. Mismo valor.
+    token: process.env.HANNAH_AGENT_TOKEN || '',
+    // Preset de permisos del agente (ADR-0010): companion | trusted-project | paranoid.
+    mode: process.env.AGENT_MODE || 'companion',
+    // Presupuesto de narración: task.progress se cuenta como mucho una vez cada N ms por tarea.
+    narrateProgressMs: parseInt(process.env.AGENT_NARRATE_PROGRESS_MS || '20000', 10),
+    // Si el stream de eventos se cae más de N ms con una tarea viva, se da por PERDIDA (no
+    // por terminada) y se dice honestamente que no se sabe cómo acabó.
+    lostContactMs: parseInt(process.env.AGENT_LOST_CONTACT_MS || '15000', 10),
+    // Tope duro por tarea (el agente la mata con task.failed reason "timebox").
+    timeboxMs: parseInt(process.env.AGENT_TIMEBOX_MS || '600000', 10),
+  },
+
   tools: {
     // Function-calling (Fase T). OFF por defecto: llama3.1:8b es poco fiable con tools
     // (a veces emite el tool-call como texto y ensucia el chat). Activar con TOOLS_ENABLED=true

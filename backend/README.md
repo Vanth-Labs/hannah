@@ -111,6 +111,36 @@ the turn was aborted, it **is not emitted**.
 
 ---
 
+## One voice, two hands: how the persona narrates the agent
+
+`hannah-agent` (`:8006`, off by default) runs multi-step tasks with a capable model. The rule that
+governs the integration is that **the agent never speaks**. `src/pipeline/agentBridge.js`
+subscribes once to the agent's event stream and, for every event that matters (accepted, needs
+permission, question, done, failed), injects a `[YOUR HANDS] …` prompt into the persona through
+**`processTextTurn` — the very same path the vision loop uses for `[YOUR EYES]`**. So the
+narration comes out with her voice, emotion and gestures for free, and it ends with *do not
+invent: the event above is the only truth about this task*. Progress is narrated at most once
+per `AGENT_NARRATE_PROGRESS_MS` per task, and never while the user is mid-turn. While tasks are
+alive, `[HANDS STATUS]` lines are appended to the system prompt, so "how is it going?" is answered
+from the real state.
+
+Dispatch: the persona emits `[TASK: …]` (the boundary with `[RUN:]` is written in the protocol,
+and the tag only exists in the prompt when the agent is up and healthy). The orchestrator strips
+it like `[MOTION:]` and calls `agentBridge.dispatch`. It is **not** part of the synchronous
+action loop in `llm.js` — a task takes minutes and reports back as events.
+
+Approvals by voice (`routeUtterance`) enforce three rules in code: an utterance only counts if it
+**started after** the question was asked (`SPEECH_START` is stamped for that); "sí/no/para" are
+decided lexically, everything else by a one-word classification whose only valid outputs are
+`ALLOW/DENY/CANCEL/ANSWER`; and **ambiguity never grants** — a pending approval expires into
+deny, and the user is told. `high`-risk actions refuse voice entirely and point at the HUD button.
+Barge-in aborts the narration, never the task. If the event stream is lost for
+`AGENT_LOST_CONTACT_MS` with a task alive, it is reported as **lost, not finished**.
+
+Verified without a model or a live agent: `tests/unit/agentBridge.test.js` feeds the bridge the
+agent's own fixtures (`hannah-agent/docs/fixtures/*.jsonl`) with a spy in place of
+`processTextTurn`.
+
 ## Actions: why there are four layers
 
 They coexist on purpose. The motivation is reliability with small local models.
@@ -154,6 +184,9 @@ Invalid JSON is ignored silently (only the size is logged, never the content).
 | `TERMINAL_IN` | `data` | Writes to the pty. Without the flag, it does nothing |
 | `TERMINAL_RESIZE` | `cols`, `rows` | Resizes the pty |
 | `CONFIRM_COMMAND` | `id`, `approved` | Answers the destructive-command dialog |
+| `AGENT_APPROVAL` | `taskId`, `approvalId`, `decision` | HUD button on an agent approval (`by: hud` — the only attribution that can grant `high` risk) |
+| `AGENT_ANSWER` | `taskId`, `questionId`, `answer` | HUD answer to an agent question |
+| `AGENT_CANCEL` | `taskId` | Cancel the running task |
 
 ### Server → client
 
@@ -170,6 +203,9 @@ Invalid JSON is ignored silently (only the size is logged, never the content).
 | `command_run` | — | Notice that a command was executed |
 | `terminal_out` / `terminal_clear` | `data` / — | Pty stream and screen clear |
 | `open_terminal` | — | Request to open the terminal panel in the UI |
+| `agent_task_started` / `agent_task_progress` / `agent_task_done` | `taskId`, `title`, `state`, `kind`, `data` | The hands' task lifecycle, for the HUD. `kind` names the source event (`plan`, `progress`, `tool`…) |
+| `agent_approval_request` / `agent_question` | + `expiresAt` | The hands need a yes/no or an answer; silence expires into **deny** |
+| `agent_command_failed` | `command`, `taskId`, `reason` | A HUD/voice action could not be applied (e.g. `hud_confirmation_required`) |
 
 **The WAV travels whole in base64**, not chunked: the browser decodes with `decodeAudioData`,
 which needs the entire file. With Kokoro it is `wav`/24000; with ElevenLabs, `mp3`/44100.

@@ -10,6 +10,7 @@ import { startVisionLoop, pushFrame, stopVisionLoop, getLastFrame, describeScene
 import { processTextTurn, processUserTextTurn } from '../pipeline/orchestrator.js';
 import { getGaze } from '../pipeline/windowControl.js';
 import { attach as terminalAttach, input as terminalInput, resize as terminalResize, dispose as terminalDispose, resolveConfirm } from '../pipeline/terminal.js';
+import * as agentBridge from '../pipeline/agentBridge.js';
 
 export const initWebSocketGateway = (httpServer) => {
     const wss = new WebSocketServer({ noServer: true });
@@ -33,12 +34,16 @@ export const initWebSocketGateway = (httpServer) => {
         logger.info('Cliente conectado a través de WebSocket Gateway', { sessionId });
 
         let audioChunks = [];
+        // Las "manos": registrar la sesión para que los eventos del agente lleguen a ESTE
+        // socket (y para reproducirle las tareas vivas si se conectó a mitad de una).
+        agentBridge.attachSession(sessionId, (payload) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload)); });
 
         // Barge-in: un AbortController por turno en curso. INTERRUPT lo aborta para
         // que Hannah deje de generar/hablar al instante cuando el usuario retoma.
         let currentTurn = null;
         const abortCurrentTurn = () => {
             if (currentTurn) { currentTurn.abort(); currentTurn = null; }
+            agentBridge.abortNarration(sessionId);   // la narración de las manos también calla; la tarea sigue
         };
 
         const safeSend = (payload) => {
@@ -127,11 +132,27 @@ export const initWebSocketGateway = (httpServer) => {
                         resolveConfirm(data.id, data.approved);
                         break;
 
+                    // Botones del HUD hacia las "manos". `by: 'hud'` es la atribución que permite
+                    // conceder un `high` (por voz el agente lo rechaza: anti-spoofing, T7).
+                    case 'AGENT_APPROVAL':
+                        await agentBridge.decide(data.taskId, data.approvalId, data.decision === 'allow' ? 'allow' : 'deny', 'hud');
+                        break;
+                    case 'AGENT_ANSWER':
+                        await agentBridge.reply(data.taskId, data.questionId, String(data.answer || ''));
+                        break;
+                    case 'AGENT_CANCEL':
+                        await agentBridge.cancelTask(data.taskId, 'user');
+                        break;
+
                     case 'SPEECH_START':
                         logger.info('Usuario empezó a hablar, limpiando buffers...', { sessionId });
-                        // Si Hannah aún hablaba, cortar (barge-in por voz).
+                        // Si Hannah aún hablaba, cortar (barge-in por voz). OJO: esto aborta la
+                        // NARRACIÓN, nunca la tarea del agente — la tarea sigue (INTEGRATION §5).
                         abortCurrentTurn();
                         audioChunks = [];
+                        // Cuándo EMPEZÓ a hablar: una aprobación pendiente solo la responde un
+                        // enunciado que empezó después de la pregunta.
+                        agentBridge.markSpeechStart(sessionId);
                         break;
 
                     case 'SPEECH_END': {
@@ -143,7 +164,10 @@ export const initWebSocketGateway = (httpServer) => {
                         const completeAudioBuffer = Buffer.concat(audioChunks);
                         audioChunks = [];
                         currentTurn = new AbortController();
-                        await processVoiceTurn(sessionId, completeAudioBuffer, safeSend, currentTurn.signal);
+                        agentBridge.setTurnActive(sessionId, true);
+                        try {
+                            await processVoiceTurn(sessionId, completeAudioBuffer, safeSend, currentTurn.signal);
+                        } finally { agentBridge.setTurnActive(sessionId, false); }
                         break;
                     }
 
@@ -154,8 +178,14 @@ export const initWebSocketGateway = (httpServer) => {
                             break;
                         }
                         abortCurrentTurn();
+                        // ¿Es la respuesta a una aprobación/pregunta pendiente del agente? Si sí, se
+                        // consume ahí y NO entra a la conversación. Un texto tecleado "empieza" ahora.
+                        if (await agentBridge.routeUtterance(sessionId, text, Date.now())) break;
                         currentTurn = new AbortController();
-                        await processUserTextTurn(sessionId, text, safeSend, currentTurn.signal);
+                        agentBridge.setTurnActive(sessionId, true);
+                        try {
+                            await processUserTextTurn(sessionId, text, safeSend, currentTurn.signal);
+                        } finally { agentBridge.setTurnActive(sessionId, false); }
                         break;
                     }
 
@@ -207,6 +237,7 @@ export const initWebSocketGateway = (httpServer) => {
         ws.on('close', () => {
             logger.info('Conexión WebSocket cerrada por el cliente', { sessionId });
             abortCurrentTurn();
+            agentBridge.detachSession(sessionId);
             stopGaze();
             if (detachTerminal) detachTerminal();
             terminalDispose(sessionId);

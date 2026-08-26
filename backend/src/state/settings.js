@@ -14,10 +14,12 @@ const ALLOWED = {
   llm: ['provider', 'model', 'apiKey', 'baseUrl', 'persona'],
   asr: ['provider', 'model', 'apiKey', 'language', 'sidecarUrl'],
   tts: ['provider', 'model', 'apiKey', 'voiceId', 'sidecarUrl'],
+  // El token es un secreto: entra en KEEP_IF_BLANK y nunca vuelve al navegador (se redacta).
+  agent: ['url', 'token', 'mode'],
 };
 
 // Campos que en blanco NO se sobreescriben (conservan el valor actual).
-const KEEP_IF_BLANK = new Set(['apiKey', 'persona']);
+const KEEP_IF_BLANK = new Set(['apiKey', 'persona', 'token']);
 
 /**
  * Merge de un patch dentro de `config` in-place.
@@ -50,7 +52,9 @@ export function getSettings() {
   for (const section of Object.keys(ALLOWED)) {
     out[section] = {};
     for (const key of ALLOWED[section]) {
+      // Secretos: nunca el valor, solo si hay uno guardado (apiKey -> hasApiKey, token -> hasToken).
       if (key === 'apiKey') out[section].hasApiKey = Boolean(config[section][key]);
+      else if (key === 'token') out[section].hasToken = Boolean(config[section][key]);
       else out[section][key] = config[section][key] ?? '';
     }
   }

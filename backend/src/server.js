@@ -9,6 +9,9 @@ import { config } from './config.js';
 import { logger } from './utils/logger.js';
 import { router as apiRouter } from './api/router.js';
 import { initWebSocketGateway } from './gateway/websocket.js';
+import * as agentBridge from './pipeline/agentBridge.js';
+import { processTextTurn } from './pipeline/orchestrator.js';
+import { classifyIntent } from './pipeline/llm.js';
 import { loadPersisted } from './state/settings.js';
 import { loadShortcuts } from './state/shortcuts.js';
 import { loadSkills } from './state/skills.js';
@@ -80,5 +83,18 @@ const httpServer = app.listen(config.port, config.host, () => {
 });
 
 initWebSocketGateway(httpServer);
+
+// Las "manos": el puente con hannah-agent. processTextTurn se INYECTA (es el mismo camino por
+// el que a la persona le llegan sus ojos): así la narración sale con su voz, emoción y gestos.
+// Si AGENT_ENABLED=false, init() no hace nada y todo lo demás es no-op.
+agentBridge.init({ narrate: processTextTurn, classify: classifyIntent })
+  .catch((e) => logger.error('agent bridge init failed', { message: e.message }));
+
+// Apagado limpio: la tarea activa se cancela con reason "shutdown" (no se deja huérfana).
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    agentBridge.shutdown().catch(() => {}).finally(() => process.exit(0));
+  });
+}
 
 export default httpServer;

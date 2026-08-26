@@ -5,6 +5,7 @@ import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
 import { runTool } from './tools.js';
 import { skillsPromptSection, resolveSkill } from '../state/skills.js';
+import { isHealthy as agentHealthy, handsStatus } from './agentBridge.js';
 import { referencePromptSection } from '../state/reference.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
@@ -45,14 +46,20 @@ const getLlmClient = () => {
 };
 
 // System prompt = persona + memoria (resumen + recall vectorial) + protocolo.
-async function buildSystemPrompt(history, withActions = true) {
+async function buildSystemPrompt(history, withActions, noActions = false) {
     const summary = memoryStore.getSummary();
     const recalled = await recallContext(history);
     let memorySection = '';
     if (summary) memorySection += `\n\n[What you remember about the user and past conversations]\n${summary}`;
     if (recalled) memorySection += `\n\n[Relevant things from earlier conversations]\n${recalled}`;
     const skillsSection = withActions ? skillsPromptSection() + referencePromptSection() : '';
-    return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}${skillsSection}`;
+    // Las "manos" entran en el prompt SOLO si el agente está encendido y sano: sin eso el
+    // modelo no ve [TASK:] y no puede emitirlo. Mismo criterio que el índice de skills: tras
+    // una acción determinista tampoco se ofrece, para no repetir la acción.
+    // Las manos NO dependen de TOOLS_ENABLED (son otro sistema, con su propia seguridad); sí
+    // se omiten tras una acción determinista (noActions), para no repetir la acción.
+    const hands = !noActions && config.agent.enabled && agentHealthy() ? TASK_PROTOCOL : '';
+    return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}${skillsSection}${hands}${handsStatus()}`;
 }
 
 /**
@@ -65,7 +72,7 @@ export const generateDialogueStream = async (history, onToken, onComplete, signa
         // resultado: sin loop de tags (evita doble ejecución, p.ej. ssh dos veces) y sin
         // índice de skills en el prompt (no lo tienta a re-actuar).
         const useActions = config.tools.enabled && !ctx.noActions;
-        const systemPrompt = await buildSystemPrompt(history, useActions);
+        const systemPrompt = await buildSystemPrompt(history, useActions, !!ctx.noActions);
         const messages = [
             { role: 'system', content: systemPrompt },
             ...history.map((turn) => ({
@@ -105,6 +112,13 @@ async function streamAnswer(messages, onToken, signal) {
 // Acciones por TAGS (determinista, fiable en modelos locales — no depende del
 // function-calling que los 7B/8B hacen a medias): el modelo emite un tag de acción,
 // el backend lo ejecuta y le realimenta el resultado. Ver el protocolo en config.js.
+// La frontera entre las dos formas de actuar. Sin esta frase escrita, un 7B elige el tag que
+// vio más recientemente (hannah-agent/docs/COEXISTENCE.md). Solo entra al prompt con el agente
+// sano (ver buildSystemPrompt).
+const TASK_PROTOCOL = `
+
+You have two ways to act on the computer. [RUN: cmd] runs ONE command whose exact shape you already know (list a folder, open an app, read a file) — it is instant. [TASK: imperative description in English] hands a job to your HANDS, a separate agent, when it needs SEVERAL steps or DECISIONS ("organize my downloads by type", "find the report I edited last week", "free up disk space"). Emit at most ONE [TASK:] per reply, only when the user asked for something actionable on the computer, and place it at the very end. After emitting it, say briefly that you are on it. Your hands will report back and you will relay what they say. Never claim a task started, progressed or finished unless a [YOUR HANDS] event told you so.`;
+
 const ACTION_TOOL = {
     run: ['run_command', 'command'], search: ['web_search', 'query'], fetch: ['fetch_url', 'url'],
     browse: ['open_url', 'url'], close: ['close_window', 'target'], weather: ['get_weather', 'location'], look: ['look_now', null],
@@ -116,7 +130,9 @@ const ACTION_TOOL = {
 // RECALL sigue en la lista de STRIP (la tool ya no existe, pero si el modelo lo emite igual
 // no debe llegar al audio).
 export const ACTION_TAGS = [...Object.keys(ACTION_TOOL).map((k) => k.toUpperCase()), 'SKILL'];
-const STRIP_TAGS = [...ACTION_TAGS, 'RECALL'];
+// TASK no es una acción del bucle síncrono (una tarea dura minutos): la despacha el orquestador
+// como [MOTION:]/[MOVE:]. Pero SÍ se stripea: el TTS jamás debe leerla.
+const STRIP_TAGS = [...ACTION_TAGS, 'RECALL', 'TASK', 'YOUR HANDS', 'HANDS STATUS', 'YOUR EYES'];
 const ACTION_RE = new RegExp(`\\[\\s*(${ACTION_TAGS.join('|')})\\b\\s*(?::\\s*([^\\]\\n]*))?\\]`, 'gi');
 
 /** Quita los tags de acción del texto hablado (con [ ], ( ) o * * como delimitador). */
@@ -225,3 +241,22 @@ const finalizeLlmTurn = (accumulatedResponse, durationMs, onComplete) => {
         });
     }
 };
+
+
+/**
+ * Clasificador de UNA palabra para las aprobaciones por voz del agente: ¿el enunciado
+ * responde a la pregunta pendiente? Solo se llama cuando el atajo léxico (sí/no/para) no
+ * decidió. Las únicas salidas válidas son ALLOW/DENY/CANCEL/ANSWER; cualquier otra cosa —
+ * incluido un error — la trata el puente como "no relacionado", y eso NUNCA concede.
+ */
+export async function classifyIntent(question, utterance, kind = 'approval') {
+    const sys = kind === 'question'
+        ? 'The assistant asked the user a question. Reply with exactly one word: ANSWER if the user is answering it, CANCEL if they want to stop the task, OTHER if unrelated.'
+        : 'The assistant asked the user for permission to perform an action. Reply with exactly one word: ALLOW if the user agrees, DENY if they refuse, CANCEL if they want to stop the whole task, OTHER if unrelated.';
+    const resp = await getLlmClient().chat.completions.create({
+        model: config.llm.model, max_tokens: 3, temperature: 0, stream: false,
+        messages: [{ role: 'system', content: sys },
+            { role: 'user', content: `Question: ${question}\nUser said: ${utterance}` }],
+    });
+    return String(resp.choices?.[0]?.message?.content || '').trim().toUpperCase().replace(/[^A-Z]/g, '');
+}

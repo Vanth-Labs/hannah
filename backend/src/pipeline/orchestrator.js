@@ -5,6 +5,7 @@ import { synthesizeSpeechStream } from './tts.js';
 import { generateVisemesFromText } from './lipsync.js';
 import { generateMotion, generateMotionFromText } from './motion.js';
 import { moveWindow, parseMoveIntent } from './windowControl.js';
+import * as agentBridge from './agentBridge.js';
 import { handleOpenIntent, handleCloseIntent, resolveDataAction } from './tools.js';
 import { resolveSkillPhrase } from '../state/skills.js';
 import { conversationManager } from '../state/conversationManager.js';
@@ -47,6 +48,10 @@ const collectStream = (stream) =>
 // que el modelo pueda emitir después (revertía "pantalla completa" a una esquina compacta,
 // porque "fullscreen" no está en el vocabulario de [MOVE:]).
 const recentUserMove = new Map();   // sessionId -> timestamp
+// Últimas palabras del usuario por sesión: son el `title` de la tarea (lo que ve el HUD y el
+// historial), en vez de la descripción imperativa que escribe el modelo.
+const lastUserWords = new Map();
+export const taskMisuse = { count: 0 };
 const markUserMove = (sessionId) => recentUserMove.set(sessionId || 'default', Date.now());
 const userMovedRecently = (sessionId) => Date.now() - (recentUserMove.get(sessionId || 'default') || 0) < 15000;
 
@@ -72,7 +77,29 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
             .catch((e) => logger.error('moveWindow falló', { message: e.message }));
     }
 
-    // Quitar etiquetas MOTION:/EMOTION:/MOVE: con cualquier delimitador: no deben verse
+    // Director de manos: [TASK:descripción] manda un trabajo de varios pasos al agente. Se
+    // despacha acá (no en el bucle de acciones de llm.js) porque una tarea dura minutos y sus
+    // resultados vuelven como eventos que la persona NARRA — no como una respuesta síncrona.
+    // Si el agente no está, el tag no estaba en el prompt; si el modelo lo emite igual, se
+    // stripea y se degrada a conversación: nunca a error.
+    const taskMatch = rawText.match(/[[(*]\s*TASK:\s*([^\])*\n]+?)\s*[\])*]/i);
+    if (taskMatch) {
+        const description = (taskMatch[1] || '').trim();
+        agentBridge.dispatch(sessionId, description, { title: lastUserWords.get(sessionId) || description })
+            .then((r) => {
+                if (r.error) {
+                    logger.warn('agent task not dispatched', { reason: r.error });
+                    // La persona ya dijo "voy": si no pudo, tiene que corregirse. Nunca fingir.
+                    agentBridge.reportDispatchFailure(sessionId, lastUserWords.get(sessionId) || description, r.error);
+                } else logger.info('agent task dispatched from [TASK:]', { taskId: r.taskId });
+                // Uso indebido del tag (riesgo listado por el agente): el modelo emitió [TASK:] para
+                // algo que la capa determinista habría resuelto. Se cuenta para poder medirlo.
+                if (r.error === 'agent_disabled' || r.error === 'agent_unavailable') taskMisuse.count++;
+            })
+            .catch((e) => logger.error('agent dispatch threw', { message: e.message }));
+    }
+
+    // Quitar etiquetas MOTION:/EMOTION:/MOVE:/TASK: con cualquier delimitador: no deben verse
     // en el subtítulo, oírse en el TTS ni condicionar el co-speech. Incluye variantes
     // sin cerrar (streaming parcial) para que nunca se filtre un corchete suelto.
     // Acciones: SIEMPRE con corchete (son palabras comunes; jamás estripar "look"/"time"
@@ -80,6 +107,8 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     const text = stripActionTags(rawText)
         // Gestos/emoción/mover: con o sin corchete (el 8B a veces los omite).
         .replace(/[[(*]?\s*(MOTION|EMOTION|MOVE)\s*:[^\])*\n]*[\])*]?/gi, '')
+        // TASK solo CON delimitador: "the task: finish it" es una frase normal y no debe borrarse.
+        .replace(/[[(*]\s*TASK\s*:[^\])*\n]*[\])*]?/gi, '')
         // Tags inventados por el modelo, tipo [FULLSCREEN] / [DONE] (corchete + MAYÚSCULAS, sin :).
         .replace(/[[(*]\s*[A-Z][A-Z_ -]{2,}\s*[\])*]/g, '')
         .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final
@@ -157,6 +186,7 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
  * Devuelve { turnText, dataResult }: turnText lleva el resultado real inyectado si lo hubo.
  */
 async function runDeterministicLayer(text, sessionId, onStreamSegment) {
+    lastUserWords.set(sessionId, String(text || '').slice(0, 80));
     const ctx = { sessionId, send: onStreamSegment };
     const moveSpec = parseMoveIntent(text);
     if (moveSpec) {
@@ -202,6 +232,13 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
             throw new Error(asrResult.message || 'No se detectó voz clara en el audio');
         }
 
+        // ¿Es la respuesta a una aprobación/pregunta pendiente de las "manos"? Se decide con el
+        // instante en que EMPEZÓ a hablar (SPEECH_START), no con el de la transcripción: hablar
+        // por encima de la pregunta no puede concederla. Si se consumió, no es conversación.
+        if (await agentBridge.routeUtterance(sessionId, asrResult.transcript, agentBridge.speechStartedAt(sessionId))) {
+            onStreamSegment({ type: 'user_transcript', text: asrResult.transcript });
+            return;
+        }
         const { turnText, dataResult } = await runDeterministicLayer(asrResult.transcript, sessionId, onStreamSegment);
 
         // Guardar el turno (con el resultado inyectado si hubo acción de datos).
@@ -225,7 +262,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
  * @param {string} systemPromptAlert - El reporte contextual listo para procesar por el LLM
  * @param {Function} onStreamSegment - Callback de envío al WebSocket
  */
-export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegment) => {
+export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegment, opts = {}) => {
     try {
         // 1. Validar la sesión
         const session = conversationManager.getSession(sessionId);
@@ -241,7 +278,8 @@ export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegm
         ];
 
         // 3. LLM: Disparar directo la tubería cognitiva evadiendo el hardware del micrófono
-        await executeLlmPipeline(sessionId, temporalTurns, onStreamSegment);
+        // opts.noActions: la inyección solo RELATA (narración de las manos); opts.signal: abortable.
+        await executeLlmPipeline(sessionId, temporalTurns, onStreamSegment, opts.signal, { noActions: !!opts.noActions });
 
     } catch (error) {
         logger.error('Fallo crítico en el Orquestador (Texto/YOLO)', { message: error.message });
