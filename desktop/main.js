@@ -17,6 +17,25 @@ const net = require('net');
 // Esto queda como red de seguridad para los procesos hijos que se lanzan después.
 app.commandLine.appendSwitch('no-sandbox');
 
+// ── AUTO-RELANZADO: los flags TIENEN que venir en argv ─────────────────────────────────
+// Cuando corre este archivo Chromium ya bifurcó el zygote: appendSwitch llega tarde (ver arriba)
+// y sin --no-sandbox en argv el renderer muere con un FATAL sobre /dev/shm. En desarrollo los
+// pone scripts/run.js; en el AppImage, electron-builder los escribe en el .desktop
+// (executableArgs) — pero eso solo cubre el menú del escritorio. Ejecutado desde la terminal
+// o por el instalador (install.sh) el AppImage arrancaba sin flags y no abría ventana.
+// Solución que cubre TODAS las vías: si en Linux faltan, relanzarse a sí mismo con ellos.
+if (process.platform === 'linux' && !process.argv.includes('--no-sandbox') && !process.env.HANNAH_NO_RELAUNCH) {
+  const extra = ['--no-sandbox', `--ozone-platform=${process.env.HANNAH_OZONE || 'x11'}`];
+  if (process.env.HANNAH_GPU !== 'separate') extra.push('--in-process-gpu');
+  // APPIMAGE: dentro del AppImage process.execPath apunta al binario extraído (que muere al
+  // salir el proceso padre); hay que relanzar el AppImage mismo. HANNAH_NO_RELAUNCH corta el bucle.
+  const exe = process.env.APPIMAGE || process.execPath;
+  const args = process.env.APPIMAGE ? [...extra, ...process.argv.slice(1)] : [...process.argv.slice(1), ...extra];
+  const child = spawn(exe, args, { detached: true, stdio: 'ignore', env: { ...process.env, HANNAH_NO_RELAUNCH: '1' } });
+  child.unref();
+  app.exit(0);
+}
+
 // ── LINUX: forzar X11/XWayland. Esto es lo que hace que el overlay funcione IGUAL en
 // GNOME, KDE, XFCE, Cinnamon, Hyprland… ────────────────────────────────────────────────
 // En Wayland NATIVO el protocolo prohíbe por diseño que una app controle su z-order o su
@@ -431,7 +450,7 @@ function createWindow() {
     win.loadURL(DEV_URL);
   } else {
     const distDir = app.isPackaged
-      ? path.join(process.resourcesPath, 'hannah-frontend', 'dist')
+      ? path.join(process.resourcesPath, 'frontend')   // = build.extraResources[].to (package.json)
       : path.join(__dirname, '..', 'hannah-frontend', 'dist');
     serveDist(distDir).then((port) => win.loadURL(`http://127.0.0.1:${port}/?overlay=1`));
   }

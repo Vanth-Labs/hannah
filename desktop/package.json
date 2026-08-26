@@ -27,7 +27,13 @@
       "preload.js"
     ],
     "extraResources": [
-      "../hannah-frontend/dist"
+      {
+        "from": "../hannah-frontend/dist",
+        "to": "frontend",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "linux": {
       "target": [
