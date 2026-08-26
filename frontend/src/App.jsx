@@ -84,11 +84,15 @@ export default function App() {
 
     // Manos-libres (VAD local): al detectar voz mientras Hannah habla -> barge-in;
     // al terminar el enunciado -> mandarlo como turno (WAV 16kHz).
+    // SPEECH_START se manda cuando el VAD detecta que EMPEZASTE a hablar, no al terminar: el
+    // backend usa ese instante para decidir si un "sí" responde a una pregunta que las manos
+    // hicieron ANTES (hablar por encima de la pregunta no puede concederla). Mandarlo al final
+    // del enunciado hacía que toda respuesta pareciera posterior a cualquier pregunta.
     useVoiceActivity({
         enabled: handsFree,
+        onSpeechStart: () => sendCommand({ command: 'SPEECH_START' }),
         onInterrupt: bargeIn,
         onUtterance: (wavBuffer) => {
-            sendCommand({ command: 'SPEECH_START' });
             sendAudio(wavBuffer);
             sendCommand({ command: 'SPEECH_END' });
         },

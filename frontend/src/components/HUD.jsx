@@ -39,6 +39,41 @@ function IconBtn({ onClick, onMouseDown, onMouseUp, onTouchStart, onTouchEnd, ti
 
 // Toast que muestra el comando ejecutado y su salida real, sin abrir la terminal.
 // Se auto-cierra a los 9s (se reinicia si llega uno nuevo).
+// Cuenta atrás de una aprobación: el silencio significa "no", y un botón sin reloj lo esconde.
+function Countdown({ until }) {
+    const [left, setLeft] = useState(Math.max(0, until - Date.now()));
+    useEffect(() => {
+        const id = setInterval(() => setLeft(Math.max(0, until - Date.now())), 500);
+        return () => clearInterval(id);
+    }, [until]);
+    return <span style={{ float: 'right', opacity: 0.7 }}>{Math.ceil(left / 1000)}s</span>;
+}
+
+// Píldora con la tarea viva de las "manos": título + estado + cancelar. Cabe en el widget de
+// 400px porque es una línea, no un panel (los paneles de 330-520px tapaban el avatar).
+function AgentPill({ task, onCancel }) {
+    const live = !['completed', 'failed', 'cancelled'].includes(task.state);
+    const icon = task.state === 'completed' ? '✓' : task.state === 'failed' ? '✗' : task.state === 'cancelled' ? '⊘'
+        : task.state?.startsWith('awaiting') ? '?' : '⟳';
+    return (
+        <div style={{
+            position: 'fixed', top: '12px', left: '50%', transform: 'translateX(-50%)', zIndex: 31,
+            maxWidth: 'min(360px, 92%)', padding: '5px 10px', borderRadius: '999px',
+            background: 'rgba(8,11,18,0.9)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+            border: `1px solid ${live ? 'rgba(122,184,232,0.45)' : 'rgba(255,255,255,0.18)'}`,
+            color: 'rgba(255,255,255,0.85)', fontFamily: "'DM Mono', monospace", fontSize: '11px',
+            display: 'flex', gap: '8px', alignItems: 'center', pointerEvents: 'auto', whiteSpace: 'nowrap',
+        }}>
+            <span style={{ color: '#7ab8e8' }}>{icon}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{task.title}</span>
+            <span style={{ opacity: 0.55 }}>{task.state}</span>
+            {live && <button onClick={onCancel} title="Cancel task" style={{
+                pointerEvents: 'auto', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '12px', padding: '0 2px',
+            }}>✕</button>}
+        </div>
+    );
+}
+
 function CommandToast({ run, onClose }) {
     useEffect(() => {
         const id = setTimeout(onClose, 9000);
@@ -84,6 +119,7 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
     const handsFree = useHannahStore((s) => s.handsFree);
     const pendingConfirm = useHannahStore((s) => s.pendingConfirm);
     const commandRun = useHannahStore((s) => s.commandRun);
+    const agentTask = useHannahStore((s) => s.agentTask);
     const terminalOpen = useHannahStore((s) => s.terminalOpen);
     // Acciones: referencias estables en zustand -> no provocan re-render.
     const setHandsFree = useHannahStore((s) => s.setHandsFree);
@@ -97,7 +133,15 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
         setTerminalOpen(next);
     };
     const answerConfirm = (approved) => {
-        if (pendingConfirm) sendCommand?.({ command: 'CONFIRM_COMMAND', id: pendingConfirm.id, approved });
+        if (!pendingConfirm) return;
+        if (pendingConfirm.kind === 'agent') {
+            // Botón del HUD = `by: 'hud'` en el backend: la única atribución que puede conceder
+            // un `high` (por voz el agente lo rechaza, anti-spoofing).
+            if (pendingConfirm.isQuestion) sendCommand?.({ command: 'AGENT_ANSWER', taskId: pendingConfirm.taskId, questionId: pendingConfirm.questionId, answer: approved ? (pendingConfirm.options?.[0] || 'yes') : 'no' });
+            else sendCommand?.({ command: 'AGENT_APPROVAL', taskId: pendingConfirm.taskId, approvalId: pendingConfirm.approvalId, decision: approved ? 'allow' : 'deny' });
+        } else {
+            sendCommand?.({ command: 'CONFIRM_COMMAND', id: pendingConfirm.id, approved });
+        }
         setPendingConfirm(null);
     };
 
@@ -153,6 +197,9 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
             </div>
 
             {commandRun && <CommandToast run={commandRun} onClose={() => setCommandRun(null)} />}
+            {agentTask && (!agentTask.doneAt || Date.now() - agentTask.doneAt < 15000) && (
+                <AgentPill task={agentTask} onCancel={() => sendCommand?.({ command: 'AGENT_CANCEL', taskId: agentTask.taskId })} />
+            )}
 
             {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
@@ -175,13 +222,16 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
                         border: '1px solid rgba(248,113,113,0.4)', borderRadius: '14px', padding: '20px',
                         fontFamily: "'DM Mono', monospace", color: 'rgba(255,255,255,0.85)',
                     }}>
-                        <div style={{ color: '#f87171', fontSize: '12px', letterSpacing: '0.1em', marginBottom: '10px' }}>
-                            ⚠ COMANDO DESTRUCTIVO — ¿lo autorizas?
+                        <div style={{ color: pendingConfirm.kind === 'agent' && pendingConfirm.risk !== 'high' ? '#7ab8e8' : '#f87171', fontSize: '12px', letterSpacing: '0.1em', marginBottom: '10px' }}>
+                            {pendingConfirm.kind === 'agent'
+                                ? (pendingConfirm.isQuestion ? `✋ YOUR HANDS ASK — ${pendingConfirm.title}` : `✋ YOUR HANDS NEED PERMISSION — ${pendingConfirm.title}${pendingConfirm.risk === 'high' ? ' · HIGH RISK' : ''}`)
+                                : '⚠ COMANDO DESTRUCTIVO — ¿lo autorizas?'}
+                            {pendingConfirm.expiresAt && <Countdown until={pendingConfirm.expiresAt} />}
                         </div>
                         <pre style={{
                             background: 'rgba(0,0,0,0.4)', padding: '10px 12px', borderRadius: '8px',
                             fontSize: '13px', color: '#fca5a5', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0 0 16px',
-                        }}>{pendingConfirm.command}</pre>
+                        }}>{pendingConfirm.kind === 'agent' ? (pendingConfirm.summary + (pendingConfirm.command ? `\n$ ${pendingConfirm.command}` : '')) : pendingConfirm.command}</pre>
                         <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
                             <button onClick={() => answerConfirm(false)} style={{
                                 pointerEvents: 'auto', padding: '8px 16px', borderRadius: '10px', cursor: 'pointer',

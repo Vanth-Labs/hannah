@@ -25,6 +25,8 @@ export const useHannahStore = create((set) => ({
     autoLookat: true,          // la cabeza/ojos siguen a la cámara (Fase 3)
     overlayGaze: { x: 0, y: 0 }, // dirección de mirada global (cursor Hyprland) en overlay
     pendingConfirm: null,      // { id, command } — comando destructivo esperando tu OK
+                               // o, con kind:'agent', { kind, taskId, approvalId|questionId, summary, risk, expiresAt, isQuestion }
+    agentTask: null,           // { taskId, title, state, lastSummary } — la tarea viva de las "manos" (píldora en el dock)
     commandRun: null,          // { command, output, at } — último comando ejecutado (toast, sin abrir terminal)
     terminalOpen: false,       // terminal abierta -> la ventana se divide (avatar arriba, terminal abajo)
     handsFree: false,          // conversación manos-libres por VAD (Fase B) + barge-in
@@ -48,6 +50,7 @@ export const useHannahStore = create((set) => ({
     setHandsFree: (handsFree) => set({ handsFree }),
     setOverlayGaze: (overlayGaze) => set({ overlayGaze }),
     setPendingConfirm: (pendingConfirm) => set({ pendingConfirm }),
+    setAgentTask: (agentTask) => set({ agentTask }),
     setCommandRun: (commandRun) => set({ commandRun }),
     setTerminalOpen: (terminalOpen) => set({ terminalOpen }),
 

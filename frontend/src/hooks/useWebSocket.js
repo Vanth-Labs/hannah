@@ -191,6 +191,44 @@ export function useWebSocket() {
                 useHannahStore.getState().setCommandRun({ command: msg.command, output: msg.output, at: Date.now() });
                 break;
 
+            // ── Las "manos" (hannah-agent). La VOZ la pone la persona por el camino normal de
+            // audio_chunk; esto es solo lo visual: una píldora con el estado, el toast con el
+            // último resumen, y el modal de aprobación (reutiliza el de comandos destructivos).
+            case 'agent_task_started':
+            case 'agent_task_progress': {
+                const st = useHannahStore.getState();
+                st.setAgentTask({ taskId: msg.taskId, title: msg.title, state: msg.state, lastSummary: msg.data?.summary || msg.data?.text || st.agentTask?.lastSummary });
+                if (msg.kind === 'progress' || msg.kind === 'plan' || msg.kind === 'output') {
+                    st.setCommandRun({ command: `hands · ${msg.title}`, output: msg.data?.summary || msg.data?.text || '', at: Date.now() });
+                }
+                // Al resolverse la aprobación (por voz, HUD o timeout) se cierra el modal.
+                if (msg.kind === 'approval.resolved' || msg.kind === 'answered') {
+                    if (st.pendingConfirm?.kind === 'agent' && st.pendingConfirm.taskId === msg.taskId) st.setPendingConfirm(null);
+                }
+                break;
+            }
+            case 'agent_approval_request':
+            case 'agent_question': {
+                const isQuestion = msg.type === 'agent_question';
+                useHannahStore.getState().setPendingConfirm({
+                    kind: 'agent', isQuestion, taskId: msg.taskId, title: msg.title,
+                    approvalId: msg.data?.approvalId, questionId: msg.data?.questionId,
+                    summary: msg.data?.summary || msg.data?.text || '', command: msg.data?.command,
+                    risk: msg.data?.risk || 'low', options: msg.data?.options, expiresAt: msg.expiresAt,
+                });
+                break;
+            }
+            case 'agent_task_done': {
+                const st = useHannahStore.getState();
+                st.setAgentTask({ taskId: msg.taskId, title: msg.title, state: msg.state, lastSummary: msg.data?.summary || msg.data?.error, doneAt: Date.now() });
+                if (st.pendingConfirm?.kind === 'agent' && st.pendingConfirm.taskId === msg.taskId) st.setPendingConfirm(null);
+                st.setCommandRun({ command: `hands · ${msg.title} · ${msg.state}`, output: msg.data?.summary || msg.data?.error || '', at: Date.now() });
+                break;
+            }
+            case 'agent_command_failed':
+                useHannahStore.getState().setCommandRun({ command: `hands · ${msg.command} failed`, output: msg.reason === 'hud_confirmation_required' ? 'This action is high risk: confirm it with the button.' : String(msg.reason || ''), at: Date.now() });
+                break;
+
             case 'open_terminal': {
                 // Skill de acción `terminal` (ssh/interactivo): abrir el panel split y escribir
                 // el comando. Delay para que xterm monte y quede attacheado antes del output.

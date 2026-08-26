@@ -27,10 +27,11 @@ function floatToWav(float32, sampleRate = 16000) {
     return buf;
 }
 
-export function useVoiceActivity({ enabled, onUtterance, onInterrupt }) {
+export function useVoiceActivity({ enabled, onUtterance, onInterrupt, onSpeechStart }) {
     const vadRef = useRef(null);
     // refs a los callbacks para no re-crear el VAD en cada render
     const cbUtter = useRef(onUtterance); cbUtter.current = onUtterance;
+    const cbStart = useRef(onSpeechStart); cbStart.current = onSpeechStart;
     const cbInterrupt = useRef(onInterrupt); cbInterrupt.current = onInterrupt;
 
     useEffect(() => {
@@ -54,6 +55,7 @@ export function useVoiceActivity({ enabled, onUtterance, onInterrupt }) {
                     // - capturar el arranque de la palabra (que el ASR no pierda la primera sílaba)
                     preSpeechPadFrames: 4,
                     onSpeechStart: () => {
+                        cbStart.current?.();   // SIEMPRE: el backend stampa el inicio del enunciado
                         if (useHannahStore.getState().isSpeaking) cbInterrupt.current?.();
                     },
                     onSpeechEnd: (audio) => { cbUtter.current?.(floatToWav(audio)); },
