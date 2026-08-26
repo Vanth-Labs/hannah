@@ -9,6 +9,10 @@ export const TUNING = {
     pinFeet: true,         // ankles and toes stay at rest (the motion splays the soles)
     pinFingers: true,      // fingers stay at rest (the model is weak there: clenched, shaky)
     shoulderAbduct: 0.22,  // rad, upper arms pushed away from a torso wider than SMPL-X's
-    // Idle rest pose (arms down), on normalized nodes: rest is T-pose for every VRM.
-    restArmZ: 1.2, restForearmZ: 0.25,
+    // Body-shape bones take the motion as a DELTA over the avatar's own rest (its shoulder
+    // slope, its neck) instead of adopting SMPL-X's shape; limbs are absolute (see offsets.js).
+    deltaBones: new Set(['spine', 'chest', 'upperChest', 'neck', 'head', 'leftShoulder', 'rightShoulder']),
+    // Idle rest pose, from the model's own arm geometry: the upper arm hangs this far from
+    // vertical (rad, outward), the forearm bends a bit further along the same axis.
+    restArmFromVertical: 0.37, restForearmBend: 0.25,
 };

@@ -4,11 +4,14 @@
 // aligns the SMPL-X rest bone frame to the VRM rest bone frame (bone direction + a consistent
 // twist reference). At runtime the avatar applies, on the VRM's NORMALIZED humanoid nodes
 // (rest = identity for every VRM, so this works for any of them):
-//     local[j] = A[parent]^-1 · quat(smplx_aa[j]) · A[j]
-// which reproduces the SMPL-X world pose on the VRM skeleton.
+//     local[j] = align[parent]^-1 · quat(smplx_aa[j]) · A[j]         (absolute: limbs)
+//     local[j] = align[parent]^-1 · quat(smplx_aa[j]) · align[parent]  (delta: body shape)
+// Absolute bones adopt the SMPL-X pose exactly (an arm at -90° is vertical on every avatar);
+// delta bones keep the avatar's own rest shape (its shoulder slope, its neck) and take only the
+// motion's rotation on top. See pose.js and TUNING.deltaBones.
 //
-// Ported from the retired scripts/compute_retarget_offsets.py (same math, same results for
-// the VRoid avatar it was written for), generalised through @pixiv/three-vrm's humanoid.
+// Ported from the retired scripts/compute_retarget_offsets.py, generalised through
+// @pixiv/three-vrm's humanoid — with one correction, see `A` below.
 import * as THREE from 'three';
 import { SMPLX_TO_HUMANOID, SMPLX_PARENT, PRIMARY_CHILD } from './smplxToHumanoid.js';
 
@@ -110,12 +113,23 @@ export function computeOffsets(vrm, smplxRest) {
         }
         frameFromDir(dirS, fwdS, Sf);
         frameFromDir(dirV, fwdV, Vf);
-        // A = Vf · Sfᵀ : rotation aligning the SMPL-X frame onto the VRM frame.
-        const A = new THREE.Matrix3().copy(Vf).multiply(new THREE.Matrix3().copy(Sf).transpose());
-        // nearest mapped AND present ancestor (skips jaw/eyes and bones this VRM lacks)
+        // A = Sf · Vfᵀ : the rotation that takes the VRM rest frame onto the SMPL-X rest frame.
+        // With world[j] = world_smplx[j] · A[j], the VRM bone points where the SMPL-X bone points
+        // (at rest: A·d_vrm = d_smplx), so a limb angle in the motion is that angle on the avatar.
+        // (The retired Python script had Vf·Sfᵀ — the inverse. On the VRoid it was harmless because
+        // the 180° facing folded into A cancels the error; on a VRM 1.0 the direction difference
+        // got applied twice, which is what pulled the shoulders down on other avatars.)
+        const A = new THREE.Matrix3().copy(Sf).multiply(new THREE.Matrix3().copy(Vf).transpose());
+        // nearest mapped AND present ancestor (skips jaw/eyes and bones this VRM lacks); the
+        // joints skipped in between still rotate in SMPL-X, so their rotations are folded in.
         let parent = SMPLX_PARENT[idx];
-        while (parent !== -1 && !present(parent)) parent = SMPLX_PARENT[parent];
-        out[idxStr] = { A: quatFromMatrix3(A), parent, name, node: vrm.humanoid.getNormalizedBoneNode(name) };
+        const skipped = [];
+        while (parent !== -1 && !present(parent)) { if (SMPLX_TO_HUMANOID[parent]) skipped.unshift(parent); parent = SMPLX_PARENT[parent]; }
+        out[idxStr] = {
+            A: quatFromMatrix3(A), parent, skipped, name,
+            node: vrm.humanoid.getNormalizedBoneNode(name),
+            dir: dirV.clone().normalize(),   // rest direction in the model frame (for the idle pose)
+        };
     }
     return out;
 }

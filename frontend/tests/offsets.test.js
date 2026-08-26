@@ -9,6 +9,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { frameFromDir, computeOffsets, yawOnly, vrmForward } from '../src/retarget/offsets.js';
+import { buildPoseRig, localRotation, restArm } from '../src/retarget/pose.js';
+import { TUNING } from '../src/retarget/tuning.js';
 import { SMPLX_TO_HUMANOID, SMPLX_PARENT } from '../src/retarget/smplxToHumanoid.js';
 import smplxRest from '../src/retarget/smplxRest.json';
 
@@ -80,25 +82,54 @@ describe('computeOffsets on the bundled VRoid avatar (headless three-vrm)', () =
     expect(Math.abs(yaw.y)).toBeGreaterThan(0.99);
   });
 
+  // Apply one SMPL-X frame (Float32Array 165) through pose.js, hips yaw-only like the app.
+  function applyFrame(poses) {
+    const rig = buildPoseRig(off, TUNING);
+    for (const idx of Object.keys(off)) {
+      const q = localRotation(rig, idx, poses, 0);
+      if (idx === '0' && TUNING.pelvisYawOnly) yawOnly(q, q);
+      off[idx].node.quaternion.copy(q);
+    }
+    vrm.scene.updateMatrixWorld(true);
+  }
+  const worldDir = (a, b) => { const pa = new THREE.Vector3(), pb = new THREE.Vector3(); off[a].node.getWorldPosition(pa); off[b].node.getWorldPosition(pb); return pb.sub(pa).normalize(); };
+  const smplxDir = (a, b) => new THREE.Vector3().fromArray(smplxRest.joints[b]).sub(new THREE.Vector3().fromArray(smplxRest.joints[a])).normalize();
+
+  test('at the SMPL-X rest pose, absolute limbs point where SMPL-X points (mirrored by the facing)', () => {
+    applyFrame(new Float32Array(165));
+    // VRM 0 faces -Z in its frame; the hips yaw turns it to +Z, so world == SMPL-X axes.
+    const arm = worldDir('16', '18'), armS = smplxDir(16, 18);
+    expect(arm.angleTo(armS)).toBeLessThan(0.05);
+    const thigh = worldDir('1', '4'), thighS = smplxDir(1, 4);
+    expect(thigh.angleTo(thighS)).toBeLessThan(0.05);
+  });
+
+  test('at the SMPL-X rest pose, delta bones keep the avatar\'s own shape', () => {
+    // rest directions in the model frame, mirrored by the facing (VRM 0: 180° about Y)
+    const restShoulder = off['13'].dir.clone(); restShoulder.x *= -1; restShoulder.z *= -1;
+    applyFrame(new Float32Array(165));
+    expect(worldDir('13', '16').angleTo(restShoulder)).toBeLessThan(0.05);
+  });
+
   test('a raised left arm in SMPL-X raises the left hand on the VRM', () => {
-    const node = (i) => off[i].node;
-    // rest: everything identity except hips facing
-    for (const o of Object.values(off)) o.node.quaternion.identity();
-    node('0').quaternion.copy(yawOnly(off['0'].A));
-    vrm.scene.updateMatrixWorld(true);
-    const before = new THREE.Vector3(); node('20').getWorldPosition(before);
-    // SMPL-X: rotate the left upper arm (16) 90° about its parent's Z... in SMPL-X the arm
-    // hangs along +X and a rotation about +Z lifts it toward +Y.
-    const apply = (idx, aa) => {
-      const ang = aa.length();
-      const R = ang < 1e-9 ? new THREE.Quaternion() : new THREE.Quaternion().setFromAxisAngle(aa.clone().normalize(), ang);
-      const parentInv = off[idx].parent === -1 ? new THREE.Quaternion() : off[off[idx].parent].A.clone().invert();
-      node(idx).quaternion.copy(parentInv).multiply(R).multiply(off[idx].A);
-    };
-    for (const idx of Object.keys(off)) if (idx !== '0') apply(idx, new THREE.Vector3());
-    apply('16', new THREE.Vector3(0, 0, Math.PI / 2));
-    vrm.scene.updateMatrixWorld(true);
-    const after = new THREE.Vector3(); node('20').getWorldPosition(after);
-    expect(after.y - before.y).toBeGreaterThan(0.25);   // the hand went up, clearly
+    applyFrame(new Float32Array(165));
+    const before = new THREE.Vector3(); off['20'].node.getWorldPosition(before);
+    const poses = new Float32Array(165); poses[16 * 3 + 2] = Math.PI / 2;   // joint 16 about +Z
+    applyFrame(poses);
+    const after = new THREE.Vector3(); off['20'].node.getWorldPosition(after);
+    expect(after.y - before.y).toBeGreaterThan(0.25);
+  });
+
+  test('the idle arms hang down on both sides, from the model\'s own geometry', () => {
+    for (const [upper, lower, side] of [['16', '18', 'left'], ['17', '19', 'right']]) {
+      for (const o of Object.values(off)) o.node.quaternion.identity();
+      off['0'].node.quaternion.copy(yawOnly(off['0'].A));
+      const arm = restArm(off[upper].dir, side, TUNING);
+      off[upper].node.quaternion.copy(arm.upper); off[lower].node.quaternion.copy(arm.lower);
+      vrm.scene.updateMatrixWorld(true);
+      const d = worldDir(upper, lower);
+      expect(d.y).toBeLessThan(-0.85);                       // hanging
+      expect(Math.sign(d.x)).toBe(side === 'left' ? 1 : -1); // a little outward, on its own side (world: left = +X)
+    }
   });
 });

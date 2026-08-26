@@ -15,7 +15,8 @@ import {
     VROID_EXTRAS, ALL_EXTRA_MORPHS, resolveExpression,
 } from '../retarget/retargetFace.js';
 import { SMPLX_TO_HUMANOID, FEET_IDX, SPINE_IDX, FINGER_IDX, LOWER_BODY } from '../retarget/smplxToHumanoid.js';
-import { computeOffsets, humanoidRestPositions, yawOnly } from '../retarget/offsets.js';
+import { computeOffsets, yawOnly } from '../retarget/offsets.js';
+import { buildPoseRig, localRotation, restArm } from '../retarget/pose.js';
 import { TUNING } from '../retarget/tuning.js';
 import smplxRest from '../retarget/smplxRest.json';
 import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
@@ -25,7 +26,6 @@ import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
 // its face into the bottom of the window.
 const HEAD_Y = -0.13;
 
-const _axis = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 const _rot = new THREE.Quaternion();
 const _look = new THREE.Quaternion();
@@ -123,34 +123,24 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         const node = (name) => vrm.humanoid.getNormalizedBoneNode(name);
         const isVrm0 = String(vrm.meta?.metaVersion ?? '0') === '0';
 
-        // Offsets SMPL-X -> this VRM, from both rest poses (see retarget/offsets.js).
+        // Offsets SMPL-X -> this VRM, from both rest poses (retarget/offsets.js), and the
+        // per-joint factors of the pose formula (retarget/pose.js).
         const offsets = computeOffsets(vrm, smplxRest);
-        const parentInv = {};
+        const poseRig = buildPoseRig(offsets, TUNING);
         const hipsYaw = yawOnly(offsets['0'].A);
-        for (const [idx, o] of Object.entries(offsets)) {
-            // Pelvis renders yaw-only, so its direct children must undo only that yaw.
-            parentInv[idx] = o.parent === -1 ? new THREE.Quaternion()
-                : (TUNING.pelvisYawOnly && o.parent === 0) ? hipsYaw.clone().invert()
-                    : offsets[o.parent].A.clone().invert();
-        }
 
-        // Rest pose on the normalized rig (T-pose, identity for every VRM): facing from the
-        // hips offset (only its yaw), arms down. Signs come from where the arm actually is
-        // in the model's frame (+X or -X), so VRM 0 and 1.0 both end up arms down.
-        const restPos = humanoidRestPositions(vrm);
-        const sideSign = (name) => ((restPos[name]?.x ?? 1) > 0 ? -1 : 1);   // Rz(sign·θ) lowers the arm
+        // Rest pose on the normalized rig: facing from the hips offset (only its yaw), arms
+        // hanging — computed from where THIS model's arms point at rest, so a T-pose, an
+        // A-pose or an asymmetric rig all end up arms down.
         node('hips').quaternion.copy(TUNING.pelvisYawOnly ? hipsYaw : offsets['0'].A);
-        const armDown = (upper, lower) => {
-            const s = sideSign(upper);
-            if (node(upper)) node(upper).rotation.z = s * TUNING.restArmZ;
-            if (node(lower)) node(lower).rotation.z = s * TUNING.restForearmZ;
-        };
-        armDown('leftUpperArm', 'leftLowerArm');
-        armDown('rightUpperArm', 'rightLowerArm');
-        // Shoulder abduction: push the upper arm AWAY from the torso (up), same sign logic.
         const abduct = {};
-        for (const [idx, name] of [['16', 'leftUpperArm'], ['17', 'rightUpperArm']]) {
-            abduct[idx] = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -sideSign(name) * TUNING.shoulderAbduct);
+        for (const [upperIdx, lowerIdx, side] of [['16', '18', 'left'], ['17', '19', 'right']]) {
+            const arm = restArm(offsets[upperIdx]?.dir, side, TUNING);
+            if (!arm) continue;
+            offsets[upperIdx].node.quaternion.copy(arm.upper);
+            if (offsets[lowerIdx]) offsets[lowerIdx].node.quaternion.copy(arm.lower);
+            // Shoulder abduction: raise the upper arm away from the torso about the same axis.
+            abduct[upperIdx] = new THREE.Quaternion().setFromAxisAngle(arm.axis, -TUNING.shoulderAbduct);
         }
 
         const bodyBones = {}, restQuat = {};
@@ -160,13 +150,15 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         }
 
         vrm.scene.updateMatrixWorld(true);
-        const headRestY = restPos.head?.y ?? new THREE.Box3().setFromObject(vrm.scene).max.y - 0.2;
+        const headV = new THREE.Vector3();
+        node('head')?.getWorldPosition(headV); vrm.scene.worldToLocal(headV);
+        const headRestY = node('head') ? headV.y : new THREE.Box3().setFromObject(vrm.scene).max.y - 0.2;
         if (import.meta.env.DEV) window.__hannahVrm = { vrm, group };   // inspección en dev (capturas, consola)
         const lookTarget = new THREE.Object3D();
         if (vrm.lookAt) { vrm.lookAt.target = lookTarget; vrm.lookAt.autoUpdate = true; }
 
         return {
-            vrm, offsets, parentInv, abduct, bodyBones, restQuat, morphs, isVrm0,
+            vrm, offsets, poseRig, abduct, bodyBones, restQuat, morphs, isVrm0,
             // Local-frame sign: VRM 0 carries the 180° facing in the hips, which mirrors X/Z
             // of every descendant's local frame relative to a VRM 1.0 model.
             flip: isVrm0 ? 1 : -1,
@@ -247,15 +239,8 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             if (TUNING.pinFeet && FEET_IDX.has(idx)) { bone.quaternion.slerp(rig.restQuat[idx], Math.min(1, 8 * delta)); continue; }
             if (TUNING.pinFingers && FINGER_IDX.has(idx)) { bone.quaternion.slerp(rig.restQuat[idx], Math.min(1, 10 * delta)); continue; }
             if (frame >= 0) {
-                const base = frame * 165 + Number(idx) * 3;
-                const x = currentMotion.poses[base];
-                const y = currentMotion.poses[base + 1];
-                const z = currentMotion.poses[base + 2];
-                const ang = Math.sqrt(x * x + y * y + z * z);
-                if (ang < 1e-7 || Number.isNaN(ang)) _rot.identity();
-                else { _axis.set(x / ang, y / ang, z / ang); _rot.setFromAxisAngle(_axis, ang); }
-                // local = A_parent^-1 · quat(aa) · A_self (facing baked into A_hips).
-                _quat.copy(rig.parentInv[idx]).multiply(_rot).multiply(rig.offsets[idx].A);
+                // absolute or delta per bone, skipped joints folded in (retarget/pose.js)
+                localRotation(rig.poseRig, idx, currentMotion.poses, frame, _quat);
                 if (idx === '0') { if (TUNING.pelvisYawOnly) yawOnly(_quat, _quat); }
                 else if (SPINE_IDX.has(idx)) _quat.copy(rig.restQuat[idx]).slerp(_quat, TUNING.spineKeep);
                 else if (rig.abduct[idx]) _quat.multiply(rig.abduct[idx]);
