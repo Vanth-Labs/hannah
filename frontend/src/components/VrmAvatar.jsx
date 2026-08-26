@@ -71,6 +71,9 @@ function idleOffset(idx, t) {
 // Gestos deliberados (Mixamo, horneados en espacio normalizado, frame VRM 1.0). Solo tren
 // superior: nunca cadera ni piernas, para no alterar encaramiento ni postura.
 const GESTURE_NAMES = ['wave', 'point', 'nod', 'shake_no', 'happy', 'dismiss', 'acknowledge'];
+// ?nogesture=1: ignora los clips deliberados, para que al hablar TODO el movimiento venga del
+// text-to-motion (útil para probar el retarget de un avatar nuevo sin que un clip lo tape).
+const NO_GESTURES = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('nogesture');
 
 // The loader plugin that turns a glTF with the VRM extension into a VRM. Applied through
 // drei's `extendLoader` so the model is cached by URL like any other asset.
@@ -253,7 +256,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         }
 
         // ── GESTO deliberado (Mixamo) por encima del co-speech ──────────
-        if (gestureTrigger && gestureTrigger.startedAt !== gesture.current?.startedAt) {
+        if (!NO_GESTURES && gestureTrigger && gestureTrigger.startedAt !== gesture.current?.startedAt) {
             const clip = clips.current[gestureTrigger.name];
             if (clip) gesture.current = { clip, startedAt: gestureTrigger.startedAt };
         }
