@@ -119,8 +119,13 @@ in this order: co-speech or idle body → deliberate gesture on top → auto-loo
 command output, and the **confirmation modal** for destructive commands. In web mode it adds the
 classic bottom bar (push-to-talk, text input, vision) and the floating transcript.
 
-`SettingsPanel.jsx` is the ⚙ "bring your own model" panel: LLM/ASR/TTS providers, Kokoro voice
-picker, voice shortcuts and skills — all against the backend API, **without restarting anything**.
+`SettingsPanel.jsx` is the ⚙ panel. The top is for people, not developers — three cards, one
+decision each: **Brain** ("on my PC" or a cloud provider + key), **Voice** (language, a voice
+with a human name, and a *Listen* button backed by `GET /tts/preview`), **Hands** (agent status,
+its key, one line of privacy). Everything else — base URLs, model ids, sidecars, persona, ASR,
+voice shortcuts, skills — lives under a folded **Advanced**. Both views write the same form and
+save with one button, against the backend API, **without restarting anything**; a blank field
+means "keep".
 `TerminalPanel.jsx` is a real terminal (xterm.js) docked at the bottom at 40% of the window, so you
 can see what Hannah did without opening another console.
 
