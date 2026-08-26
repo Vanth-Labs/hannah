@@ -329,6 +329,27 @@ language through the turn, relax the protocol to "reply in the user's language",
 voice by language. Worth doing the day a better multilingual TTS is plugged in; not before, or
 you trade good audio for bad.
 
+### Who runs the model's free-form commands (`TOOLS_RUN_POLICY`)
+
+Three things can act on the machine: the **deterministic layer** (window moves, open/close, list/
+read/create/delete parsed from the user's own words), **skills** (`SKILL.md`: the model picks the
+name, the backend builds the command) and the model's **free-form `[RUN: cmd]`**. The first two
+are local, instant and model-independent. `[RUN:]` is the weak spot: no allowlist, only the
+`DANGER` regex as a net, and a 7B model deciding on its own what to type. When the hands (the
+agent) are on, they have risk tiers, approvals, an audit log and undo — so the policy decides
+where a `[RUN:]` goes:
+
+| `TOOLS_RUN_POLICY` | `[RUN:]` in the prompt | a stray `[RUN:]` from the model |
+|---|---|---|
+| `agent-first` (default when `AGENT_ENABLED=true`) | no, while the hands are healthy; yes if they are off or down | converted into a `[TASK:]` for the agent (`handleRunTag`, `llm.js`); the persona says "on it" and narrates the result |
+| `skills-only` | never | refused; the model is told to use a skill or say it cannot |
+| `free` (default without agent) | yes, with the command cheat-sheets | runs in the pty, as before |
+
+Skills, the deterministic layer and the human's terminal panel (`TERMINAL_*`) are untouched by
+the policy. **The terminal panel also echoes the hands**: every command the agent runs (`[hands] $
+…`) and the first lines of its output show up there, read-only, with a backlog for when the panel
+is opened later — one place to see what ran on the machine, whoever ran it.
+
 ### Runtime configuration
 
 The ⚙ panel writes `data/settings.json`, which **overrides `.env`** and is applied **without a

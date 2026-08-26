@@ -71,22 +71,7 @@ around. ONLY when the user asks you to move/relocate (or it clearly fits), emit 
 move tag inline: [MOVE:where] where "where" is one of: top-left, top-right,
 bottom-left, bottom-right, center, fullscreen, next-screen. Use it rarely; never for normal talk.
 
-### RUNNING COMMANDS — your MAIN tool
-To DO or CHECK anything on this computer, write the exact shell command inline as:
-[RUN: <command>]
-The app runs it in a real terminal and hands you back the REAL output to continue from. Then
-STOP (do NOT write anything after the tag; wait for the result). Figure out the command
-yourself — you don't need the user to phrase it a special way. Examples:
-  "create a file notes.txt"        -> [RUN: touch notes.txt]
-  "list the files here"            -> [RUN: ls -la]
-  "how many files are here"        -> [RUN: ls -1 | wc -l]
-  "make a folder called test"      -> [RUN: mkdir test]
-  "what's my kernel"               -> [RUN: uname -r]
-  "delete /tmp/x" (destructive)    -> [RUN: rm /tmp/x]   (the app will ask the user to confirm)
-Never guess or invent a command's output. If a request needs the computer and you did NOT get
-a real result back, do NOT claim you did it — just run the command.
-
-Other action tags (same rule — emit, then wait for the real result):
+{{RUN_PROTOCOL}}Other action tags (same rule — emit, then wait for the real result):
   [SEARCH: query]  web search      [FETCH: url]  read a page (no window)
   [BROWSE: url]    open a page      [CLOSE: what] close a window/app
   [WEATHER: place] [LOOK] camera    [TIME] date/time    [OPEN: app name]
@@ -100,6 +85,23 @@ skill instead of recalling.
 
 At the end of each response, append an emotion tag on a new line in the format:
 [EMOTION:neutral|happy|surprised|thinking|sad|angry|curious|alert]`,
+    // Sección [RUN:] del protocolo. Va aparte porque NO siempre entra: con la política
+    // agent-first/skills-only (config.tools.runPolicy) el modelo no debe ver [RUN:] — sus
+    // comandos libres van al agente como tarea. llm.js la inserta en {{RUN_PROTOCOL}}.
+    runProtocol: `### RUNNING COMMANDS — your MAIN tool
+To DO or CHECK anything on this computer, write the exact shell command inline as:
+[RUN: <command>]
+The app runs it in a real terminal and hands you back the REAL output to continue from. Then
+STOP (do NOT write anything after the tag; wait for the result). Figure out the command
+yourself — you don't need the user to phrase it a special way. Examples:
+  "create a file notes.txt"        -> [RUN: touch notes.txt]
+  "list the files here"            -> [RUN: ls -la]
+  "how many files are here"        -> [RUN: ls -1 | wc -l]
+  "make a folder called test"      -> [RUN: mkdir test]
+  "what's my kernel"               -> [RUN: uname -r]
+  "delete /tmp/x" (destructive)    -> [RUN: rm /tmp/x]   (the app will ask the user to confirm)
+Never guess or invent a command's output. If a request needs the computer and you did NOT get
+a real result back, do NOT claim you did it — just run the command.`,
   },
   tts: {
     provider: process.env.TTS_PROVIDER || 'kokoro',
@@ -173,6 +175,17 @@ At the end of each response, append an emotion tag on a new line in the format:
     // ejecuta CUALQUIER comando en un pty real; la única red es la confirmación del usuario
     // para los destructivos (regex DANGER en pipeline/tools.js, best-effort).
     systemControl: process.env.TOOLS_SYSTEM_CONTROL === 'true',
+    // Quién corre los comandos LIBRES del modelo ([RUN:]), es decir, lo que no es una skill ni
+    // una intención determinista:
+    //   free        -> el backend, en el pty (lo de siempre; única red: la regex DANGER).
+    //   agent-first -> el agente (riesgo por niveles, aprobación, auditoría, deshacer); si el
+    //                  agente está apagado o caído, cae a `free`.
+    //   skills-only -> nunca: sin agente, el modelo solo tiene skills.
+    // Por defecto agent-first cuando hay agente, free si no. Las skills y la capa determinista
+    // siguen corriendo en local en cualquier política; la terminal del panel es del usuario.
+    runPolicy: ['free', 'agent-first', 'skills-only'].includes(process.env.TOOLS_RUN_POLICY)
+      ? process.env.TOOLS_RUN_POLICY
+      : (process.env.AGENT_ENABLED === 'true' ? 'agent-first' : 'free'),
     // open_app: el LLM elige la CLAVE; el comando es fijo (sin inyección). Editable.
     appAllowlist: {
       firefox: 'firefox', chrome: 'google-chrome-stable', browser: 'xdg-open https://www.google.com',

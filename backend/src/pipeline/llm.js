@@ -5,7 +5,7 @@ import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
 import { runTool } from './tools.js';
 import { skillsPromptSection, resolveSkill } from '../state/skills.js';
-import { isHealthy as agentHealthy, handsStatus } from './agentBridge.js';
+import { isHealthy as agentHealthy, handsStatus, dispatch as dispatchTask } from './agentBridge.js';
 import { referencePromptSection } from '../state/reference.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
@@ -53,14 +53,22 @@ export async function buildSystemPrompt(history, withActions, noActions = false)
     let memorySection = '';
     if (summary) memorySection += `\n\n[What you remember about the user and past conversations]\n${summary}`;
     if (recalled) memorySection += `\n\n[Relevant things from earlier conversations]\n${recalled}`;
-    const skillsSection = withActions ? skillsPromptSection() + referencePromptSection() : '';
+    // Los cheat-sheets enseñan a escribir [RUN:]: solo entran cuando [RUN:] está permitido.
+    const skillsSection = withActions ? skillsPromptSection() + (runAllowed() ? referencePromptSection() : '') : '';
     // Las "manos" entran en el prompt SOLO si el agente está encendido y sano: sin eso el
     // modelo no ve [TASK:] y no puede emitirlo. Mismo criterio que el índice de skills: tras
     // una acción determinista tampoco se ofrece, para no repetir la acción.
     // Las manos NO dependen de TOOLS_ENABLED (son otro sistema, con su propia seguridad); sí
     // se omiten tras una acción determinista (noActions), para no repetir la acción.
-    const hands = !noActions && config.agent.enabled && agentHealthy() ? TASK_PROTOCOL : '';
-    return `${config.llm.persona}${memorySection}\n\n${config.llm.protocol}${skillsSection}${hands}${handsStatus()}`;
+    const handsOn = !noActions && config.agent.enabled && agentHealthy();
+    const run = runAllowed();
+    // Política de comandos libres (config.tools.runPolicy): con [RUN:] permitido el modelo ve
+    // la sección RUN y, si hay manos, la frontera RUN/TASK; sin [RUN:] permitido, las manos son
+    // la ÚNICA vía para un comando que no sea skill (o, sin manos, no hay vía y se le dice).
+    const runSection = withActions && run ? config.llm.runProtocol : '';
+    const hands = handsOn ? (run ? TASK_PROTOCOL : TASK_ONLY_PROTOCOL) : (withActions && !run ? NO_RUN_PROTOCOL : '');
+    const protocol = config.llm.protocol.replace('{{RUN_PROTOCOL}}', runSection);
+    return `${config.llm.persona}${memorySection}\n\n${protocol}${skillsSection}${hands}${handsStatus()}`;
 }
 
 /**
@@ -73,6 +81,10 @@ export const generateDialogueStream = async (history, onToken, onComplete, signa
         // resultado: sin loop de tags (evita doble ejecución, p.ej. ssh dos veces) y sin
         // índice de skills en el prompt (no lo tienta a re-actuar).
         const useActions = config.tools.enabled && !ctx.noActions;
+        // Con manos, la respuesta también pasa por la vía NO streaming aunque las tools estén
+        // apagadas: hay que ver la respuesta entera para poder descartar la prosa que rodea a
+        // un [TASK:] (ver keepOnlyTask) antes de que una sola sílaba llegue al TTS.
+        const handsOn = !ctx.noActions && config.agent.enabled && agentHealthy();
         const systemPrompt = await buildSystemPrompt(history, useActions, !!ctx.noActions);
         const messages = [
             { role: 'system', content: systemPrompt },
@@ -81,7 +93,7 @@ export const generateDialogueStream = async (history, onToken, onComplete, signa
                 content: turn.content,
             })),
         ];
-        const text = useActions
+        const text = (useActions || handsOn)
             ? await generateWithActions(messages, onToken, signal, ctx)
             : await streamAnswer(messages, onToken, signal);
         if (text === null) return;   // abortado (barge-in)
@@ -116,6 +128,75 @@ async function streamAnswer(messages, onToken, signal) {
 // La frontera entre las dos formas de actuar. Sin esta frase escrita, un 7B elige el tag que
 // vio más recientemente (hannah-agent/docs/COEXISTENCE.md). Solo entra al prompt con el agente
 // sano (ver buildSystemPrompt).
+/**
+ * Si la respuesta delega con [TASK:], se queda SOLO el tag. Un 7B, al delegar, suele
+ * "responder" igual: inventa cifras y nombres de archivo ("your Documents folder has 24
+ * files, the biggest is report2023.docx") y recién al final pone el tag. Esa prosa no puede
+ * llegar a la voz: la única verdad sobre la tarea son los eventos de las manos, y el puente
+ * ya narra "acabo de tomar la tarea" cuando el agente la acepta — ese es el "voy". Se lleva
+ * también cualquier otro tag colado en la misma respuesta ([MOVE:] espontáneos incluidos).
+ * Puro; exportado para tests.
+ */
+export function keepOnlyTask(text) {
+    const m = String(text || '').match(/[[(*]\s*TASK:\s*[^\])*\n]+?\s*[\])*]/i);
+    if (!m) return text;
+    if (m[0].length < text.trim().length) logger.info('reply prose dropped around [TASK:]', { dropped: text.length - m[0].length });
+    return m[0];
+}
+
+/**
+ * ¿Puede el modelo ejecutar un comando libre ([RUN:]) en el pty del backend AHORA?
+ *   free        -> sí.
+ *   agent-first -> solo si las manos no están (apagadas o caídas): si están, van al agente.
+ *   skills-only -> nunca.
+ * Las skills, la capa determinista y la terminal del usuario no pasan por acá.
+ */
+export function runAllowed() {
+    const policy = config.tools.runPolicy;
+    if (policy === 'skills-only') return false;
+    if (policy === 'agent-first') return !(config.agent.enabled && agentHealthy());
+    return true;
+}
+
+/**
+ * Un [RUN:] emitido cuando la política no lo permite. Con manos, se convierte en una tarea
+ * (el agente decide el riesgo y pide permiso; la persona narra el resultado); sin manos, se
+ * rechaza y el modelo tiene que decírselo al usuario. Devuelve el texto que ve el modelo
+ * como resultado de la acción — nunca ejecuta el comando.
+ */
+export async function handleRunTag(cmd, ctx = {}) {
+    const command = String(cmd || '').trim();
+    if (!command) return 'refused: empty command';
+    if (config.agent.enabled && agentHealthy() && ctx.sessionId) {
+        const r = await dispatchTask(ctx.sessionId, `Run this command and report its result: ${command}`,
+            { title: `run: ${command.slice(0, 50)}` });
+        if (!r.error) {
+            return 'handed to your HANDS (under this policy, commands you write yourself go through the agent, which '
+                + 'asks the user before anything risky). Tell the user you are on it; do NOT claim a result yet — '
+                + 'your hands will report back and you will relay it.';
+        }
+        return `not run: your hands could not take it (${r.error}). Tell the user you cannot run that right now.`;
+    }
+    return 'refused: running commands directly is disabled here (only skills and your hands may act). '
+        + 'Use a skill if one fits; otherwise tell the user you cannot run that.';
+}
+
+// Variantes del protocolo de manos según la política de comandos (ver runAllowed).
+const TASK_ONLY_PROTOCOL = `
+
+To act on the computer you have SKILLS ([SKILL: name | input], listed above if any) and your
+HANDS: [TASK: imperative description in English] hands a job to a separate agent that runs the
+commands, asks the user before anything risky, and reports back. You can NOT run commands
+yourself: never write [RUN:]. For ANY request that needs the computer and is not a skill — one
+command or many — emit exactly ONE [TASK:] at the very end of your reply, say briefly that you
+are on it, and wait. Never claim a task started, progressed or finished unless a [YOUR HANDS]
+event told you so.`;
+
+const NO_RUN_PROTOCOL = `
+
+You can NOT run commands on this computer: never write [RUN:]. If a SKILL fits the request use
+it; otherwise say plainly that you cannot do that here.`;
+
 const TASK_PROTOCOL = `
 
 You have two ways to act on the computer. [RUN: cmd] runs ONE command whose exact shape you already know (list a folder, open an app, read a file) — it is instant. [TASK: imperative description in English] hands a job to your HANDS, a separate agent, when it needs SEVERAL steps or DECISIONS ("organize my downloads by type", "find the report I edited last week", "free up disk space"). Emit at most ONE [TASK:] per reply, only when the user asked for something actionable on the computer, and place it at the very end. After emitting it, say briefly that you are on it. Your hands will report back and you will relay what they say. Never claim a task started, progressed or finished unless a [YOUR HANDS] event told you so.`;
@@ -152,7 +233,7 @@ async function generateWithActions(messages, onToken, signal, ctx) {
         const resp = await getLlmClient().chat.completions.create(
             { model: config.llm.model, messages, max_tokens: 400, stream: false }, { signal });
         if (signal?.aborted) return null;
-        const text = resp.choices[0]?.message?.content || '';
+        const text = keepOnlyTask(resp.choices[0]?.message?.content || '');
         const acts = parseActions(text);
         if (!acts.length) { if (onToken && text) onToken(text); return text; }   // sin acción -> es la respuesta
 
@@ -164,6 +245,11 @@ async function generateWithActions(messages, onToken, signal, ctx) {
                 const [nm, ...rest] = a.arg.split('|');
                 const r = await resolveSkill(nm.trim(), rest.join('|').trim(), ctx);
                 results.push(`SKILL ${a.arg} -> ${r ?? `skill "${nm.trim()}" no existe`}`);
+                continue;
+            }
+            // [RUN:] bajo una política que no lo permite: a las manos (o rechazado), nunca al pty.
+            if (a.key === 'run' && !runAllowed()) {
+                results.push(`RUN ${a.arg} -> ${await handleRunTag(a.arg, ctx)}`);
                 continue;
             }
             const [tool, argName] = ACTION_TOOL[a.key] || [];

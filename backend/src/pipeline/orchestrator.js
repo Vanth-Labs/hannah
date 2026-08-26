@@ -348,8 +348,12 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
                 enqueueSegment(sentenceBuffer.trim());
             }
 
-            // Guardar la respuesta final real en el historial oficial de la sesión
-            conversationManager.addTurn(sessionId, 'assistant', finalLlmResult.text);
+            // Guardar la respuesta final real en el historial oficial de la sesión. Si la
+            // respuesta era solo un [TASK:] (keepOnlyTask), se guarda como frase legible: el
+            // historial no debe enseñarle al modelo a repetir tags, y la memoria la resume mejor.
+            const spokenOrDelegated = String(finalLlmResult.text || '')
+                .replace(/^\s*[[(*]\s*TASK:\s*([^\])*\n]+?)\s*[\])*]\s*$/i, '(I handed this to my hands: $1)');
+            conversationManager.addTurn(sessionId, 'assistant', spokenOrDelegated);
             conversationManager.updateSessionMetadata(sessionId, { emotion: finalLlmResult.emotion });
 
             // Cerrar ciclo de transmisión en el frontend cuando el último segmento ya fue enviado
