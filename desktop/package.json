@@ -61,5 +61,10 @@
   },
   "allowScripts": {
     "electron@33.4.11": true
-  }
+  },
+  "author": {
+    "name": "pedrochgdev",
+    "email": "gabrielchg6@gmail.com"
+  },
+  "homepage": "https://hannah-motion-lab.github.io/site/"
 }
