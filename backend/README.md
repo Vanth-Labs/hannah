@@ -227,6 +227,7 @@ centralizes the 500 envelope — never in `server.js`.
 | `DELETE` | `/session/:id` | Deletes the in-memory state (the SQLite history stays) |
 | `GET` | `/settings` | Provider config, **with the API keys redacted** |
 | `POST` | `/settings` | Applies a whitelisted patch and persists it in `data/settings.json` |
+| `GET` | `/tts/preview?voice=<id>` | A short sample sentence in that voice, as `audio/wav` (Kokoro ids only; 400 on a bad id, 503 without the sidecar). Powers the "Listen" button in the ⚙ panel |
 | `GET` | `/shortcuts` | Voice shortcuts: `{sites, apps}` |
 | `POST` | `/shortcuts` | Replaces the whole set and persists |
 | `GET` | `/skills` | Lists the skills with their raw markdown |

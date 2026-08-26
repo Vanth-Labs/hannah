@@ -5,7 +5,7 @@ import { getHealth } from './health.js';
 import { createSession, deleteSession } from './sessions.js';
 import { readSettings, writeSettings } from './settings.js';
 import { readShortcuts, writeShortcuts } from './shortcuts.js';
-import { readVoices } from './tts.js';
+import { readVoices, previewVoice } from './tts.js';
 import { readSkills, writeSkill, removeSkill } from './skills.js';
 import { generateDialogueStream } from '../pipeline/llm.js';
 import { synthesizeSpeechStream } from '../pipeline/tts.js';
@@ -25,6 +25,7 @@ router.post('/settings', handler('settings_write_failed', writeSettings));
 router.get('/shortcuts', handler('shortcuts_read_failed', readShortcuts));
 router.post('/shortcuts', handler('shortcuts_write_failed', writeShortcuts));
 router.get('/tts/voices', readVoices);   // ya degrada solo (200 con lista vacía)
+router.get('/tts/preview', previewVoice);  // ?voice=ef_dora -> audio/wav de una frase corta (503 si no hay sidecar)
 router.get('/skills', handler('skills_read_failed', readSkills));
 router.post('/skills', handler('skill_write_failed', writeSkill));
 router.delete('/skills/:name', handler('skill_delete_failed', removeSkill));
