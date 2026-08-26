@@ -14,29 +14,28 @@ const ALLOWED = {
   llm: ['provider', 'model', 'apiKey', 'baseUrl', 'persona'],
   asr: ['provider', 'model', 'apiKey', 'language', 'sidecarUrl'],
   tts: ['provider', 'model', 'apiKey', 'voiceId', 'sidecarUrl'],
-  // El token es un secreto: entra en KEEP_IF_BLANK y nunca vuelve al navegador (se redacta).
+  // El token es un secreto: entra en SECRETS y nunca vuelve al navegador (se redacta).
   agent: ['url', 'token', 'mode', 'apiKey'],
 };
 
-// Campos que en blanco NO se sobreescriben (conservan el valor actual).
-const KEEP_IF_BLANK = new Set(['apiKey', 'persona', 'token']);
+// Secretos: nunca vuelven al navegador (se redactan a hasApiKey/hasToken).
+const SECRETS = new Set(['apiKey', 'token']);
 
-/**
- * Merge de un patch dentro de `config` in-place.
- * Un apiKey en blanco/ausente NO sobreescribe (para que el round-trip redactado
- * del frontend no borre un secreto ya guardado).
- */
+const blank = (value) => value == null || String(value).trim() === '';
+
 export function applySettings(patch = {}) {
   for (const section of Object.keys(ALLOWED)) {
     const incoming = patch[section];
     if (!incoming || typeof incoming !== 'object') continue;
     for (const key of ALLOWED[section]) {
       if (!(key in incoming)) continue;
-      let value = incoming[key];
-      if (KEEP_IF_BLANK.has(key) && (value == null || String(value).trim() === '')) {
-        continue; // blanco = conservar el valor existente (key/persona)
-      }
-      if (key === 'baseUrl' && value === '') value = null; // '' -> OpenAI oficial
+      const value = incoming[key];
+      // En blanco = conservar lo que hay (el valor del .env o el guardado antes). El panel
+      // manda el formulario ENTERO: rellenar solo la key del agente llegaba con `model: ""`
+      // y `baseUrl: ""` para el cerebro -> el backend apuntaba a OpenAI sin modelo, y con
+      // `agent.url: ""` las manos quedaban "no disponibles". Vaciar un campo nunca es una
+      // orden; para cambiar de proveedor se escribe el nuevo valor (o se usa un preset).
+      if (blank(value)) continue;
       config[section][key] = value;
     }
   }

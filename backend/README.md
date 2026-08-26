@@ -334,7 +334,11 @@ you trade good audio for bad.
 The ⚙ panel writes `data/settings.json`, which **overrides `.env`** and is applied **without a
 restart** (it mutates `config` in memory and the whole pipeline reads it on every call). Only the
 fields in the whitelist of `state/settings.js` are accepted, and **the API keys are never returned
-to the browser**: the `GET /settings` view is redacted.
+to the browser**: the `GET /settings` view is redacted. **A blank field means "keep what is there"**,
+never "clear it": the panel posts the whole form, so filling in only the agent's key used to arrive
+with `model: ""` and `baseUrl: ""` for the brain (pointing the backend at OpenAI with no model) and
+`agent.url: ""` (hands permanently "unavailable"). To change a provider, write the new value or pick
+a preset.
 
 ---
 

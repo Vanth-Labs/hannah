@@ -72,6 +72,14 @@ export function parseMoveIntent(text) {
   const hasVerb = /\b(mu[eé]vete|mu[eé]vase|mov[eé]te|vete|ve|ponte|p[oó]nte|pon[eé]te|pon[eé]lo|corr[eé]te|colócate|ub[ií]cate|ll[eé]vate|and[aá]te|p[aá]sate|regr[eé]sate|mueve|ponla|hazte|agr[aá]ndate|ach[ií]cate|minim|maxim|move|go|put yourself|move yourself|resize|make yourself|shrink|grow|switch|jump)\b/.test(s);
   const hasScreenNoun = /(pantalla completa|full ?screen|otra pantalla|otro monitor|siguiente pantalla|next screen|other screen|other monitor|switch screen|esquina|corner|widget|centro|center|middle|al medio|en medio|small|tiny)/.test(s);
   if (!hasVerb && !hasScreenNoun) return null;
+  // Un pedido de mover la ventana es corto ("vete a la otra pantalla", "move left"). Una
+  // frase larga que solo tropieza con "go"/"move"/"right" es otra cosa — una tarea con
+  // "go through my downloads … do not move anything" movía la ventana a la derecha antes
+  // de que el modelo la leyera. Sin mención de pantalla/lado, más de 8 palabras no es un move.
+  const mentionsScreen = hasScreenNoun || /(pantalla|monitor|screen|\blado\b|\bside\b|ventana|window)/.test(s);
+  if (!mentionsScreen && s.trim().split(/\s+/).length > 8) return null;
+  // Negación explícita: "no te muevas", "don't move", "do not move".
+  if (/\b(no|don'?t|do not|never|nunca)\s+(te\s+)?(mu[eé]v|mov|move|go|vaya|jump|switch)/.test(s)) return null;
 
   if (/(pantalla completa|full ?screen|maxim|toda la pantalla|whole screen|ll[eé]nala|agr[aá]ndate|hazte grande|make yourself big|get big)/.test(s)) {
     return /(otra|otro|siguiente|next|other)/.test(s) ? 'next-screen full' : 'fullscreen';

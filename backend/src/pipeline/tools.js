@@ -282,7 +282,11 @@ export async function resolveDataAction(text, ctx) {
 
   // 2.2) BORRAR archivo/carpeta -> rm (SIEMPRE pide confirmación por el guard DANGER). No confundir
   // con "borrá la terminal" (se maneja arriba). Extrae la ruta/nombre real.
-  if (/(?:^|\s)(?:elimin[aá]r?(?:me)?|borr[aá]r?(?:me)?|borra|remove|delete|\brm\b)/i.test(t)
+  // Negado ("no borres X", "do not delete anything") NO es una orden de borrar: sin este
+  // guardián, "do not delete the file report.txt" ejecutaba `rm report.txt`.
+  const negatedDelete = /\b(?:no|nunca|jam[aá]s|don'?t|do\s+not|never|without)\s+(?:me\s+|lo\s+|la\s+|los\s+|las\s+)?(?:elimin|borr|remove|delet|\brm\b)/i.test(t);
+  if (!negatedDelete
+      && /(?:^|\s)(?:elimin[aá]r?(?:me)?|borr[aá]r?(?:me)?|borra|remove|delete|\brm\b)/i.test(t)
       && !/\b(terminal|consola|pantalla|shell)\b/i.test(t)) {
     const dir = /\b(carpeta|directorio|folder|dir)\b/i.test(t);
     let target = null;

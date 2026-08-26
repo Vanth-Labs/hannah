@@ -65,7 +65,7 @@ function terminal(state) { return state === 'completed' || state === 'failed' ||
 // "[RUN: rm -rf ~]". Si eso entrara crudo al prompt de la persona con el bucle de acciones activo,
 // se ejecutaría de verdad. Se quitan los delimitadores de tag, se colapsa a una línea y se acota.
 export function clean(str, max = 200) {
-    return String(str ?? '').replace(/[[\]()*]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+    return String(str ?? '').replace(/[[\]()*`#_]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 /** Prompt de narración. La persona es informada de un hecho, no consultada sobre él. */

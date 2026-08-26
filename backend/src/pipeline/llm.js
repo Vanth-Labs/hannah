@@ -46,7 +46,8 @@ const getLlmClient = () => {
 };
 
 // System prompt = persona + memoria (resumen + recall vectorial) + protocolo.
-async function buildSystemPrompt(history, withActions, noActions = false) {
+// Exportado como helper puro para tests (qué entra al prompt y cuándo); el resto del módulo no cambia.
+export async function buildSystemPrompt(history, withActions, noActions = false) {
     const summary = memoryStore.getSummary();
     const recalled = await recallContext(history);
     let memorySection = '';

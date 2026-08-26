@@ -95,3 +95,31 @@ describe('sshArg (arma user@host desde lo dictado)', () => {
         expect(sshArg('192.168.1.30 con el usuario DROCHO')).toBe('drocho@192.168.1.30');
     });
 });
+
+describe('parseMoveIntent — no dispara sobre frases que no son un pedido de mover', () => {
+  test('una tarea larga con "go"/"move"/"right" sueltos no mueve la ventana', () => {
+    expect(parseMoveIntent('Go through my Downloads folder, figure out which files are duplicates of each other, and tell me how much space they waste. Do not delete or move anything.')).toBeNull();
+  });
+  test('la negación explícita no mueve', () => {
+    expect(parseMoveIntent('no te muevas')).toBeNull();
+    expect(parseMoveIntent("don't move")).toBeNull();
+  });
+  test('un pedido largo que menciona la pantalla sí mueve', () => {
+    expect(parseMoveIntent('can you go to the left side of the screen please')).toBe('left screen full');
+    expect(parseMoveIntent('please move to the top right corner of the other screen')).toBe('next-screen full');
+  });
+});
+
+describe('resolveDataAction — el borrado negado no es una orden', () => {
+  test('"do not delete the file X" no ejecuta nada', async () => {
+    const { resolveDataAction } = await import('../../src/pipeline/tools.js');
+    const sent = [];
+    const r = await resolveDataAction('Go through my Downloads folder and tell me what is there. Do not delete the file report.txt', { send: (m) => sent.push(m) });
+    expect(r).toBeFalsy();
+    expect(sent.find((m) => m.type === 'command_run')).toBeUndefined();
+  });
+  test('"no borres nada" tampoco', async () => {
+    const { resolveDataAction } = await import('../../src/pipeline/tools.js');
+    expect(await resolveDataAction('revisá mis descargas pero no borres el archivo notas.txt', {})).toBeFalsy();
+  });
+});

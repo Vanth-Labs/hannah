@@ -64,7 +64,7 @@ describe('voz única: qué se narra y qué no', () => {
         const kinds = narrated.map((p) => p.match(/\[YOUR HANDS\] (.*?)(?: Tell the user)/)[1]);
         expect(narrated).toHaveLength(3);
         expect(kinds[0]).toMatch(/took on the task "ordenar descargas"/);
-        expect(kinds[1]).toMatch(/need permission to: run `mkdir/);
+        expect(kinds[1]).toMatch(/need permission to: run mkdir/); // sin backticks: clean() los quita para la voz
         expect(kinds[2]).toMatch(/is DONE: moved 23 files/);
         // cada narración cierra con la cláusula de no inventar
         for (const p of narrated) expect(p).toMatch(/Do NOT invent/);
@@ -314,4 +314,15 @@ describe('estado para el prompt', () => {
         bridge._setHealthy(false);
         expect(await bridge.dispatch('s1', 'x')).toEqual({ error: 'agent_unavailable' });
     });
+});
+
+describe('protocolo [TASK:] en el prompt', () => {
+  test('entra solo con el agente sano y sin acción determinista previa', async () => {
+    const { buildSystemPrompt } = await import('../../src/pipeline/llm.js');
+    bridge._setHealthy(true);
+    expect(await buildSystemPrompt([], true, false)).toContain('[TASK:');
+    expect(await buildSystemPrompt([], true, true)).not.toContain('[TASK:');   // noActions
+    bridge._setHealthy(false);
+    expect(await buildSystemPrompt([], true, false)).not.toContain('[TASK:');
+  });
 });
