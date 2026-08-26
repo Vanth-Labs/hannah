@@ -5,7 +5,7 @@ import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { onTerminalOut } from '../lib/terminalBus.js';
+import { onTerminalOut, getHandsBacklog } from '../lib/terminalBus.js';
 
 export function TerminalPanel({ onInput, onResize, onClose }) {
     const hostRef = useRef(null);
@@ -22,6 +22,9 @@ export function TerminalPanel({ onInput, onResize, onClose }) {
         term.open(hostRef.current);
         const doFit = () => { try { fit.fit(); onResize?.(term.cols, term.rows); } catch { /* noop */ } };
         doFit();
+        // Lo que las manos ya corrieron antes de abrir el panel.
+        const backlog = getHandsBacklog();
+        if (backlog) term.write(backlog);
         const off = onTerminalOut((data) => term.write(data));
         if (onInput) term.onData(onInput);
         const ro = new ResizeObserver(doFit);

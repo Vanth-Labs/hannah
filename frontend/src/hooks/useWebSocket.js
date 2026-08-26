@@ -1,7 +1,7 @@
 // src/hooks/useWebSocket.js
 import { useEffect, useRef, useCallback } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
-import { emitTerminalOut } from '../lib/terminalBus.js';
+import { emitTerminalOut, emitHands, formatHandsTool } from '../lib/terminalBus.js';
 import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
 import { DESKTOP, API_BASE } from '../lib/api.js';
 
@@ -201,6 +201,8 @@ export function useWebSocket() {
                 if (msg.kind === 'progress' || msg.kind === 'plan' || msg.kind === 'output') {
                     st.setCommandRun({ command: `hands · ${msg.title}`, output: msg.data?.summary || msg.data?.text || '', at: Date.now() });
                 }
+                // Cada comando de las manos (y un vistazo a su salida) se ve en la terminal.
+                if (msg.kind === 'tool') { const line = formatHandsTool(msg); if (line) emitHands(line); }
                 // Al resolverse la aprobación (por voz, HUD o timeout) se cierra el modal.
                 if (msg.kind === 'approval.resolved' || msg.kind === 'answered') {
                     if (st.pendingConfirm?.kind === 'agent' && st.pendingConfirm.taskId === msg.taskId) st.setPendingConfirm(null);
