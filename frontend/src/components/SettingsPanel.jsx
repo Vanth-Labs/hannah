@@ -38,6 +38,16 @@ const SECTIONS = [
         ],
     },
     {
+        key: 'agent', title: 'Manos (agente de tareas)',
+        // La API key es SENSIBLE: campo password, nunca se muestra, y el backend solo devuelve
+        // si hay una guardada (hasApiKey). Dejarla en blanco = conservar la actual.
+        fields: [
+            { name: 'apiKey', label: 'API key (OpenRouter)', type: 'password' },
+            { name: 'mode', label: 'Permisos', type: 'text', ph: 'companion | trusted-project | paranoid' },
+            { name: 'url', label: 'URL del agente', type: 'text', ph: 'http://127.0.0.1:8006' },
+        ],
+    },
+    {
         key: 'asr', title: 'Reconocimiento de voz (ASR)',
         fields: [
             { name: 'provider', label: 'Proveedor', type: 'select', options: ['local', 'cloud'] },
