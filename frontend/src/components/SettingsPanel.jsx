@@ -21,7 +21,7 @@ const SECTIONS = [
     {
         key: 'llm', title: 'Modelo de lenguaje (cerebro)',
         fields: [
-            { name: 'baseUrl', label: 'Base URL', type: 'text', ph: 'https://…/v1  (vacío = OpenAI)' },
+            { name: 'baseUrl', label: 'Base URL', type: 'text', ph: 'https://…/v1  (vacío = conservar)' },
             { name: 'model', label: 'Modelo', type: 'text', ph: 'gpt-4o-mini' },
             { name: 'apiKey', label: 'API key', type: 'password' },
             { name: 'persona', label: 'Personalidad', type: 'textarea', ph: 'Quién es, cómo habla… (en blanco = conservar)' },
@@ -42,7 +42,7 @@ const SECTIONS = [
         // La API key es SENSIBLE: campo password, nunca se muestra, y el backend solo devuelve
         // si hay una guardada (hasApiKey). Dejarla en blanco = conservar la actual.
         fields: [
-            { name: 'apiKey', label: 'API key (OpenRouter)', type: 'password' },
+            { name: 'apiKey', label: 'API key (Anthropic u OpenRouter)', type: 'password' },
             { name: 'mode', label: 'Permisos', type: 'text', ph: 'companion | trusted-project | paranoid' },
             { name: 'url', label: 'URL del agente', type: 'text', ph: 'http://127.0.0.1:8006' },
         ],
@@ -330,10 +330,12 @@ export function SettingsPanel({ onClose }) {
         fetch(`${API_BASE}/api/v1/settings`)
             .then((r) => r.json())
             .then((d) => {
-                // apiKey se deja vacío en el form; hasApiKey guía el placeholder
-                const f = { llm: {}, tts: {}, asr: {} };
+                // apiKey/token se dejan vacíos en el form; hasApiKey/hasToken guían el placeholder.
+                // Las secciones salen de SECTIONS: una sección nueva sin su entrada aquí hacía
+                // fallar la carga entera y el formulario se guardaba vacío (borrando el cerebro).
+                const f = Object.fromEntries(SECTIONS.map((s) => [s.key, {}]));
                 for (const s of SECTIONS) for (const key in (d[s.key] || {})) {
-                    if (key === 'hasApiKey') continue;
+                    if (key === 'hasApiKey' || key === 'hasToken') continue;
                     f[s.key][key] = d[s.key][key] ?? '';
                 }
                 setForm(f);
