@@ -9,7 +9,8 @@
     "predev": "node scripts/copy-vad-assets.mjs",
     "prebuild": "node scripts/copy-vad-assets.mjs",
     "setup:vad": "node scripts/copy-vad-assets.mjs",
-    "lint": "eslint src vite.config.js"
+    "lint": "eslint src vite.config.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.5",
@@ -32,6 +33,7 @@
     "eslint": "^10.8.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.11.0",
-    "vite": "^5.4.0"
+    "vite": "^5.4.0",
+    "vitest": "^4.1.11"
   }
 }

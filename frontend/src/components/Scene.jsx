@@ -1,9 +1,21 @@
 // src/components/Scene.jsx
-import { Suspense } from 'react';
+import { Suspense, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Environment, ContactShadows, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { VrmAvatar } from './VrmAvatar.jsx';
+import { useHannahStore } from '../store/hannahStore.js';
+import { API_BASE } from '../lib/api.js';
+
+// Qué avatar cargar: el subido por el usuario si el backend tiene uno (GET /api/v1/avatar,
+// versionado por ETag para que un cambio recargue), si no el de fábrica del bundle.
+export async function resolveAvatarUrl() {
+    try {
+        const r = await fetch(`${API_BASE}/api/v1/avatar`, { method: 'HEAD' });
+        if (r.ok) return `${API_BASE}/api/v1/avatar?v=${encodeURIComponent(r.headers.get('etag') || Date.now())}`;
+    } catch { /* backend caído: el de fábrica */ }
+    return '/avatar.glb';
+}
 
 function Lights() {
     return (
@@ -47,6 +59,9 @@ function Floor() {
 }
 
 export function Scene() {
+    const avatarUrl = useHannahStore((s) => s.avatarUrl);
+    const setAvatarUrl = useHannahStore((s) => s.setAvatarUrl);
+    useEffect(() => { resolveAvatarUrl().then((u) => { if (u !== avatarUrl) setAvatarUrl(u); }); /* eslint-disable-line */ }, []);
     return (
         <Canvas
             camera={{ position: [0, 0.15, 2.15], fov: 36, near: 0.1, far: 100 }}
@@ -63,7 +78,7 @@ export function Scene() {
             <Floor />
 
             <Suspense fallback={null}>
-                <VrmAvatar url="/avatar.glb" />
+                <VrmAvatar key={avatarUrl} url={avatarUrl} />
                 <Environment preset="city" background={false} />
             </Suspense>
 

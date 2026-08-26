@@ -58,36 +58,60 @@ Outside the UI the pattern is not to subscribe at all: the hooks grab the action
 `getState()`, and `VrmAvatar` reads its six fields with `getState()` **inside** the `useFrame` —
 that loop already runs at 60fps, so a React re-render would be pure overhead.
 
-## The retarget: computed, not guessed
+## Any VRM: the retarget is computed at load, not guessed
 
-The motion arrives as SMPL-X (T×165, axis-angle, 55 joints, 30fps) and the avatar is a VRoid with
-`J_Bip_*` bones. The per-bone correction is:
+The avatar is **any VRM** — 0.x (VRoid Studio exports) or 1.0 — as a `.vrm` or a `.glb` that
+carries the VRM extension. A plain glb without it (Mixamo, Sketchfab, a bare Blender export) is
+refused on purpose: it has no humanoid map and no expressions, and guessing bones by name is how
+the "zombie pose" happened. Everything below goes through `@pixiv/three-vrm`:
+
+- **Bones**: the motion is applied to the VRM's *normalized* humanoid
+  (`vrm.humanoid.getNormalizedBoneNode('leftUpperArm')`, …): standard names, identity rest pose
+  on every model. `vrm.update(delta)` copies it onto the real bones, whatever they are called.
+- **Face**: `vrm.expressionManager` presets (`happy`, `sad`, `angry`, `surprised`, `relaxed`,
+  the `aa/ih/ou/ee/oh` visemes, `blink`). three-vrm maps VRoid's VRM 0 presets onto the same
+  names; VRoid's extra brow morphs (`Fcl_BRW_*`) are layered on top only when present
+  (`retarget/retargetFace.js`).
+- **Look-at and spring bones**: `vrm.lookAt` (bone- or expression-based, whatever the model
+  ships) with a target placed from the cursor; `vrm.springBoneManager` with the file's own
+  hair/skirt parameters.
+
+The motion arrives as SMPL-X (T×165, axis-angle, 55 joints, 30 fps). The per-bone correction is
 
 ```
-vroid_local[j] = A_parent⁻¹ · quat(axis_angle[j]) · A_self[j]
+local[j] = A[parent]⁻¹ · quat(axis_angle[j]) · A[j]
 ```
 
-**The `A` offsets are computed from the geometry of the two skeletons in their rest pose**
-(`scripts/compute_retarget_offsets.py`): real SMPL-X positions (`J_regressor @ v_template`) and
-VRoid ones (walking the `.glb` tree), bone→child direction in both rigs, and from there an
-orthonormal basis. Each rig is given **its own "forward" axis** — SMPL-X faces +Z, VRoid −Z — so the
-180° flip is baked into the offset and the gestures come out the front of the mesh, not out its
-back.
+and **the `A` offsets are computed from the geometry of the two rest poses when the model
+loads** (`src/retarget/offsets.js`): SMPL-X rest joint positions (`src/retarget/smplxRest.json`,
+55 points exported once by `scripts/export_smplx_rest.py` — the mesh is never shipped) and the
+VRM's normalized rest positions, bone→child direction in both rigs, and from there an
+orthonormal basis. Each rig gets **its own forward axis** — SMPL-X faces +Z, a VRM 1.0 faces +Z,
+a VRM 0.x faces −Z in its own frame — so the facing (including the 180° turn a VRoid needs) is
+baked into the hips offset and gestures come out of the front of the mesh. `scripts/
+check_offsets.mjs` shows the port reproduces the retired Python script's numbers for the
+bundled avatar to 0.1°. `scripts/probe_vrm.mjs <file>` prints what a VRM brings (bones,
+expressions, springs) before you try it.
 
-> **The "zombie pose" lesson**: an earlier attempt mapped SMPL-X onto foreign bone names by guessing
-> the correction rotation. The result was a contorted pose. The name map exists
-> (`retarget/boneMap.js`), but **the rotation is never guessed**.
-
-On top of that there are **five deliberate corrections**, all of them for a reason observed in the
-render:
+On top of that there are **five deliberate corrections** (`src/retarget/tuning.js`), all for a
+reason observed in the render, and all expressed in normalized space so they mean the same on
+any avatar:
 
 | Zone | What we do | Why |
 |---|---|---|
 | Pelvis | keep only the Y rotation | the offset brought ~28° of pitch that tilted the whole body |
 | Spine | keep half of it | the generated motion hunches: "she looks hunchbacked" |
 | Feet and toes | pin to the rest pose | the motion splays the soles outwards; when she is standing they should stay planted |
-| Fingers (30 indices) | pin to the rest pose | the model is weak there (many dimensions, little variance): they come out clenched |
+| Fingers (30 joints) | pin to the rest pose | the model is weak there (many dimensions, little variance): they come out clenched |
 | Shoulders | add 0.22 rad of abduction | the VRoid torso is narrower than SMPL-X's |
+
+Deliberate gestures (`public/animations/baked/*.json`, from Mixamo via `scripts/bake_mixamo.mjs`)
+are stored as normalized-bone quaternions in the VRM 1.0 local frame, keyed by humanoid name;
+for a VRM 0.x the X/Z components are mirrored at play time.
+
+**Changing the avatar**: the ⚙ panel's *Look* card uploads a VRM to the backend
+(`PUT /api/v1/avatar` → `data/avatar.vrm`); `Scene.jsx` asks `HEAD /api/v1/avatar` on start and
+falls back to the bundled `public/avatar.glb`.
 
 ## The avatar, layer by layer
 

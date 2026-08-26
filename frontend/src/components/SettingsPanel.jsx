@@ -2,6 +2,7 @@
 // Panel ⚙. Arriba, lo que una persona normal decide de verdad — tres tarjetas:
 //   Cerebro  -> "en mi PC" (gratis, privado) o "en la nube" (proveedor + key)
 //   Voz      -> idioma + voz con nombre humano, con botón para escucharla
+//   Look     -> subir un VRM (cualquiera) o volver al de fábrica
 //   Manos    -> estado del agente + su key + la frase de privacidad
 // Debajo, plegado, "Avanzado": URLs, ids de modelo, sidecars, personalidad, atajos, skills.
 // Todo escribe en el MISMO formulario y se guarda con un solo botón (POST /settings, en
@@ -242,6 +243,60 @@ function VoiceCard({ form, setField }) {
                     </div>
                 </div>
             )}
+        </div>
+    );
+}
+
+// ── Tarjeta LOOK. Sube un VRM (.vrm, o .glb con la extensión VRM) al backend
+// (PUT /api/v1/avatar) y recarga el avatar sin reiniciar; "de fábrica" lo borra.
+function LookCard() {
+    const [info, setInfo] = useState(null);      // { custom, name, size } desde el backend
+    const [status, setStatus] = useState('');
+    const setAvatarUrl = useHannahStore((s) => s.setAvatarUrl);
+    const avatarError = useHannahStore((s) => s.avatarError);
+    const load = () => fetch(`${API_BASE}/api/v1/avatar/info`).then((r) => r.json()).then(setInfo).catch(() => setInfo({ custom: false }));
+    useEffect(() => { load(); }, []);
+
+    const reload = async () => {
+        const r = await fetch(`${API_BASE}/api/v1/avatar`, { method: 'HEAD' }).catch(() => null);
+        setAvatarUrl(r?.ok ? `${API_BASE}/api/v1/avatar?v=${encodeURIComponent(r.headers.get('etag') || Date.now())}` : '/avatar.glb');
+    };
+    const upload = async (file) => {
+        if (!file) return;
+        setStatus(`subiendo ${file.name}…`);
+        try {
+            const r = await fetch(`${API_BASE}/api/v1/avatar`, { method: 'PUT', body: file, headers: { 'Content-Type': 'application/octet-stream' } });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { setStatus(d.error === 'not_a_vrm' ? 'ese archivo no es un VRM (.vrm, o .glb con extensión VRM)' : `error (${r.status})`); return; }
+            setStatus('listo ✓'); await load(); await reload();
+        } catch { setStatus('backend no disponible'); }
+    };
+    const reset = async () => {
+        setStatus('volviendo al de fábrica…');
+        try { await fetch(`${API_BASE}/api/v1/avatar`, { method: 'DELETE' }); setStatus(''); await load(); await reload(); }
+        catch { setStatus('backend no disponible'); }
+    };
+    const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+    return (
+        <div style={S.card}>
+            <div style={S.cardTitle}>Look</div>
+            <div style={S.hint}>Cómo se ve. Cualquier avatar VRM (VRoid Studio, VRM 1.0): un archivo .vrm, o .glb con la extensión VRM.</div>
+            <div style={{ ...S.hint, marginTop: '8px', color: 'rgba(255,255,255,0.7)' }}>
+                {info == null ? 'Actual: …'
+                    : info.custom ? `Actual: ${info.name || 'avatar subido'} (${mb(info.size)})`
+                        : 'Actual: el de fábrica (Anna)'}
+                {avatarError === 'not_a_vrm' && <span style={{ color: '#f87171' }}> · el archivo cargado no es un VRM</span>}
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginTop: '10px', alignItems: 'center' }}>
+                <label style={{ ...S.small, cursor: 'pointer' }}>
+                    Elegir archivo…
+                    <input type="file" accept=".vrm,.glb,model/gltf-binary" style={{ display: 'none' }}
+                        onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ''; }} />
+                </label>
+                {info?.custom && <button style={S.small} onClick={reset}>Volver al de fábrica</button>}
+                <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>{status}</span>
+            </div>
+            <div style={{ ...S.hint, marginTop: '6px' }}>Se queda en tu PC (data/avatar.vrm). Gestos, cara y pelo funcionan solos: el retarget se calcula al cargar.</div>
         </div>
     );
 }
@@ -559,6 +614,7 @@ export function SettingsPanel({ onClose }) {
 
                 <BrainCard form={form} saved={saved} setField={setField} />
                 <VoiceCard form={form} setField={setField} />
+                <LookCard />
                 <HandsCard form={form} saved={saved} setField={setField} health={health} />
 
                 <div style={S.row}>

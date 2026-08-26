@@ -1,10 +1,10 @@
-// Bake Mixamo FBX gestures -> VRoid raw-bone local-quaternion clips (JSON).
+// Bake Mixamo FBX gestures -> VRM NORMALIZED-bone local-quaternion clips (JSON).
 //
-// Runs HEADLESS in Node: loads the VRM (via @pixiv/three-vrm), retargets each
-// Mixamo clip to the VRM humanoid with pixiv's rig map + rest-pose rebake, plays
-// it, and reads the resulting RAW J_Bip_* bone quaternions per frame. The frontend
-// then plays these tracks in its existing bone loop (no runtime pixiv needed), so
-// the working co-speech retarget is untouched.
+// Runs HEADLESS in Node: loads a VRM (via @pixiv/three-vrm), retargets each Mixamo clip
+// onto the VRM humanoid with pixiv's rig map + rest-pose rebake, plays it, and records the
+// NORMALIZED humanoid nodes (standard names, identity rest) per frame, in the VRM 1.0 local
+// frame. That makes the clips portable: the frontend applies them to any VRM's normalized
+// rig, mirroring X/Z for VRM 0.x models (whose local frames carry the 180° facing).
 //
 //   node scripts/bake_mixamo.mjs
 globalThis.self = globalThis; globalThis.window = globalThis;
@@ -48,7 +48,6 @@ function retargetToVrm(asset, vrm) {
   const restRotInv = new THREE.Quaternion();
   const parentRestWorld = new THREE.Quaternion();
   const q = new THREE.Quaternion();
-  const isVrm0 = vrm.meta?.metaVersion === '0';
 
   for (const track of clip.tracks) {
     const [rigName, prop] = track.name.split('.');
@@ -64,7 +63,8 @@ function retargetToVrm(asset, vrm) {
       const v = track.values.slice();
       for (let i = 0; i < v.length; i += 4) {
         q.fromArray(v, i).premultiply(parentRestWorld).multiply(restRotInv);
-        if (isVrm0) { q.x = -q.x; q.z = -q.z; }
+        // Stored in the VRM 1.0 local frame on purpose (no VRM 0 mirror here): the frontend
+        // mirrors at play time when the loaded avatar is a VRM 0.x.
         q.toArray(v, i);
       }
       tracks.push(new THREE.QuaternionKeyframeTrack(`${node.name}.${prop}`, track.times.slice(), v));
@@ -86,11 +86,11 @@ async function loadVrm() {
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const vrm = await loadVrm();
-  // Raw bones we sample (upper body + head; frontend keeps root/legs from idle).
+  // Normalized bones we sample, keyed by humanoid name (frontend skips hips/legs anyway).
   const rawBones = {};
   for (const vb of Object.values(MIXAMO_VRM)) {
-    const raw = vrm.humanoid.getRawBoneNode(vb);
-    if (raw) rawBones[vb] = raw;
+    const n = vrm.humanoid.getNormalizedBoneNode(vb);
+    if (n) rawBones[vb] = n;
   }
 
   for (const name of CLIPS) {
@@ -105,22 +105,21 @@ async function main() {
 
     const nFrames = Math.max(1, Math.round(clip.duration * FPS));
     const dt = clip.duration / nFrames;
-    const bones = {}; for (const vb in rawBones) bones[rawBones[vb].name] = [];
+    const bones = {}; for (const vb in rawBones) bones[vb] = [];
     let prev = 0;
     for (let f = 0; f < nFrames; f++) {
       const t = f * dt;
       mixer.update(t - prev); prev = t;
-      vrm.humanoid.update();
-      for (const node of Object.values(rawBones)) {
+      for (const [vb, node] of Object.entries(rawBones)) {
         const { x, y, z, w } = node.quaternion;
-        bones[node.name].push([+x.toFixed(5), +y.toFixed(5), +z.toFixed(5), +w.toFixed(5)]);
+        bones[vb].push([+x.toFixed(5), +y.toFixed(5), +z.toFixed(5), +w.toFixed(5)]);
       }
     }
     mixer.stopAllAction();
     fs.writeFileSync(path.join(OUT_DIR, `${name}.json`),
       JSON.stringify({ name, fps: FPS, frames: nFrames, duration: +clip.duration.toFixed(3), bones }));
     // sanity: how far the right hand travels vs frame 0
-    const rh = bones[rawBones.rightHand?.name];
+    const rh = bones.rightHand;
     const dev = rh ? Math.max(...rh.map((qf) => {
       const d = Math.acos(Math.min(1, Math.abs(qf[0] * rh[0][0] + qf[1] * rh[0][1] + qf[2] * rh[0][2] + qf[3] * rh[0][3])));
       return d;

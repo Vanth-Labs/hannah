@@ -18,6 +18,8 @@ export const useHannahStore = create((set) => ({
 
     // Avatar y movimiento corporal (EMAGE / SMPL-X)
     avatarLoaded: false,
+    avatarUrl: '/avatar.glb',  // el VRM que se renderiza: el de fábrica, o el subido (GET /api/v1/avatar?v=…)
+    avatarError: null,         // 'not_a_vrm' cuando el archivo cargado no trae la extensión VRM
     currentMotion: null,       // { fps, numFrames, poses: Float32Array, trans: Float32Array, startedAt }
     gestureTrigger: null,      // { name, startedAt } — gesto deliberado (Mixamo) sobre el co-speech
 
@@ -44,6 +46,8 @@ export const useHannahStore = create((set) => ({
     setUserTranscript: (userTranscript) => set({ userTranscript }),
     setVisionActive: (visionActive) => set({ visionActive }),
     setAvatarLoaded: (avatarLoaded) => set({ avatarLoaded }),
+    setAvatarUrl: (avatarUrl) => set({ avatarUrl, avatarLoaded: false, avatarError: null }),
+    setAvatarError: (avatarError) => set({ avatarError }),
     setCurrentMotion: (currentMotion) => set({ currentMotion }),
     setGestureTrigger: (gestureTrigger) => set({ gestureTrigger }),
     setAutoLookat: (autoLookat) => set({ autoLookat }),
