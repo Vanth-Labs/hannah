@@ -149,6 +149,9 @@ At the end of each response, append an emotion tag on a new line in the format:
     url: process.env.AGENT_SIDECAR_URL || 'http://127.0.0.1:8006',
     // Bearer que el agente exige si HANNAH_AGENT_TOKEN está puesto de su lado. Mismo valor.
     token: process.env.HANNAH_AGENT_TOKEN || '',
+    // La key del MODELO del agente (OpenRouter). El backend no la usa: la persiste (panel ⚙) y
+    // el launcher se la pasa al agente por entorno al arrancarlo. Nunca vuelve al navegador.
+    apiKey: process.env.OPENROUTER_API_KEY || '',
     // Preset de permisos del agente (ADR-0010): companion | trusted-project | paranoid.
     mode: process.env.AGENT_MODE || 'companion',
     // Presupuesto de narración: task.progress se cuenta como mucho una vez cada N ms por tarea.

@@ -15,7 +15,7 @@ const ALLOWED = {
   asr: ['provider', 'model', 'apiKey', 'language', 'sidecarUrl'],
   tts: ['provider', 'model', 'apiKey', 'voiceId', 'sidecarUrl'],
   // El token es un secreto: entra en KEEP_IF_BLANK y nunca vuelve al navegador (se redacta).
-  agent: ['url', 'token', 'mode'],
+  agent: ['url', 'token', 'mode', 'apiKey'],
 };
 
 // Campos que en blanco NO se sobreescriben (conservan el valor actual).
