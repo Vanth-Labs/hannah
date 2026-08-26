@@ -228,6 +228,10 @@ centralizes the 500 envelope — never in `server.js`.
 | `GET` | `/settings` | Provider config, **with the API keys redacted** |
 | `POST` | `/settings` | Applies a whitelisted patch and persists it in `data/settings.json` |
 | `GET` | `/tts/preview?voice=<id>` | A short sample sentence in that voice, as `audio/wav` (Kokoro ids only; 400 on a bad id, 503 without the sidecar). Powers the "Listen" button in the ⚙ panel |
+| `GET`/`HEAD` | `/avatar` | The user's uploaded VRM (`data/avatar.vrm`), `model/gltf-binary` with an `ETag`; 404 when there is none, so the frontend falls back to the bundled avatar |
+| `GET` | `/avatar/info` | `{ custom, name, size, updatedAt }` for the ⚙ panel |
+| `PUT` | `/avatar` | Raw body up to 256 MB. Only a glTF binary whose `extensionsUsed` lists `VRM` (0.x) or `VRMC_vrm` (1.0) is accepted (`isVrmBinary`, `api/avatar.js`); anything else is 400 `not_a_vrm`. Written atomically |
+| `DELETE` | `/avatar` | Back to the bundled avatar |
 | `GET` | `/shortcuts` | Voice shortcuts: `{sites, apps}` |
 | `POST` | `/shortcuts` | Replaces the whole set and persists |
 | `GET` | `/skills` | Lists the skills with their raw markdown |

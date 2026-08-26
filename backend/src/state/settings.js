@@ -52,8 +52,7 @@ export function getSettings() {
     out[section] = {};
     for (const key of ALLOWED[section]) {
       // Secretos: nunca el valor, solo si hay uno guardado (apiKey -> hasApiKey, token -> hasToken).
-      if (key === 'apiKey') out[section].hasApiKey = Boolean(config[section][key]);
-      else if (key === 'token') out[section].hasToken = Boolean(config[section][key]);
+      if (SECRETS.has(key)) out[section][`has${key[0].toUpperCase()}${key.slice(1)}`] = Boolean(config[section][key]);
       else out[section][key] = config[section][key] ?? '';
     }
   }
