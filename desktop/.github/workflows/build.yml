@@ -9,6 +9,11 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Mínimo por defecto; solo el job `release` sube a `contents: write`. Las actions van fijadas
+# por SHA (el tag `v4` es móvil: quien controle la action controlaría este build).
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
@@ -24,22 +29,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout hannah-desktop
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: hannah-desktop
+          persist-credentials: false
 
       # Los repos de la organización son PRIVADOS: el GITHUB_TOKEN del job solo ve ESTE repo.
       # Hace falta un secret HANNAH_REPO_TOKEN (PAT fine-grained con Contents:read sobre
       # Hannah-Motion-Lab/frontend) en Settings > Secrets de este repo.
       - name: Checkout frontend
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Hannah-Motion-Lab/frontend
           path: hannah-frontend
           token: ${{ secrets.HANNAH_REPO_TOKEN }}
+          persist-credentials: false   # el PAT no debe quedar en .git/config del checkout
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
@@ -61,7 +68,7 @@ jobs:
           npx electron-builder ${{ matrix.args }}
 
       - name: Subir artefactos
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hannah-${{ matrix.os }}
           path: |
@@ -81,16 +88,20 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
+      # Sumas que verifica install.sh antes de instalar el AppImage (y lo que liste aquí).
+      - name: SHA256SUMS
+        run: cd artifacts && sha256sum *.AppImage *.deb *.exe *.dmg 2>/dev/null > SHA256SUMS; cat SHA256SUMS
       - name: Publicar release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             artifacts/*.AppImage
             artifacts/*.deb
             artifacts/*.exe
             artifacts/*.dmg
+            artifacts/SHA256SUMS
           generate_release_notes: true

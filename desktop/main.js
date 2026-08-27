@@ -2,7 +2,7 @@
 // Overlay universal (Win/Mac/Linux) con Electron (Chromium). La ventana carga el frontend;
 // el OVERLAY (flotar encima, mover entre pantallas, mirada global) se hace aquí con APIs
 // cross-platform de Electron — no depende de hyprctl/xdotool.
-const { app, BrowserWindow, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, shell } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -31,9 +31,16 @@ if (process.platform === 'linux' && !process.argv.includes('--no-sandbox') && !p
   // salir el proceso padre); hay que relanzar el AppImage mismo. HANNAH_NO_RELAUNCH corta el bucle.
   const exe = process.env.APPIMAGE || process.execPath;
   const args = process.env.APPIMAGE ? [...extra, ...process.argv.slice(1)] : [...process.argv.slice(1), ...extra];
-  const child = spawn(exe, args, { detached: true, stdio: 'ignore', env: { ...process.env, HANNAH_NO_RELAUNCH: '1' } });
-  child.unref();
-  app.exit(0);
+  // Si el relanzado falla (binario no ejecutable, ENOENT), seguir en ESTE proceso: sin flags
+  // puede que no flote, pero es mejor que salir sin ventana ni mensaje.
+  let relaunched = false;
+  try {
+    const child = spawn(exe, args, { detached: true, stdio: 'ignore', env: { ...process.env, HANNAH_NO_RELAUNCH: '1' } });
+    child.on('error', (e) => console.error('[hannah] relanzado falló:', e.message));
+    child.unref();
+    relaunched = child.pid != null;
+  } catch (e) { console.error('[hannah] relanzado falló:', e.message); }
+  if (relaunched) app.exit(0);
 }
 
 // ── LINUX: forzar X11/XWayland. Esto es lo que hace que el overlay funcione IGUAL en
@@ -73,19 +80,31 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
   '.glb': 'model/gltf-binary', '.wasm': 'application/wasm', '.json': 'application/json',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.woff2': 'font/woff2',
   '.onnx': 'application/octet-stream', '.bin': 'application/octet-stream', '.mjs': 'text/javascript' };
+let distServer = null;   // un solo servidor por proceso (activate en macOS volvía a crear otro)
 function serveDist(distDir) {
+  if (distServer) return distServer;
+  const root = path.resolve(distDir);
   const server = http.createServer((req, res) => {
-    let p = decodeURIComponent((req.url || '/').split('?')[0]);
+    let p;
+    try { p = decodeURIComponent((req.url || '/').split('?')[0]); } catch { res.writeHead(400); res.end('bad request'); return; }
     if (p === '/') p = '/index.html';
-    const file = path.join(distDir, p);
+    // Contención: solo archivos DENTRO de dist. Sin esto, /../../.env salía del directorio.
+    const file = path.resolve(root, `.${path.posix.normalize(`/${p}`)}`);
+    if (file !== root && !file.startsWith(root + path.sep)) { res.writeHead(403); res.end('forbidden'); return; }
     fs.readFile(file, (e, data) => {
       if (e) { res.writeHead(404); res.end('not found'); return; }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
       res.end(data);
     });
   });
-  return new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  distServer = new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+  return distServer;
 }
+
+// Orígenes que son "nosotros": el Vite de desarrollo o el mini servidor del dist. Solo a ellos
+// se les concede mic/cámara, y solo dentro de ellos se navega; todo lo demás va al navegador.
+const APP_ORIGINS = new Set([new URL(DEV_URL).origin]);
+function isAppUrl(u) { try { return APP_ORIGINS.has(new URL(u).origin); } catch { return false; } }
 
 // ── Posición: recordar dónde quedó; si es la primera vez, esquina del monitor del cursor ──
 const boundsFile = () => path.join(app.getPath('userData'), 'window-bounds.json');
@@ -373,8 +392,23 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      webSecurity: false,   // app local de confianza: permite fetch/WS al backend en :3001 sin CORS
+      // webSecurity queda ACTIVO (antes se apagaba "para evitar CORS"): el backend permite
+      // cualquier origen de loopback, que es lo que este renderer es. Apagarlo dejaba al
+      // renderer leer file:// y cualquier host sin política de origen.
     },
+  });
+  // Un enlace externo (docs, GitHub) se abre en el navegador del sistema; el renderer nunca
+  // navega fuera de la app. Sin esto, cualquier <a target=_blank> abría una BrowserWindow con
+  // el mismo preload, y un `window.open` de un sitio ajeno tenía acceso a la API de escritorio.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url) && !isAppUrl(url)) shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (e, url) => { if (!isAppUrl(url)) e.preventDefault(); });
+  // Mic y cámara solo para nuestro propio origen; nada de geolocalización, notificaciones, etc.
+  win.webContents.session.setPermissionRequestHandler((wc, permission, cb, details) => {
+    const ok = (permission === 'media' || permission === 'clipboard-read') && isAppUrl(details?.requestingUrl || wc.getURL());
+    cb(ok);
   });
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -452,7 +486,7 @@ function createWindow() {
     const distDir = app.isPackaged
       ? path.join(process.resourcesPath, 'frontend')   // = build.extraResources[].to (package.json)
       : path.join(__dirname, '..', 'hannah-frontend', 'dist');
-    serveDist(distDir).then((port) => win.loadURL(`http://127.0.0.1:${port}/?overlay=1`));
+    serveDist(distDir).then((port) => { APP_ORIGINS.add(`http://127.0.0.1:${port}`); win.loadURL(`http://127.0.0.1:${port}/?overlay=1`); });
   }
 
   // Mirada global: empuja la dirección del cursor (relativa a la ventana) al renderer.
@@ -462,12 +496,18 @@ function createWindow() {
   // se notaba porque el overlay en modo navegador ocupaba el monitor entero.)
   // Se le pregunta al compositor y se compara contra `desired`, que está en SU mismo espacio.
   // Fuera de Linux (o sin hyprctl) se cae a la API de Electron, que ahí sí es global.
+  // Cada sondeo es hasta dos procesos (hyprctl/xdotool); no encadenar uno nuevo mientras el
+  // anterior sigue vivo, ni sondear con la ventana oculta o minimizada.
   let lastCursor = null;
+  let polling = false;
   const cursorPoll = setInterval(() => {
+    if (polling || !win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return;
+    polling = true;
     monitorRects()
       .then((mons) => cursorPoint(mons))
       .then((pt) => { if (pt) lastCursor = pt; })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { polling = false; });
   }, 150);
 
   const gaze = setInterval(() => {
