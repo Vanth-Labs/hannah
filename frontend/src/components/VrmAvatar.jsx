@@ -122,6 +122,15 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
 
     useEffect(() => { setAvatarError(vrm ? null : 'not_a_vrm'); }, [vrm, setAvatarError]);
 
+    // Al cambiar de avatar, liberar el anterior (GPU + caché de drei). Solo cuando la URL de
+    // este componente ya NO es la del store: el desmontaje simulado de StrictMode (misma URL)
+    // no debe destruir un modelo que se vuelve a montar al instante.
+    useEffect(() => () => {
+        if (useHannahStore.getState().avatarUrl === url) return;
+        try { if (vrm) VRMUtils.deepDispose(vrm.scene); } catch { /* ya liberado */ }
+        try { useGLTF.clear(url); } catch { /* sin entrada en caché */ }
+    }, [url, vrm]);
+
     const rig = useMemo(() => {
         if (!vrm) return null;
         VRMUtils.removeUnnecessaryVertices(vrm.scene);

@@ -4,6 +4,7 @@ import { Canvas } from '@react-three/fiber';
 import { Environment, ContactShadows, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { VrmAvatar } from './VrmAvatar.jsx';
+import { AvatarBoundary } from './AvatarBoundary.jsx';
 import { useHannahStore } from '../store/hannahStore.js';
 import { API_BASE, apiFetch } from '../lib/api.js';
 
@@ -78,7 +79,9 @@ export function Scene() {
             <Floor />
 
             <Suspense fallback={null}>
-                <VrmAvatar key={avatarUrl} url={avatarUrl} />
+                <AvatarBoundary key={avatarUrl} url={avatarUrl}>
+                    <VrmAvatar url={avatarUrl} />
+                </AvatarBoundary>
                 <Environment preset="city" background={false} />
             </Suspense>
 

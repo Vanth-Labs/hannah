@@ -11,6 +11,7 @@ export function useVision(sendCommand) {
     const { setVisionActive, addLog } = useHannahStore.getState();
 
     const startVision = useCallback(async () => {
+        if (streamRef.current) return;   // ya activa (dos clics, o el arranque automático + el botón): una sola cámara y un solo interval
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true });
             streamRef.current = stream;
@@ -49,6 +50,7 @@ export function useVision(sendCommand) {
     const stopVision = useCallback(() => {
         clearInterval(intervalRef.current);
         streamRef.current?.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
         if (videoRef.current) videoRef.current.srcObject = null;
         sendCommand({ command: 'VISION_STOP' });
         setVisionActive(false);

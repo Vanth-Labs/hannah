@@ -62,18 +62,24 @@ export function useWebSocket() {
     const decodeMotion = (motion) => {
         if (!motion?.poses_b64) return null;
         const toF32 = (b64) => {
-            const bin = atob(b64);
+            let bin;
+            try { bin = atob(b64); } catch { return null; }   // base64 corrupto: sin movimiento, no sin app
             const bytes = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
             return new Float32Array(bytes.buffer);
         };
-        return {
-            fps: motion.fps || 30,
-            numFrames: motion.num_frames,
-            poses: toF32(motion.poses_b64),   // (T*165) axis-angle, 55 joints SMPL-X
-            trans: toF32(motion.trans_b64),   // (T*3)
-        };
+        const poses = toF32(motion.poses_b64);   // (T*165) axis-angle, 55 joints SMPL-X
+        const trans = toF32(motion.trans_b64);   // (T*3)
+        if (!poses || !trans) return null;
+        return { fps: motion.fps || 30, numFrames: motion.num_frames, poses, trans };
     };
+
+    // Los chunks se decodifican EN SERIE y con un contador de turno: decodeAudioData resuelve
+    // en cualquier orden (una oración corta terminaba antes que la larga anterior y sonaba
+    // primero), y un chunk que estaba decodificándose durante un barge-in se encolaba después
+    // del corte y sonaba igual. `generation` cambia en cada stopPlayback: lo viejo se descarta.
+    const decodeChain = useRef(Promise.resolve());
+    const generation = useRef(0);
 
     const drainQueue = useCallback(() => {
         if (audioQueue.current.length === 0) {
@@ -106,24 +112,29 @@ export function useWebSocket() {
         source.start();
     }, [scheduleNeutral]);
 
-    const playChunk = useCallback(async (base64wav, visemes, motion, action) => {
-        const ctx = getAudioCtx();
-        const binary = atob(base64wav);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-        try {
-            const decoded = await ctx.decodeAudioData(bytes.buffer);
-            audioQueue.current.push({
-                buffer: decoded,
-                visemes: visemes || [],
-                motion: decodeMotion(motion),
-                action: action || null,
-            });
-            if (!isPlaying.current) drainQueue();
-        } catch (e) {
-            console.warn('Chunk de audio inválido, ignorando:', e.message);
-        }
+    const playChunk = useCallback((base64wav, visemes, motion, action) => {
+        const gen = generation.current;
+        decodeChain.current = decodeChain.current.then(async () => {
+            if (gen !== generation.current) return;   // llegó después de un barge-in: fuera
+            try {
+                const ctx = getAudioCtx();
+                const binary = atob(base64wav);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const decoded = await ctx.decodeAudioData(bytes.buffer);
+                if (gen !== generation.current) return;
+                audioQueue.current.push({
+                    buffer: decoded,
+                    visemes: visemes || [],
+                    motion: decodeMotion(motion),
+                    action: action || null,
+                });
+                if (!isPlaying.current) drainQueue();
+            } catch (e) {
+                console.warn('Chunk de audio inválido, ignorando:', e.message);
+            }
+        });
+        return decodeChain.current;
     }, [drainQueue]);
 
     const clearVisemeSchedule = () => {
@@ -134,6 +145,7 @@ export function useWebSocket() {
 
     // Barge-in: cortar en seco lo que Hannah está diciendo (audio + visemas + motion).
     const stopPlayback = useCallback(() => {
+        generation.current += 1;   // los chunks en vuelo (decodificándose) quedan descartados
         audioQueue.current = [];
         if (currentSource.current) {
             try { currentSource.current.onended = null; currentSource.current.stop(); } catch { /* ya parado */ }

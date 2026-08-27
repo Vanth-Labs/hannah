@@ -122,7 +122,8 @@ export default function App() {
         } else {
             const recorder = mediaRecorderRef.current;
             if (!recorder) return;
-            recorder.stop();
+            mediaRecorderRef.current = null;
+            try { recorder.stop(); } catch { recorder.stream?.getTracks().forEach((t) => t.stop()); return; }   // ya inactivo (pista perdida)
             recorder.onstop = async () => {
                 const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 const buffer = await blob.arrayBuffer();
