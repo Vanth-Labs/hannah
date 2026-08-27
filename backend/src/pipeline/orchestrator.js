@@ -62,20 +62,35 @@ export const taskMisuse = { count: 0 };
 const markUserMove = (sessionId) => recentUserMove.set(sessionId || 'default', Date.now());
 const userMovedRecently = (sessionId) => Date.now() - (recentUserMove.get(sessionId || 'default') || 0) < 15000;
 
-const processAndSendSegment = async (rawText, sendCallback, sessionId = '', signal) => {
+// `noActions`: el turno solo NARRA (visión, eventos de las manos). Su entrada es texto que
+// escribió otro (una escena de la cámara, un evento del agente), así que un [MOVE:]/[TASK:]
+// en la respuesta no es una orden del usuario: es una inyección o un error del modelo. Se
+// gatea la EJECUCIÓN, nunca el stripping: la etiqueta tiene que desaparecer del texto igual,
+// porque si no el TTS lee "[TASK: ...]" en voz alta.
+const processAndSendSegment = async (rawText, sendCallback, sessionId = '', signal, noActions = false) => {
     if (signal?.aborted) return;
+    // Un drop silencioso esconde por igual un intento de inyección y una torpeza del modelo.
+    const refuseAction = (tag, arg) => logger.warn('acción ignorada en turno de narración', {
+        sessionId, tag, arg: String(arg || '').slice(0, 120),
+    });
     // Director de gestos: MOTION:acción marca un gesto DELIBERADO. Esa oración
     // se genera en modo acción (el cuerpo hace SOLO la acción, sin co-speech), y las
     // siguientes oraciones reanudan el co-speech — los dos modos nunca se mezclan.
     // El LLM usa [ ], * * o ( ) como delimitador. Exigimos apertura+cierre y
     // capturamos el caption completo entre ellos.
+    // [MOTION:] NO se gatea con noActions a propósito: un gesto es cómo se ve la persona
+    // mientras habla, no una acción sobre la máquina. Peor: narrar la cámara SIN poder
+    // saludar la dejaría tiesa justo cuando reacciona a alguien. Lo que un texto ajeno
+    // podría lograr acá es que mueva un brazo, no que corra un comando ni mueva la ventana.
     const motionMatch = rawText.match(/[[(*]\s*MOTION:\s*([^\])*\n]+?)\s*[\])*]/i);
     const action = motionMatch ? (motionMatch[1] || '').trim() : '';
 
     // Director de ventana: [MOVE:posición] mueve el overlay. PERO si el usuario ya movió por
     // comando determinista este turno, lo ignoramos (si no, revierte "pantalla completa").
     const moveMatch = rawText.match(/[[(*]\s*MOVE:\s*([^\])*\n]+?)\s*[\])*]/i);
-    if (moveMatch && !userMovedRecently(sessionId)) {
+    if (moveMatch && noActions) {
+        refuseAction('MOVE', moveMatch[1]);
+    } else if (moveMatch && !userMovedRecently(sessionId)) {
         const spec = (moveMatch[1] || '').trim();
         // Mismo criterio que la capa determinista: mover acá, y delegar en el cliente SOLO si
         // el adaptador no pudo. Sin el fallback, en Windows/macOS el [MOVE:] no hacía nada.
@@ -93,7 +108,11 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     // "[YOUR HANDS]" sin [TASK:]: el modelo quiso delegar y copió la etiqueta (ver keepOnlyTask).
     // La tarea son las palabras literales del usuario — más fieles que cualquier paráfrasis del 7B.
     const handsEcho = !taskMatch && HANDS_LABEL_RE.test(rawText) && lastUserText.get(sessionId);
-    if (taskMatch || handsEcho) {
+    // El eco también se gatea: la narración de las manos LLEVA "[YOUR HANDS]" en su prompt, así
+    // que un modelo que lo copie relanzaría la última frase del usuario como tarea nueva.
+    if ((taskMatch || handsEcho) && noActions) {
+        refuseAction(taskMatch ? 'TASK' : 'YOUR HANDS', taskMatch ? taskMatch[1] : lastUserText.get(sessionId));
+    } else if (taskMatch || handsEcho) {
         const description = taskMatch
             ? (taskMatch[1] || '').trim()
             : `The user asked, in their own words: "${lastUserText.get(sessionId)}". Do exactly that and report what you did.`;
@@ -340,7 +359,9 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
         // Barge-in: si el turno fue abortado, no sintetizar/enviar más oraciones.
         segmentChain = segmentChain.then(() => {
             if (signal?.aborted) return;
-            return processAndSendSegment(text, onStreamSegment, sessionId, signal);
+            // opts.noActions viaja hasta acá: el gate del prompt (llm.js) solo deja de OFRECER
+            // los tags; si el modelo los emite igual, quien no los ejecuta es el segmento.
+            return processAndSendSegment(text, onStreamSegment, sessionId, signal, !!opts.noActions);
         });
     };
 
