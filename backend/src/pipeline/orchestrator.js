@@ -26,6 +26,8 @@ const GESTURE_MATCH = [
     ['dismiss', /dismiss|brush.*off|wave.*off|whatever|descart/i],
     ['acknowledge', /acknowledg|understand|got it|\bi see\b|okay|alright|entend|reconoc/i],
 ];
+// Sesiones que ya gastaron su gesto deliberado en el turno en curso (se limpia al empezar uno).
+const gestureUsed = new Set();
 const matchGesture = (caption) => {
     for (const [key, rx] of GESTURE_MATCH) if (rx.test(caption)) return key;
     return null;
@@ -138,14 +140,17 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
             sample_rate: ttsResult.sample_rate,
         };
 
-        // Director de gestos: si el caption de [MOTION:] mapea a un gesto Mixamo,
-        // el frontend reproduce ese clip limpio (reemplaza el co-speech en esa oración,
-        // los dos modos no se mezclan). Si no mapea, la oración va como co-speech normal.
+        // Director de gestos: si el caption de [MOTION:] mapea a un gesto Mixamo, el frontend
+        // reproduce ese clip POR ENCIMA del co-speech de la oración (lo mezcla con peso y, al
+        // terminar el clip, el cuerpo sigue con el text-to-motion mientras quede habla). Antes
+        // el clip reemplazaba al co-speech de la oración entera y, acabado el clip, ella se
+        // quedaba quieta el resto de la frase. Como el 7B tiende a meter gestos de más, se
+        // admite como mucho UNO por turno; los demás captions se ignoran y va co-speech.
         const gesture = action ? matchGesture(action) : null;
-        if (gesture) message.action = gesture;
+        if (gesture && !gestureUsed.has(sessionId)) { message.action = gesture; gestureUsed.add(sessionId); }
 
-        // Co-speech (cuerpo hablando) solo cuando NO hay gesto deliberado.
-        if (config.motion.enabled && !gesture) {
+        // Co-speech (cuerpo hablando) SIEMPRE que haya motion: el gesto va encima, no en lugar.
+        if (config.motion.enabled) {
             let motionResult;
             if (config.motion.provider === 'lab') {
                 // Duración real del WAV de Kokoro: PCM 16-bit mono (header 44 bytes)
@@ -316,6 +321,7 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
 const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal, opts = {}) => {
     let sentenceBuffer = '';
     let segmentChain = Promise.resolve();
+    gestureUsed.delete(sessionId);   // un gesto deliberado como mucho por turno
     logger.info('Despertando cerebro LLM...', { model: config.llm.model });
 
     const enqueueSegment = (text) => {
