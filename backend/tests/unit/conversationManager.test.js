@@ -52,6 +52,25 @@ describe('ConversationManager', () => {
         conversationManager.deleteSession(sessionId);
     });
 
+    test('cleanupExpiredSessions fires the onDelete hooks', () => {
+        const purged = [];
+        const unsubscribe = conversationManager.onDelete((id) => purged.push(id));
+        const { sessionId } = conversationManager.createSession();
+        const session = conversationManager.getSession(sessionId);
+
+        // Forzar expiración retrocediendo la última actividad más allá del TTL
+        session.lastActivityAt = new Date(Date.now() - (config.session.ttl + 1) * 60 * 1000);
+
+        // El barrido real, no deleteSession: si el GC borrara del Map por su cuenta los hooks
+        // no correrían y el test no probaría nada.
+        conversationManager.cleanupExpiredSessions();
+
+        expect(purged).toContain(sessionId);
+        // Ya fue purgada: borrar de nuevo devuelve false
+        expect(conversationManager.deleteSession(sessionId)).toBe(false);
+        unsubscribe();
+    });
+
     test('deleteSession removes an active session', () => {
         const { sessionId } = conversationManager.createSession();
         expect(conversationManager.deleteSession(sessionId)).toBe(true);

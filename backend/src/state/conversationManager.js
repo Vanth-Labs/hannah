@@ -159,12 +159,20 @@ class ConversationManager {
     const now = new Date();
     let purgeCount = 0;
 
+    // Recoger las claves antes de borrar: un hook de onDelete puede tocar el Map
+    // (borrar otra sesión en cascada) y mutarlo a mitad de la iteración.
+    const expired = [];
     for (const [sessionId, session] of this.sessions.entries()) {
       const ageInMinutes = (now - session.lastActivityAt) / 1000 / 60;
-      if (ageInMinutes > config.session.ttl) {
-        this.sessions.delete(sessionId);
-        purgeCount++;
-      }
+      if (ageInMinutes > config.session.ttl) expired.push(sessionId);
+    }
+
+    // El barrido borra por la misma puerta que un borrado explícito. Con this.sessions.delete()
+    // los hooks de onDelete no corrían, y todo mapa por sesión registrado con ellos
+    // (orchestrator, agentBridge) se filtraba para siempre en las sesiones que expiran calladas,
+    // que son la mayoría: casi nadie llama a DELETE /session/:id.
+    for (const sessionId of expired) {
+      if (this.deleteSession(sessionId)) purgeCount++;
     }
 
     if (purgeCount > 0) {
