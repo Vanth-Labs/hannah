@@ -168,6 +168,38 @@ a real result back, do NOT claim you did it — just run the command.`,
     timeboxMs: parseInt(process.env.AGENT_TIMEBOX_MS || '600000', 10),
   },
 
+  // ── Los "ojos" que vigilan: el sidecar hannah-sense (:8007) ──────────────────────
+  // Mismo patrón que agent (flag + url + bearer), y OFF por defecto por la misma razón: sin
+  // el flag, para el resto del sistema las vigilancias NO existen — el vocabulario de [WATCH:]
+  // ni siquiera se arma, así que el modelo no puede prometer una vigilancia que después nadie
+  // arma (regla del catálogo de macros, plan VIGILANCE §6).
+  // El sidecar OBSERVA y jamás toca la máquina (regla R1): toda acción correctiva sigue siendo
+  // una tarea del agente, con su carril único, su política de riesgo y su auditoría.
+  sense: {
+    enabled: process.env.SENSE_ENABLED === 'true',
+    url: process.env.SENSE_SIDECAR_URL || 'http://127.0.0.1:8007',
+    // Bearer compartido con :8007. Vacío DEL LADO DEL SIDECAR = toda ruta menos /health
+    // responde 401: allá falla cerrado, al revés que la fachada del agente.
+    token: process.env.HANNAH_SENSE_TOKEN || '',
+    maxWatches: parseInt(process.env.SENSE_MAX_WATCHES || '2', 10),
+    minPeriodMs: parseInt(process.env.SENSE_MIN_PERIOD_MS || '15000', 10),
+    debounceN: parseInt(process.env.SENSE_DEBOUNCE_N || '3', 10),
+    cooldownMs: parseInt(process.env.SENSE_COOLDOWN_MS || '600000', 10),
+    maxFires: parseInt(process.env.SENSE_MAX_FIRES || '2', 10),
+    blindMs: parseInt(process.env.SENSE_BLIND_MS || '120000', 10),
+    askTimeoutMs: parseInt(process.env.SENSE_ASK_TIMEOUT_MS || '900000', 10),
+    // Los tres tiers que todavía no existen. Se leen igual para que apagado y ausente sean el
+    // mismo estado observable, y para que encenderlos sea un cambio de entorno y no de código.
+    sshEnabled: process.env.SENSE_SSH_ENABLED === 'true',
+    screenEnabled: process.env.SENSE_SCREEN_ENABLED === 'true',
+    guiEnabled: process.env.SENSE_GUI_ENABLED === 'true',
+    // NO está en la lista del plan §13 y hace falta igual (se reporta como desvío): `expiresAt`
+    // es OBLIGATORIO en POST /v1/watches — asunción A3, no hay vigilancias abiertas para
+    // siempre — así que el backend necesita un default que además pueda decir en voz alta al
+    // armar. 8 h = "hasta la mañana", y el sidecar corta cualquier cosa por encima de 24 h.
+    watchTtlMs: parseInt(process.env.SENSE_WATCH_TTL_MS || '28800000', 10),
+  },
+
   tools: {
     // Function-calling (Fase T). OFF por defecto: llama3.1:8b es poco fiable con tools
     // (a veces emite el tool-call como texto y ensucia el chat). Activar con TOOLS_ENABLED=true

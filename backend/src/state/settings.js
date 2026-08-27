@@ -16,6 +16,11 @@ const ALLOWED = {
   tts: ['provider', 'model', 'apiKey', 'voiceId', 'sidecarUrl'],
   // El token es un secreto: entra en SECRETS y nunca vuelve al navegador (se redacta).
   agent: ['url', 'token', 'mode', 'apiKey'],
+  // Vigilancias (:8007). Solo dónde está y con qué bearer: los topes (cuántas, cada cuánto,
+  // cuántos disparos) NO son editables desde el panel a propósito. Son los límites de una
+  // primitiva que corre sin ninguna frase del usuario, y bajarlos desde la UI sería
+  // ensancharlos con un click (plan §9, "el control plane es más estricto que el default").
+  sense: ['url', 'token'],
 };
 
 // Secretos: nunca vuelven al navegador (se redactan a hasApiKey/hasToken).
