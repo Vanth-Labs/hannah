@@ -1,0 +1,19 @@
+# hannah-sense (:8007) — venv PROPIO en sidecar/sense/.venv, creado con:
+#
+#     python3 -m venv --system-site-packages .venv
+#
+# --system-site-packages porque los escalones de pantalla y AT-SPI (P5.5/P5.6)
+# necesitan `gi` y `dbus`, que en esta máquina son paquetes de la distro y no
+# existen en PyPI de forma usable.
+#
+# NO se usa el venv compartido de sidecar/.venv: ese pinea numpy y
+# onnxruntime-gpu para faster-whisper (ASR), Kokoro (TTS) y YOLO (visión).
+# Agregarle los site-packages del sistema le mete otro numpy en el path y rompe,
+# en silencio y en runtime, los dos servicios sin los cuales el producto no
+# habla ni escucha. Dos venvs cuestan disco; uno solo cuesta el producto.
+#
+# Nada más que esto en esta fase: los sensores de M5.1.2 son subprocesos
+# (pgrep, stat, ss, systemctl), no librerías.
+fastapi==0.141.1
+uvicorn==0.52.4
+sse-starlette==3.4.8
