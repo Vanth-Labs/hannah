@@ -74,6 +74,9 @@ const GESTURE_NAMES = ['wave', 'point', 'nod', 'shake_no', 'happy', 'dismiss', '
 // ?nogesture=1: ignora los clips deliberados, para que al hablar TODO el movimiento venga del
 // text-to-motion (útil para probar el retarget de un avatar nuevo sin que un clip lo tape).
 const NO_GESTURES = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('nogesture');
+// Al terminar un clip deliberado, el co-speech de esa oración solo retoma si queda habla de
+// verdad; con menos de esto se va a reposo en vez de entrar al text-to-motion por un instante.
+const RESUME_COSPEECH_MIN_S = 1.0;
 
 // The loader plugin that turns a glTF with the VRM extension into a VRM. Applied through
 // drei's `extendLoader` so the model is cached by URL like any other asset.
@@ -183,6 +186,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
     // Clips de gesto (Mixamo horneado en espacio normalizado). Se cargan una vez.
     const clips = useRef({});
     const gesture = useRef(null);   // { clip, startedAt }
+    const suppressed = useRef(null); // startedAt del motion de una oración cuyo resto no se reproduce
     useEffect(() => {
         let alive = true;
         GESTURE_NAMES.forEach((n) => {
@@ -233,7 +237,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
 
         // ── CUERPO: retargeting SMPL-X -> VRM (nodos normalizados) ───────
         let frame = -1;
-        if (currentMotion?.poses) {
+        if (currentMotion?.poses && currentMotion.startedAt !== suppressed.current) {
             const elapsed = (performance.now() - currentMotion.startedAt) / 1000;
             const f = Math.floor(elapsed * currentMotion.fps);
             if (f >= 0 && f < currentMotion.numFrames) frame = f;
@@ -266,6 +270,11 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             const foutEnd = clip.duration + 0.3;
             if (elapsed >= foutEnd) {
                 gesture.current = null;
+                // El clip acabó: seguir con el text-to-motion solo si queda habla de verdad.
+                if (currentMotion?.poses) {
+                    const remain = currentMotion.numFrames / currentMotion.fps - (performance.now() - currentMotion.startedAt) / 1000;
+                    if (remain < RESUME_COSPEECH_MIN_S) suppressed.current = currentMotion.startedAt;
+                }
             } else {
                 const f = Math.min(clip.frames - 1, Math.max(0, Math.floor(elapsed * clip.fps)));
                 const w = Math.max(0, Math.min(1, Math.min(elapsed / 0.15, (foutEnd - elapsed) / 0.4)));
