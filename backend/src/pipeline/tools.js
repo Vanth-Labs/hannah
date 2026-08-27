@@ -270,6 +270,9 @@ export async function handleCloseIntent(text, ctx) {
 // Intents de DATOS deterministas: "ejecuta X", "busca X", "lee la url X". Ejecuta la
 // acción y devuelve el RESULTADO real para inyectarlo al LLM (así no lo inventa). null
 // si no aplica. (open/move se manejan aparte porque no necesitan resultado.)
+const DELETE_STOPWORDS = new Set(['you', 'it', 'that', 'this', 'the', 'one', 'them', 'those', 'these', 'which', 'what', 'we', 'i',
+  'ese', 'esa', 'eso', 'esos', 'esas', 'este', 'esta', 'esto', 'aquel', 'aquella', 'lo', 'la', 'el', 'los', 'las', 'que', 'creaste', 'created']);
+
 export async function resolveDataAction(text, ctx) {
   const t = text || '';
   let m;
@@ -348,6 +351,10 @@ export async function resolveDataAction(text, ctx) {
     if ((mm = t.match(/((?:~|\.{0,2})\/[^\s"'`]+)/))) target = mm[1];                 // ruta con /
     else if ((mm = t.match(/(?:archivo|fichero|carpeta|directorio|file|folder|llamad[oa]|de\s+nombre)\s+(?:"([^"]+)"|'([^']+)'|([^\s,]+))/i))) target = mm[1] || mm[2] || mm[3];
     else if ((mm = t.match(/([^\s"'`/]+\.[A-Za-z0-9]{1,6})/))) target = mm[1];         // nombre.ext
+    // "delete the file YOU just created" / "borra ESE archivo": el objetivo es una referencia, no
+    // un nombre. No es un intent determinista (salía `rm "you"`): que lo resuelva el modelo, que
+    // con las manos activas delega con contexto.
+    if (target && DELETE_STOPWORDS.has(target.replace(/[.,;]+$/, '').toLowerCase())) target = null;
     if (target) {
       target = target.replace(/[.,;]+$/, '');
       return runAndReport(`rm ${dir ? '-r ' : ''}${JSON.stringify(target)}`, { sentence: t, writes: true });

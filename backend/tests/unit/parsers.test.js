@@ -164,3 +164,32 @@ describe('wavDurationS', () => {
     expect(wavDurationS(Buffer.alloc(44 + 24000 * 2), 24000)).toBeCloseTo(1, 3);   // no header: fallback
   });
 });
+
+describe('references, not names', () => {
+  test('"delete the file you just created" is not a deterministic rm', async () => {
+    const { resolveDataAction } = await import('../../src/pipeline/tools.js');
+    const { config } = await import('../../src/config.js');
+    config.agent.enabled = false;   // sin manos: tiene que caer al modelo, no a rm "you"
+    expect(await resolveDataAction('delete the file you just created', { sessionId: 's', send: () => {} })).toBeFalsy();
+    expect(await resolveDataAction('borra ese archivo que creaste', { sessionId: 's', send: () => {} })).toBeFalsy();
+  });
+
+  test('a task prompt carries what the hands did before and the recent turns', async () => {
+    const bridge = await import('../../src/pipeline/agentBridge.js');
+    const { conversationManager } = await import('../../src/state/conversationManager.js');
+    const { config } = await import('../../src/config.js');
+    config.agent.enabled = true;
+    const created = [];
+    const fake = { health: async () => ({ healthy: true }), listTasks: async () => ({ tasks: [] }), subscribe: () => ({ close() {} }),
+      createTask: async (req) => { created.push(req); return { taskId: `t_${created.length}` }; } };
+    bridge._reset(); await bridge.init({ client: fake, narrate: async () => {} }); bridge._setHealthy(true);
+    const sid = conversationManager.createSession().sessionId;
+    conversationManager.addTurn(sid, 'user', 'create a file notes.txt in Documents');
+    conversationManager.addTurn(sid, 'assistant', 'On it.');
+    const r = await bridge.dispatch(sid, 'create a file named notes.txt in Documents', { title: 'create a file' });
+    await bridge.onEvent({ v: 'hannah.v0', type: 'task.completed', taskId: r.taskId, seq: 1, ts: 1, data: { summary: 'created ~/Documents/notes.txt' } });
+    await bridge.dispatch(sid, 'delete the file you just created', { title: 'delete' });
+    expect(created[1].prompt).toMatch(/Earlier tasks[\s\S]*notes\.txt[\s\S]*Recent conversation[\s\S]*Request: delete the file you just created/);
+    await bridge.shutdown().catch(() => {});
+  });
+});

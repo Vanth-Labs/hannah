@@ -17,6 +17,7 @@
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import * as agentClient from './agentClient.js';
+import { conversationManager } from '../state/conversationManager.js';
 
 // ── Estado ─────────────────────────────────────────────────────────────────────────────
 const tasks = new Map();        // taskId -> Task
@@ -183,6 +184,7 @@ export async function onEvent(env) {
         default: break;
     }
     t.lastSummary = d.summary || d.text || t.lastSummary;
+    if (terminal(t.state) && !t.remembered) { t.remembered = true; rememberOutcome(t); }
     t.timeline.push({ type: env.type, ts: env.ts, data: d });
     if (t.timeline.length > TIMELINE_MAX) t.timeline.shift();
 
@@ -213,12 +215,48 @@ export async function onEvent(env) {
  * Si el agente no está sano, NO lanza: devuelve {error:'agent_unavailable'} y el que llama
  * degrada a conversación.
  */
+// Lo que las manos ya hicieron para cada sesión (las últimas RECENT_MAX, aunque la tarea ya se
+// haya olvidado de `tasks`): sin esto "delete the file you just created" no tiene referente,
+// porque cada tarea del agente es una sesión NUEVA del motor.
+const RECENT_MAX = 5;
+const recentTasks = new Map();   // sessionId -> [{ title, state, summary, at }]
+// El hook se registra en init(), no al cargar: conversationManager importa (vía el orquestador)
+// este módulo, y a nivel de módulo todavía no está inicializado (import circular).
+let forgetHook = null;
+function rememberOutcome(t) {
+    if (!t.sessionId) return;
+    const list = recentTasks.get(t.sessionId) || [];
+    list.push({ title: t.title, state: t.state, summary: clean(t.lastSummary, 200), at: now() });
+    while (list.length > RECENT_MAX) list.shift();
+    recentTasks.set(t.sessionId, list);
+}
+/**
+ * El contexto va DENTRO del prompt (el motor ignora context.conversationSummary): las últimas
+ * tareas de esta sesión con su desenlace y los últimos turnos de la charla, recortados.
+ * Exportado para tests.
+ */
+export function taskPrompt(sessionId, description) {
+    const lines = [];
+    const done = recentTasks.get(sessionId) || [];
+    if (done.length) {
+        lines.push('Earlier tasks you (the hands) did for this user, oldest first:');
+        for (const d of done) lines.push(`- "${d.title}" — ${d.state}${d.summary ? `: ${d.summary}` : ''}`);
+    }
+    const turns = (conversationManager.getSession(sessionId)?.turns || []).slice(-4);
+    if (turns.length) {
+        lines.push('Recent conversation between the user and Hannah (the voice):');
+        for (const t of turns) lines.push(`- ${t.role === 'assistant' ? 'Hannah' : 'user'}: ${clean(t.content, 200)}`);
+    }
+    if (!lines.length) return description;
+    return `Context, for reference only — the request is at the end.\n${lines.join('\n')}\n\nRequest: ${description}`;
+}
+
 export async function dispatch(sessionId, description, { title, language, conversationSummary, cwd } = {}) {
     if (!config.agent.enabled) return { error: 'agent_disabled' };
     if (!healthy) return { error: 'agent_unavailable' };
     try {
         const r = await agent.createTask({
-            prompt: description, title: title || description.slice(0, 60), cwd,
+            prompt: taskPrompt(sessionId, description), title: title || description.slice(0, 60), cwd,
             context: { language: language || 'en', conversationSummary },
         });
         tasks.set(r.taskId, { taskId: r.taskId, title: clean(title || description, 60), state: r.queued ? 'queued' : 'accepted',
@@ -409,6 +447,7 @@ export async function init(deps = {}) {
     classify = deps.classify || null;
     agent = deps.client || agentClient;
     if (!config.agent.enabled) { logger.info('agent: disabled (AGENT_ENABLED=false)'); return; }
+    if (!forgetHook) forgetHook = conversationManager.onDelete((sessionId) => recentTasks.delete(sessionId));
     try {
         const h = await agent.health();
         healthy = !!h?.healthy;
@@ -439,7 +478,7 @@ export async function shutdown() {
 
 // Solo para tests: estado limpio entre casos.
 export function _reset() {
-    tasks.clear(); sessions.clear(); narrationQueue.clear(); narrate = null; classify = null; healthy = false; agent = agentClient;
+    tasks.clear(); sessions.clear(); narrationQueue.clear(); recentTasks.clear(); narrate = null; classify = null; healthy = false; agent = agentClient;
     if (expireTimer) { clearInterval(expireTimer); expireTimer = null; }
     if (lostTimer) { clearTimeout(lostTimer); lostTimer = null; }
 }
