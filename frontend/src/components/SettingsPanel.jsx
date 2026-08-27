@@ -9,7 +9,7 @@
 // caliente). Un campo en blanco = conservar; la key nunca vuelve del backend (hasApiKey).
 import { useEffect, useRef, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
-import { API_BASE } from '../lib/api.js';
+import { API_BASE, apiFetch } from '../lib/api.js';
 
 // Proveedores en la nube (OpenAI-compatible). El modelo es el "bueno y barato" de cada uno;
 // se puede afinar en Avanzado.
@@ -140,7 +140,7 @@ function useVoices(enabled) {
     const [voices, setVoices] = useState([]);
     useEffect(() => {
         if (!enabled) return;
-        fetch(`${API_BASE}/api/v1/tts/voices`)
+        apiFetch(`/api/v1/tts/voices`)
             .then((r) => r.json())
             .then((d) => setVoices(d.voices?.length ? d.voices : FALLBACK_VOICES))
             .catch(() => setVoices(FALLBACK_VOICES));
@@ -157,7 +157,7 @@ function ListenButton({ voice }) {
         audioRef.current?.pause();
         setState('loading');
         try {
-            const r = await fetch(`${API_BASE}/api/v1/tts/preview?voice=${encodeURIComponent(voice)}`);
+            const r = await apiFetch(`/api/v1/tts/preview?voice=${encodeURIComponent(voice)}`);
             if (!r.ok) throw new Error(String(r.status));
             const url = URL.createObjectURL(await r.blob());
             const a = new Audio(url);
@@ -254,18 +254,18 @@ function LookCard() {
     const [status, setStatus] = useState('');
     const setAvatarUrl = useHannahStore((s) => s.setAvatarUrl);
     const avatarError = useHannahStore((s) => s.avatarError);
-    const load = () => fetch(`${API_BASE}/api/v1/avatar/info`).then((r) => r.json()).then(setInfo).catch(() => setInfo({ custom: false }));
+    const load = () => apiFetch(`/api/v1/avatar/info`).then((r) => r.json()).then(setInfo).catch(() => setInfo({ custom: false }));
     useEffect(() => { load(); }, []);
 
     const reload = async () => {
-        const r = await fetch(`${API_BASE}/api/v1/avatar`, { method: 'HEAD' }).catch(() => null);
+        const r = await apiFetch(`/api/v1/avatar`, { method: 'HEAD' }).catch(() => null);
         setAvatarUrl(r?.ok ? `${API_BASE}/api/v1/avatar?v=${encodeURIComponent(r.headers.get('etag') || Date.now())}` : '/avatar.glb');
     };
     const upload = async (file) => {
         if (!file) return;
         setStatus(`subiendo ${file.name}…`);
         try {
-            const r = await fetch(`${API_BASE}/api/v1/avatar`, { method: 'PUT', body: file, headers: { 'Content-Type': 'application/octet-stream' } });
+            const r = await apiFetch(`/api/v1/avatar`, { method: 'PUT', body: file, headers: { 'Content-Type': 'application/octet-stream' } });
             const d = await r.json().catch(() => ({}));
             if (!r.ok) { setStatus(d.error === 'not_a_vrm' ? 'ese archivo no es un VRM (.vrm, o .glb con extensión VRM)' : `error (${r.status})`); return; }
             setStatus('listo ✓'); await load(); await reload();
@@ -273,7 +273,7 @@ function LookCard() {
     };
     const reset = async () => {
         setStatus('volviendo al de fábrica…');
-        try { await fetch(`${API_BASE}/api/v1/avatar`, { method: 'DELETE' }); setStatus(''); await load(); await reload(); }
+        try { await apiFetch(`/api/v1/avatar`, { method: 'DELETE' }); setStatus(''); await load(); await reload(); }
         catch { setStatus('backend no disponible'); }
     };
     const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
@@ -333,7 +333,7 @@ function ShortcutsSection() {
     const [status, setStatus] = useState('cargando…');
 
     useEffect(() => {
-        fetch(`${API_BASE}/api/v1/shortcuts`)
+        apiFetch(`/api/v1/shortcuts`)
             .then((r) => r.json())
             .then((d) => {
                 setSites(Object.entries(d.sites || {}));
@@ -353,7 +353,7 @@ function ShortcutsSection() {
         const toObj = (rows) => Object.fromEntries(
             rows.map(([k, v]) => [k.trim().toLowerCase(), v.trim()]).filter(([k, v]) => k && v));
         try {
-            const r = await fetch(`${API_BASE}/api/v1/shortcuts`, {
+            const r = await apiFetch(`/api/v1/shortcuts`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sites: toObj(sites), apps: toObj(apps) }),
             });
@@ -419,7 +419,7 @@ function SkillsSection() {
     const [editing, setEditing] = useState(null);   // null | { name, content, isNew }
     const [status, setStatus] = useState('cargando…');
 
-    const load = () => fetch(`${API_BASE}/api/v1/skills`).then((r) => r.json())
+    const load = () => apiFetch(`/api/v1/skills`).then((r) => r.json())
         .then((d) => { setSkills(d.skills || []); setStatus(''); })
         .catch(() => setStatus('backend no disponible'));
     useEffect(() => { load(); }, []);
@@ -429,7 +429,7 @@ function SkillsSection() {
         if (!name || !editing.content.trim()) { setStatus('faltan nombre/contenido'); return; }
         setStatus('guardando…');
         try {
-            await fetch(`${API_BASE}/api/v1/skills`, {
+            await apiFetch(`/api/v1/skills`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, content: editing.content }),
             });
@@ -438,7 +438,7 @@ function SkillsSection() {
     };
     const del = async (name) => {
         setStatus('borrando…');
-        try { await fetch(`${API_BASE}/api/v1/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }); setStatus(''); load(); }
+        try { await apiFetch(`/api/v1/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }); setStatus(''); load(); }
         catch { setStatus('error al borrar'); }
     };
 
@@ -549,7 +549,7 @@ export function SettingsPanel({ onClose }) {
     const [advanced, setAdvanced] = useState(false);
 
     useEffect(() => {
-        fetch(`${API_BASE}/api/v1/settings`)
+        apiFetch(`/api/v1/settings`)
             .then((r) => r.json())
             .then((d) => {
                 // apiKey/token se dejan vacíos en el form; hasApiKey/hasToken guían el placeholder.
@@ -565,7 +565,7 @@ export function SettingsPanel({ onClose }) {
                 setStatus('');
             })
             .catch(() => setStatus('backend no disponible'));
-        fetch(`${API_BASE}/api/v1/health`).then((r) => r.json()).then(setHealth).catch(() => setHealth({}));
+        apiFetch(`/api/v1/health`).then((r) => r.json()).then(setHealth).catch(() => setHealth({}));
     }, []);
 
     const setField = (sec, name, value) =>
@@ -587,7 +587,7 @@ export function SettingsPanel({ onClose }) {
             }
         }
         try {
-            const r = await fetch(`${API_BASE}/api/v1/settings`, {
+            const r = await apiFetch(`/api/v1/settings`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
             });
             const d = await r.json();

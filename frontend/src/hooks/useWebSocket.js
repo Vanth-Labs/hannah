@@ -3,7 +3,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { emitTerminalOut, emitHands, formatHandsTool } from '../lib/terminalBus.js';
 import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
-import { DESKTOP, API_BASE } from '../lib/api.js';
+import { DESKTOP, API_BASE, apiFetch, withToken } from '../lib/api.js';
 
 export function useWebSocket() {
     const ws = useRef(null);
@@ -276,7 +276,7 @@ export function useWebSocket() {
     const connectRef = useRef(null);
     const connect = useCallback(async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/v1/session`, {
+            const res = await apiFetch(`/api/v1/session`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: '{}',
@@ -290,9 +290,9 @@ export function useWebSocket() {
             addLog(`sesión: ${sessionId}`, 'info');
 
 	    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-	    const wsUrl = DESKTOP
-	        ? `ws://localhost:3001/ws?sessionId=${sessionId}`
-	        : `${protocol}//${window.location.host}/ws?sessionId=${sessionId}`;
+	    const wsUrl = withToken(DESKTOP
+	        ? `${DESKTOP.backendBase.replace(/^http/, 'ws')}/ws?sessionId=${sessionId}`
+	        : `${protocol}//${window.location.host}/ws?sessionId=${sessionId}`);
             // Cerrar un socket anterior antes de pisar la ref (evita dejarlo colgado). CLAVE:
             // desarmar sus handlers ANTES de cerrarlo — si no, su onclose agenda otra
             // reconexión y se entra en un bucle (sesión nueva cada 1.5s, ningún turno llega

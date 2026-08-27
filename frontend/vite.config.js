@@ -14,14 +14,15 @@ export default defineConfig({
         dedupe: ['react', 'react-dom', 'three'],
     },
     server: {
-        host: '0.0.0.0',   // ← expuesto en red local
+        // Solo esta máquina por defecto. HANNAH_LAN=1 (lo pone `./hannah services`) lo abre a
+        // la red: entonces el backend exige el token de la UI a todo lo que no sea loopback.
+        host: process.env.HANNAH_LAN ? '0.0.0.0' : 'localhost',
         port: 5173,
         proxy: {
-            '/api': 'http://localhost:3001',   // ← backend sigue privado
-            '/ws': {
-                target: 'ws://localhost:3001', // ← websocket sigue privado
-                ws: true,
-            },
+            // xfwd: el backend ve la IP real del cliente en X-Forwarded-For (api/auth.js) —
+            // sin esto todo lo que pasa por aquí parecería 127.0.0.1.
+            '/api': { target: 'http://localhost:3001', xfwd: true },
+            '/ws': { target: 'ws://localhost:3001', ws: true, xfwd: true },
         },
     },
 });

@@ -5,13 +5,13 @@ import { Environment, ContactShadows, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { VrmAvatar } from './VrmAvatar.jsx';
 import { useHannahStore } from '../store/hannahStore.js';
-import { API_BASE } from '../lib/api.js';
+import { API_BASE, apiFetch } from '../lib/api.js';
 
 // Qué avatar cargar: el subido por el usuario si el backend tiene uno (GET /api/v1/avatar,
 // versionado por ETag para que un cambio recargue), si no el de fábrica del bundle.
 export async function resolveAvatarUrl() {
     try {
-        const r = await fetch(`${API_BASE}/api/v1/avatar`, { method: 'HEAD' });
+        const r = await apiFetch(`/api/v1/avatar`, { method: 'HEAD' });
         if (r.ok) return `${API_BASE}/api/v1/avatar?v=${encodeURIComponent(r.headers.get('etag') || Date.now())}`;
     } catch { /* backend caído: el de fábrica */ }
     return '/avatar.glb';

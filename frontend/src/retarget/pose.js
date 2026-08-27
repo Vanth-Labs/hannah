@@ -83,7 +83,7 @@ export function restArm(upperDir, side, tuning) {
     const target = new THREE.Vector3(outward * Math.sin(tuning.restArmFromVertical), -Math.cos(tuning.restArmFromVertical), 0).normalize();
     const d = upperDir.clone().normalize();
     const upper = new THREE.Quaternion().setFromUnitVectors(d, target);
-    let axis = new THREE.Vector3().crossVectors(d, target);
+    const axis = new THREE.Vector3().crossVectors(d, target);
     if (axis.lengthSq() < 1e-8) axis.set(0, 0, outward);   // arm already vertical: any axis in the plane
     axis.normalize();
     const lower = new THREE.Quaternion().setFromAxisAngle(axis, tuning.restForearmBend);
