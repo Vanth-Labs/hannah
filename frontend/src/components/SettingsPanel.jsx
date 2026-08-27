@@ -4,12 +4,14 @@
 //   Voz      -> idioma + voz con nombre humano, con botón para escucharla
 //   Look     -> subir un VRM (cualquiera) o volver al de fábrica
 //   Manos    -> estado del agente + su key + la frase de privacidad
+// Y, debajo, Vigilancia -> qué está mirando ahora mismo, en qué peldaño y hace cuánto la vio.
 // Debajo, plegado, "Avanzado": URLs, ids de modelo, sidecars, personalidad, atajos, skills.
 // Todo escribe en el MISMO formulario y se guarda con un solo botón (POST /settings, en
 // caliente). Un campo en blanco = conservar; la key nunca vuelve del backend (hasApiKey).
 import { useEffect, useRef, useState } from 'react';
-import { useHannahStore } from '../store/hannahStore.js';
+import { useHannahStore, WATCH_TERMINAL } from '../store/hannahStore.js';
 import { API_BASE, apiFetch } from '../lib/api.js';
+import { watchLook } from './WatchPill.jsx';
 
 // Proveedores en la nube (OpenAI-compatible). El modelo es el "bueno y barato" de cada uno;
 // se puede afinar en Avanzado.
@@ -325,6 +327,87 @@ function HandsCard({ form, saved, setField, health }) {
     );
 }
 
+// ── Vigilancia (watches). La pregunta que contesta es "¿sigue mirando?", así que muestra el
+// peldaño que armó y la antigüedad de la ÚLTIMA MUESTRA: sin ese dato, un watch ciego y uno
+// armado se leen igual. El aspecto lo comparte con la píldora del HUD (watchLook) justo para que
+// "ciega" no signifique dos cosas distintas en dos pantallas.
+function WatchesSection({ health, onDisarm }) {
+    const watches = useHannahStore((s) => s.watches);
+    const [status, setStatus] = useState('');
+    const [now, setNow] = useState(() => Date.now());
+
+    // Instantánea al abrir el panel: los eventos del WebSocket solo cuentan lo que pasó con esta
+    // pestaña abierta, así que sin esto un watch armado ayer no aparecería en la lista.
+    useEffect(() => {
+        apiFetch(`/api/v1/watches`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+            .then((d) => { useHannahStore.getState().setWatches(d.watches || []); setStatus(''); })
+            // Esta ruta pide el token de la UI incluso en loopback (la única del backend que lo
+            // hace). Sin instantánea se muestra lo que haya llegado por el WS: una lista vacía
+            // sería peor, porque diría "no vigilo nada" sin saberlo.
+            .catch(() => setStatus('sin instantánea (falta el token de la UI)'));
+    }, []);
+
+    // La antigüedad es el dato vivo de esta sección: sin un tick se congela en el instante en que
+    // se abrió el panel y "hace 3s" pasa a ser mentira a los cuatro segundos.
+    useEffect(() => {
+        const id = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    const ago = (ts) => {
+        if (!ts) return 'sin muestra todavía';
+        const s = Math.max(0, Math.round((now - ts) / 1000));
+        return s < 90 ? `hace ${s}s` : `hace ${Math.round(s / 60)} min`;
+    };
+    const w = health?.watches;
+    const summary = w ? `${w.armed ?? 0} armadas · ${w.blind ?? 0} ciegas · ${w.suspended ?? 0} suspendidas` : '';
+
+    const chip = { fontSize: '8px', padding: '1px 5px', borderRadius: '6px', marginLeft: '6px' };
+    const delBtn = { flexShrink: 0, width: '26px', height: '26px', borderRadius: '7px', cursor: 'pointer',
+        background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', fontSize: '13px' };
+
+    return (
+        <div style={S.sec}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={S.secTitle}>Vigilancia (lo que está mirando)</div>
+                <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>{status || summary}</span>
+            </div>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)', marginBottom: '6px' }}>
+                Una fila que no dice «armed» es una que NO está mirando.
+            </div>
+            {!watches.length && (
+                <div style={{ ...S.hint, marginTop: '6px' }}>Nada vigilado ahora mismo.</div>
+            )}
+            {watches.map((row) => {
+                const look = watchLook(row.state);
+                return (
+                    <div key={row.watchId} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>
+                                <span style={{ color: look.color, marginRight: '5px' }}>{look.icon}</span>
+                                {row.label}
+                                <span style={{ ...chip, background: 'rgba(255,255,255,0.06)', color: look.color }}>{row.state}</span>
+                                {row.rung && <span style={{ ...chip, background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.45)' }}>{row.rung}</span>}
+                            </div>
+                            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {ago(row.lastSampleAt)}
+                                {row.sensorKind ? ` · ${row.sensorKind}` : ''}
+                                {row.fires > 0 ? ` · saltó ${row.fires} ${row.fires === 1 ? 'vez' : 'veces'}` : ''}
+                            </div>
+                        </div>
+                        {/* Terminal = ya no hay nada que desarmar; el botón se va en vez de mandar
+                            una orden que el servidor contestaría con un 404. */}
+                        {!WATCH_TERMINAL.includes(row.state) && (
+                            <button style={delBtn} onClick={() => onDisarm?.(row.watchId)} title="Dejar de vigilar">✕</button>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 // ── Atajos de voz (abrir apps/páginas). Estado propio: carga GET /shortcuts, edita
 // filas clave→valor y guarda POST /shortcuts. Sin tocar la config de proveedores.
 function ShortcutsSection() {
@@ -539,7 +622,7 @@ function AdvancedSections({ form, saved, setField, applyPreset }) {
     ));
 }
 
-export function SettingsPanel({ onClose }) {
+export function SettingsPanel({ onClose, onWatchDisarm }) {
     const autoLookat = useHannahStore((s) => s.autoLookat);
     const setAutoLookat = useHannahStore((s) => s.setAutoLookat);
     const [form, setForm] = useState(Object.fromEntries(SECTIONS.map((s) => [s.key, {}])));
@@ -616,6 +699,7 @@ export function SettingsPanel({ onClose }) {
                 <VoiceCard form={form} setField={setField} />
                 <LookCard />
                 <HandsCard form={form} saved={saved} setField={setField} health={health} />
+                <WatchesSection health={health} onDisarm={onWatchDisarm} />
 
                 <div style={S.row}>
                     <button style={S.save} onClick={save}>Guardar</button>

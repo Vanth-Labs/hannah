@@ -40,7 +40,7 @@ const AvatarLoadingHint = () => {
 };
 
 export default function App() {
-    const { sendCommand, sendAudio, sendText, stopPlayback } = useWebSocket();
+    const { sendCommand, sendAudio, sendText, watchDisarm, stopPlayback } = useWebSocket();
     const { videoRef, startVision, stopVision } = useVision(sendCommand);
     // Selectores atómicos: App es la raíz, así que suscribirse al store entero re-renderizaba
     // TODO el árbol (Scene/Canvas incluido) con cada visema/gaze/log.
@@ -172,6 +172,7 @@ export default function App() {
                 onToggleRecord={handleRecord}
                 isRecording={isRecording}
                 sendCommand={sendCommand}
+                onWatchDisarm={watchDisarm}
             />
         </>
     );

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { SettingsPanel } from './SettingsPanel.jsx';
 import { TerminalPanel } from './TerminalPanel.jsx';
+import { WatchesRail } from './WatchPill.jsx';
 import { isOverlay } from '../lib/overlay.js';
 
 // Re-export por compatibilidad (App lo importa desde aquí).
@@ -105,7 +106,7 @@ function CommandToast({ run, onClose }) {
     );
 }
 
-export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, sendCommand }) {
+export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, sendCommand, onWatchDisarm }) {
     const [input, setInput] = useState('');
     const [showSettings, setShowSettings] = useState(false);
     // Selectores ATÓMICOS: sin ellos el HUD se re-renderizaba con CUALQUIER cambio del store
@@ -196,12 +197,16 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
                     title="Ajustes (modelo/API, voz, atajos)">⚙</IconBtn>
             </div>
 
+            {/* Vigilancias: columna propia arriba-izquierda. Se suscribe ella al store, así una
+                muestra cada 15s no re-renderiza este componente entero. */}
+            <WatchesRail onDisarm={onWatchDisarm} />
+
             {commandRun && <CommandToast run={commandRun} onClose={() => setCommandRun(null)} />}
             {agentTask && (!agentTask.doneAt || Date.now() - agentTask.doneAt < 15000) && (
                 <AgentPill task={agentTask} onCancel={() => sendCommand?.({ command: 'AGENT_CANCEL', taskId: agentTask.taskId })} />
             )}
 
-            {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+            {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} onWatchDisarm={onWatchDisarm} />}
 
             {terminalOpen && (
                 <TerminalPanel
