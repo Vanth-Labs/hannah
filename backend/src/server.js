@@ -31,8 +31,11 @@ const app = express();
 app.use(helmet({
   contentSecurityPolicy: false, // Deshabilitar CSP para pruebas locales con scripts externos
 }));
+// CORS: la lista de CORS_ORIGIN más CUALQUIER origen de loopback (la app Electron sirve el
+// dist en un puerto aleatorio de 127.0.0.1; antes apagaba webSecurity para saltarse esto).
+const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 app.use(cors({
-  origin: config.corsOrigin,
+  origin: (origin, cb) => cb(null, !origin || config.corsOrigin.includes(origin) || LOOPBACK_ORIGIN.test(origin)),
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
