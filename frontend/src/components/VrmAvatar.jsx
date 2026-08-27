@@ -77,6 +77,9 @@ const NO_GESTURES = typeof window !== 'undefined' && new URLSearchParams(window.
 // Al terminar un clip deliberado, el co-speech de esa oración solo retoma si queda habla de
 // verdad; con menos de esto se va a reposo en vez de entrar al text-to-motion por un instante.
 const RESUME_COSPEECH_MIN_S = 1.0;
+// Tras el último frame del co-speech, el cuerpo vuelve a idle con una constante de tiempo más
+// larga durante este lapso (el clip ya trae 0.35 s de cola sobre el audio, ver orchestrator).
+const RELEASE_S = 1.2;
 
 // The loader plugin that turns a glTF with the VRM extension into a VRM. Applied through
 // drei's `extendLoader` so the model is cached by URL like any other asset.
@@ -246,10 +249,12 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
 
         // ── CUERPO: retargeting SMPL-X -> VRM (nodos normalizados) ───────
         let frame = -1;
+        let releasing = false;   // el clip acabó hace poco: soltar hacia idle despacio, no de golpe
         if (currentMotion?.poses && currentMotion.startedAt !== suppressed.current) {
             const elapsed = (performance.now() - currentMotion.startedAt) / 1000;
             const f = Math.floor(elapsed * currentMotion.fps);
             if (f >= 0 && f < currentMotion.numFrames) frame = f;
+            else if (f >= currentMotion.numFrames) releasing = elapsed - currentMotion.numFrames / currentMotion.fps < RELEASE_S;
         }
         for (const [idx, bone] of Object.entries(rig.bodyBones)) {
             if (TUNING.pinFeet && FEET_IDX.has(idx)) { bone.quaternion.slerp(rig.restQuat[idx], Math.min(1, 8 * delta)); continue; }
@@ -264,7 +269,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
             } else {
                 const off = idleOffset(idx, t);
                 const tq = off ? _quat.copy(rig.restQuat[idx]).multiply(off) : rig.restQuat[idx];
-                bone.quaternion.slerp(tq, Math.min(1, 4 * delta));
+                bone.quaternion.slerp(tq, Math.min(1, (releasing ? 1.5 : 4) * delta));
             }
         }
 

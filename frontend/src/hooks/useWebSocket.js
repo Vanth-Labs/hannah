@@ -103,7 +103,10 @@ export function useWebSocket() {
         scheduleVisemes(visemes);
         // El movimiento (co-speech) arranca sincronizado con el inicio del audio.
         if (motion) {
-            useHannahStore.getState().setCurrentMotion({ ...motion, startedAt: performance.now() });
+            // El audio se OYE baseLatency+outputLatency después de source.start(): sin este
+            // desfase el cuerpo iba por delante de la voz y el clip acababa antes que el audio.
+            const latencyMs = ((ctx.baseLatency || 0) + (ctx.outputLatency || 0)) * 1000;
+            useHannahStore.getState().setCurrentMotion({ ...motion, startedAt: performance.now() + latencyMs });
         }
         // Gesto deliberado (Mixamo): se dispara junto al audio de su oración.
         if (action) {
