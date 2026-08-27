@@ -10,6 +10,16 @@ export function useWebSocket() {
     const audioCtx = useRef(null);
     const audioQueue = useRef([]);
     const isPlaying = useRef(false);
+    // La emoción del turno se mantiene mientras habla y un rato después; luego vuelve a
+    // neutral sola (antes se quedaba sonriendo o triste hasta el siguiente turno).
+    const EMOTION_HOLD_MS = 4000;
+    const emotionTimer = useRef(null);
+    const scheduleNeutral = useCallback(() => {
+        clearTimeout(emotionTimer.current);
+        emotionTimer.current = setTimeout(() => {
+            if (!isPlaying.current) useHannahStore.getState().setEmotion('neutral');
+        }, EMOTION_HOLD_MS);
+    }, []);
     const currentSource = useRef(null);   // BufferSource sonando ahora (para barge-in)
     const visemeSchedule = useRef([]);  // visemas pendientes de reproducir
 
@@ -70,10 +80,12 @@ export function useWebSocket() {
             isPlaying.current = false;
             useHannahStore.getState().setIsSpeaking(false);
             visemeSchedule.current = [];   // timers ya disparados: no acumular ids de por vida
+            scheduleNeutral();             // terminó de hablar: la emoción se apaga en un rato
             return;
         }
         isPlaying.current = true;
         useHannahStore.getState().setIsSpeaking(true);
+        clearTimeout(emotionTimer.current);   // mientras habla, la emoción se queda
 
         const { buffer, visemes, motion, action } = audioQueue.current.shift();
         const ctx = getAudioCtx();
@@ -92,7 +104,7 @@ export function useWebSocket() {
             useHannahStore.getState().setGestureTrigger({ name: action, startedAt: performance.now() });
         }
         source.start();
-    }, []);
+    }, [scheduleNeutral]);
 
     const playChunk = useCallback(async (base64wav, visemes, motion, action) => {
         const ctx = getAudioCtx();
@@ -133,7 +145,8 @@ export function useWebSocket() {
         st.setIsSpeaking(false);
         st.setCurrentMotion(null);
         st.setGestureTrigger(null);
-    }, []);
+        scheduleNeutral();
+    }, [scheduleNeutral]);
 
     // ── Handlers de mensajes del servidor ──────────────────────────────────
     const handleMessage = useCallback((msg) => {
@@ -150,7 +163,7 @@ export function useWebSocket() {
                 break;
 
             case 'turn_complete':
-                if (msg.emotion) setEmotion(msg.emotion);
+                if (msg.emotion) { setEmotion(msg.emotion); scheduleNeutral(); }
                 addLog(`[turno] emoción: ${msg.emotion} | llm ${msg.metrics?.llm_ms}ms`, 'info');
                 break;
 
@@ -255,7 +268,7 @@ export function useWebSocket() {
             default:
                 addLog(JSON.stringify(msg), 'debug');
         }
-    }, [playChunk, setTranscript, setEmotion, setUserTranscript, addLog]);
+    }, [playChunk, setTranscript, setEmotion, setUserTranscript, addLog, scheduleNeutral]);
 
     // ── Iniciar sesión y WS ─────────────────────────────────────────────────
     const reconnectRef = useRef(null);
