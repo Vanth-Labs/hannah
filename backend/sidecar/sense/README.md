@@ -1,8 +1,9 @@
 # hannah-sense — el quinto sidecar (127.0.0.1:8007)
 
 Los ojos de Hannah para la máquina: mantiene *vigilancias* (watches) que muestrean
-una señal cada N segundos y avisan cuando algo dejó de estar como estaba. Es el
-hito **M5.1.1** del plan `docs/VIGILANCE.md`; en esta fase solo **observa**.
+una señal cada N segundos y avisan cuando algo dejó de estar como estaba. Son los
+hitos **M5.1.1** (el esqueleto) y **M5.1.2** (la sonda de capacidades y los
+sensores reales) del plan `docs/VIGILANCE.md`; en esta fase solo **observa**.
 
 ## La regla que manda sobre todas
 
@@ -54,6 +55,8 @@ Perillas (plan §13), todas por entorno y leídas en un solo lugar, `config.py`:
 | `SENSE_DEBOUNCE_N` | `3` | muestras no sanas seguidas antes de un trip |
 | `SENSE_BLIND_MS` | `120000` | sin muestras buenas por más de esto, el watch se declara ciego |
 | `HANNAH_SENSE_STATE_DIR` | `~/.local/share/hannah-sense` | **solo para tests**: mueve el estado fuera de la denylist del agente |
+| `HANNAH_AGENT_FIXTURES` | `../../agent/docs/fixtures` | dónde está el asset de rutas denegadas del agente (ver más abajo) |
+| `HANNAH_AGENT_DENY_DIRS` | vacío | directorios que esta máquina deniega además de la tabla; el launcher le pasa `backend/data` |
 
 ## Las rutas
 
@@ -92,15 +95,103 @@ Al arrancar, lo persistido vuelve como **`suspended`, jamás armado** (asunción
 re-armar solo porque el proceso reinició no es consentimiento), y lo que ya venció
 mientras el proceso estaba caído no vuelve.
 
+## La escalera y lo que puede esta máquina
+
+`GET /v1/capabilities` no es una lista fija: es lo que **esta** máquina puede
+vigilar hoy. `capability.py` resuelve cada herramienta en `PATH` mirando el bit de
+ejecución, con la misma forma que `which`/`whichFirst` de
+`agent/packages/agent/src/hannah/env.ts`, y un escalón sin su herramienta se
+reporta `available: false` con una razón que se puede decir en voz alta. Es la
+regla del catálogo de macros: **Hannah no aprende la palabra de una vigilancia
+que no puede armar**, así que no la promete.
+
+| escalón | kind | necesita | estado hoy |
+| --- | --- | --- | --- |
+| **R1** | `proc` | `pgrep` | el proceso está vivo (`pgrep -c -f -- <patrón>`) |
+| **R2** | `file` | nada (es un `stat`) | el mtime no avanza hace `stallSeconds` |
+| **R3** | `logmatch` | nada (es un `read`) | un patrón **aparece** en lo escrito desde que se armó |
+| **R4** | `gpu` | `nvidia-smi` | **corrobora, no dispara**: no puede armar sola |
+| **R5** | `port` | `ss` | algo sigue escuchando |
+| **R6** | `unit` | `systemctl` | la unidad está `active`/`activating`/`reloading` |
+| **R6b** | `ssh` | — | P5.3, apagado |
+| **R7 R8 R9 R10** | a11y, pantalla | — | P5.5 / P5.6 |
+
+**R0 no está, y no es un olvido.** R0 es el exit code de un wrapper que arrancó
+Hannah, y en una fase de solo observar ella no arranca nada, así que no hay
+wrapper cuyo código mirar. El enum de ids del contrato `sense.v1` es R1..R10, así
+que la fila no se emite; la razón vive en `capability.R0_ABSENT_REASON`.
+
+Una regla que está en el código y no en un comentario, porque es la que evita
+que la vigilancia mienta:
+
+- **R4 nunca dispara sola.** `base.build()` rechaza cualquier watch cuyo único
+  sensor sea corroborante. Checkpointing y un dataloader lento leen los dos 0 %:
+  un watch de GPU sola relanzaría un entrenamiento que está guardando la época 12
+  y, en una placa de 4 GB, eso son dos entrenamientos peleándose la memoria.
+
+## Las rutas: la tabla es del agente
+
+Observar es ejecutar. Un sidecar que acepta rutas libres es una primitiva de
+lectura que se saltea la denylist del agente entera, así que **toda ruta se
+clasifica antes de tocarla** y una ruta denegada es un `403` **al armar**, con la
+misma cadena que dice el agente cuando le piden leer ese mismo archivo.
+
+La tabla **no se copia a mano**: `paths.py` lee el asset generado
+`agent/docs/fixtures/policy-paths.json`, que sale de
+`packages/agent/src/hannah/policy/paths.ts`. Lo que sí está duplicado es el
+algoritmo de `classify()`, y por eso el asset trae casos *golden* con el veredicto
+que produjo el TypeScript: `tests/test_paths_golden.py` los exige uno por uno, así
+que las dos implementaciones no pueden separarse en silencio.
+
+Se busca el asset en `HANNAH_AGENT_FIXTURES`, después en `../../hannah-agent/`
+(el layout que crea el instalador) y después en `../../agent/` (un checkout de
+desarrollo) — el mismo orden que `backend/tests/unit/agentBridge.test.js`. **Sin
+asset se falla cerrado**: R2 y R3 se reportan no disponibles y cualquier watch con
+ruta responde 403.
+
+Un agregado propio, que no está en la tabla compartida: **`backend/data`**,
+resuelto desde `__file__` igual que `DATA_DIR` en `backend/src/state/dataDir.js`.
+Es el residual del bug B2 (la regla compilada nombra `hannah-backend/data`, que es
+la carpeta del layout instalado); el launcher se lo pasa al agente por
+`HANNAH_AGENT_DENY_DIRS`, pero un sidecar arrancado a mano no recibe nada y
+`settings.json` (todas las claves de los proveedores en claro) quedaría vigilable.
+
+## Los tests
+
+```bash
+cd backend/sidecar/sense
+.venv/bin/pip install -r requirements.txt      # trae pytest
+.venv/bin/python -m pytest tests -q
+```
+
+No hace falta ninguna variable: `tests/conftest.py` manda el estado a un temporal
+y **borra `HANNAH_AGENT_DENY_DIRS`** antes de importar nada, porque los casos
+golden declaran cada uno el valor que quieren y una variable heredada del shell
+cambiaría medio veredicto sin que se vea. Lo que sí hace falta es el repo del
+agente al lado (o `HANNAH_AGENT_FIXTURES`), porque la mitad de la suite compara
+contra su asset.
+
 ## Agregar un sensor
 
-`sensors.py` tiene el contrato y un ejemplo en el docstring del módulo. Lo mínimo:
-heredar de `Sensor`, declarar `kind`/`rung`/`confidence`, validar todo en `parse()`
-(incluida la clasificación de cada ruta, que hoy falla cerrado hasta M5.1.2) y
-devolver un `Sample` desde `sample()`. La diferencia entre `SensorError` (no pude
-leer) y `SensorFault` (el sensor está roto) importa: **un sample fallado nunca es un
-trip**, porque un sensor que no puede leer no tiene derecho a decir que el
-entrenamiento se paró.
+`sensors/base.py` tiene el contrato y un ejemplo en el docstring del módulo; los
+seis reales están al lado, uno por archivo. Lo mínimo: heredar de `Sensor`,
+declarar `kind`/`rung`/`confidence`, validar **todo** en `parse()` (la ruta con
+`classify_path()`, la herramienta con `capability.require()`) y devolver un
+`Sample` desde `sample()`.
 
-Hoy hay un solo kind, `stub`, que siempre reporta sano y no toca la máquina. Los
-reales (`proc`, `file`, `logmatch`, `gpu`, `port`, `unit`) llegan en M5.1.2.
+Dos cosas que no son opcionales:
+
+- **Todo lo que se ejecuta sale por `run_argv()`**: lista de argumentos,
+  `shell=False`, sin stdin. No existe la rama de código donde un string de comando
+  llegue a un shell, así que no hay nada que inyectar ni aunque el patrón del
+  usuario sea `; rm -rf ~`. `tests/test_sensors.py` lo afirma barriendo el
+  paquete: `create_subprocess_exec` aparece en un solo archivo.
+- **`SensorError` (no pude leer) no es `SensorFault` (el sensor está roto)**. Un
+  sample fallado nunca es un trip: un sensor que no puede leer no tiene derecho a
+  decir que el entrenamiento se paró. Si no puede leer por más de
+  `SENSE_BLIND_MS`, el watch pasa a `blind` y Hannah lo dice. Un sensor roto
+  termina el watch como `faulted`, que es otra cosa y se narra distinto.
+
+`stub` sigue existiendo: siempre reporta sano y no toca la máquina, y es con lo
+que se arma el brazo de control del demo de salida de P5.1 (el hijo que nunca se
+mata, cero trips).

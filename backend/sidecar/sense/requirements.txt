@@ -12,8 +12,15 @@
 # en silencio y en runtime, los dos servicios sin los cuales el producto no
 # habla ni escucha. Dos venvs cuestan disco; uno solo cuesta el producto.
 #
-# Nada más que esto en esta fase: los sensores de M5.1.2 son subprocesos
-# (pgrep, stat, ss, systemctl), no librerías.
+# Nada más que esto para correr: los sensores son subprocesos por argv (pgrep,
+# ss, systemctl) o syscalls (stat, read), no librerías. R2 y R3 ni siquiera
+# forkean.
 fastapi==0.141.1
 uvicorn==0.52.4
 sse-starlette==3.4.8
+
+# Solo para `python -m pytest tests`. Va en este archivo y no en uno aparte a
+# propósito: un venv y un archivo. Un requirements-dev.txt que nadie instala es
+# una suite que nadie corre, y esta es la que prueba que la clasificación de
+# rutas todavía coincide con la del agente.
+pytest==9.1.1
