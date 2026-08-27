@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js';
 import { describeFrame } from './vlm.js';
 import { getLastFrame } from '../state/frameStore.js';
 import { runCommand, requestConfirm } from './terminal.js';
+import { isHealthy as handsHealthy, dispatch as dispatchTask } from './agentBridge.js';
 import { closeWindows } from './desktop/index.js';
 import { getShortcuts } from '../state/shortcuts.js';
 
@@ -279,12 +280,28 @@ export async function resolveDataAction(text, ctx) {
     return '[Limpiaste la terminal. Decilo en una frase corta.]';
   }
 
-  const runAndReport = async (raw) => {
+  // Con las manos activas (política agent-first y agente sano), lo que ESCRIBE o BORRA no se
+  // corre acá: va al agente con las palabras literales del usuario. Este parser pierde cosas
+  // ("crea prueba.txt en ~/Documentos que diga hola" acababa en un `touch prueba.txt` en $HOME
+  // sin el directorio ni el texto); el agente entiende la frase entera y pide permiso.
+  const handsOn = () => config.tools.runPolicy !== 'free' && config.agent.enabled && handsHealthy() && !!ctx?.sessionId;
+  const handToHands = async (what, title) => {
+    const r = await dispatchTask(ctx.sessionId, what, { title });
+    if (r.error) return `[Not done: your hands could not take it (${r.error}). Tell the user you cannot do that right now.]`;
+    return '[Handed to your HANDS. Tell the user briefly that you are on it; do NOT claim any result yet — '
+      + 'your hands will report back and you will relay what they say.]';
+  };
+  const runAndReport = async (raw, { sentence = null, writes = false } = {}) => {
     let cmd = (raw || '').trim();
     const wrap = cmd.match(/^(['"`])([\s\S]*)\1$/);   // desenvolver SOLO si TODO está entre comillas
     if (wrap) cmd = wrap[2].trim();
     cmd = cmd.replace(/[.?!]+$/, '').trim();
     if (!cmd) return null;
+    if (writes && handsOn()) {
+      return sentence
+        ? handToHands(`The user asked, in their own words: "${sentence}". Do exactly that and report what you did.`, sentence.slice(0, 50))
+        : handToHands(`Run this command and report its result: ${cmd}`, `run: ${cmd.slice(0, 50)}`);
+    }
     // El handler de run_command limpia el prompt y emite el toast command_run (único origen).
     const r = await runTool('run_command', { command: cmd }, ctx);
     return `[Salida real de "${cmd}"]:\n${r}`;
@@ -296,7 +313,7 @@ export async function resolveDataAction(text, ctx) {
 
   // 1) Comando entre backticks/comillas + intención de correr -> lo más fiable.
   const quoted = t.match(/`([^`]+)`/) || t.match(/'([^']{2,})'/) || t.match(/"([^"]{2,})"/);
-  if (quoted && RUN_HINT.test(t)) return runAndReport(quoted[1]);
+  if (quoted && RUN_HINT.test(t)) return runAndReport(quoted[1], { writes: true });
 
   // 1.5) Leer/mostrar un ARCHIVO local -> cat. ANTES que "ls" y que "lee <url>", para que
   // "cat X", "mostrame el archivo X", "leé /ruta/x.txt" no se confundan con listar carpeta
@@ -314,7 +331,7 @@ export async function resolveDataAction(text, ctx) {
   if ((m = t.match(/(?:^|\s)(?:cre[aá]r?(?:me)?|crea)\s+(?:un\s+|el\s+|una\s+)?(?:archivo|fichero|file|nota|documento)\s+(?:llamado\s+|de\s+nombre\s+|con\s+nombre\s+)?([^\s,]+)(?:\s+con\s+(?:el\s+)?(?:contenido|texto|el\s+texto)\s+(.+))?/i))) {
     const name = m[1].replace(/[.,;]+$/, '');
     const content = (m[2] || '').trim().replace(/[.]+$/, '');
-    return runAndReport(content ? `printf '%s\\n' ${JSON.stringify(content)} > ${JSON.stringify(name)}` : `touch ${JSON.stringify(name)}`);
+    return runAndReport(content ? `printf '%s\\n' ${JSON.stringify(content)} > ${JSON.stringify(name)}` : `touch ${JSON.stringify(name)}`, { sentence: t, writes: true });
   }
 
   // 2.2) BORRAR archivo/carpeta -> rm (SIEMPRE pide confirmación por el guard DANGER). No confundir
@@ -333,7 +350,7 @@ export async function resolveDataAction(text, ctx) {
     else if ((mm = t.match(/([^\s"'`/]+\.[A-Za-z0-9]{1,6})/))) target = mm[1];         // nombre.ext
     if (target) {
       target = target.replace(/[.,;]+$/, '');
-      return runAndReport(`rm ${dir ? '-r ' : ''}${JSON.stringify(target)}`);
+      return runAndReport(`rm ${dir ? '-r ' : ''}${JSON.stringify(target)}`, { sentence: t, writes: true });
     }
   }
 

@@ -137,9 +137,13 @@ async function streamAnswer(messages, onToken, signal) {
  * también cualquier otro tag colado en la misma respuesta ([MOVE:] espontáneos incluidos).
  * Puro; exportado para tests.
  */
+export const HANDS_LABEL_RE = /[[(*]\s*YOUR HANDS\s*[\])*]/i;
 export function keepOnlyTask(text) {
     const m = String(text || '').match(/[[(*]\s*TASK:\s*[^\])*\n]+?\s*[\])*]/i);
-    if (!m) return text;
+    // Sin [TASK:] pero con "[YOUR HANDS]" escrito: el 7B quiso delegar y copió la etiqueta de los
+    // eventos (pasa con "use your hands"). Se deja SOLO la etiqueta: el orquestador despacha las
+    // palabras del usuario como tarea y la prosa ("Creating the file…") no llega a la voz.
+    if (!m) return HANDS_LABEL_RE.test(text || '') ? '[YOUR HANDS]' : text;
     if (m[0].length < text.trim().length) logger.info('reply prose dropped around [TASK:]', { dropped: text.length - m[0].length });
     return m[0];
 }
@@ -190,7 +194,10 @@ commands, asks the user before anything risky, and reports back. You can NOT run
 yourself: never write [RUN:]. For ANY request that needs the computer and is not a skill — one
 command or many — emit exactly ONE [TASK:] at the very end of your reply, say briefly that you
 are on it, and wait. Never claim a task started, progressed or finished unless a [YOUR HANDS]
-event told you so.`;
+event told you so. "[YOUR HANDS]" is only the label of the events you RECEIVE about the agent's
+progress: never write it yourself. When the user says "use your hands", they mean [TASK:].
+Example — user: "use your hands: make a file notes.txt in Documents" → you: "On it. [TASK: create
+a file named notes.txt in the Documents folder]".`;
 
 const NO_RUN_PROTOCOL = `
 
@@ -199,7 +206,7 @@ it; otherwise say plainly that you cannot do that here.`;
 
 const TASK_PROTOCOL = `
 
-You have two ways to act on the computer. [RUN: cmd] runs ONE command whose exact shape you already know (list a folder, open an app, read a file) — it is instant. [TASK: imperative description in English] hands a job to your HANDS, a separate agent, when it needs SEVERAL steps or DECISIONS ("organize my downloads by type", "find the report I edited last week", "free up disk space"). Emit at most ONE [TASK:] per reply, only when the user asked for something actionable on the computer, and place it at the very end. After emitting it, say briefly that you are on it. Your hands will report back and you will relay what they say. Never claim a task started, progressed or finished unless a [YOUR HANDS] event told you so.`;
+You have two ways to act on the computer. [RUN: cmd] runs ONE command whose exact shape you already know (list a folder, open an app, read a file) — it is instant. [TASK: imperative description in English] hands a job to your HANDS, a separate agent, when it needs SEVERAL steps or DECISIONS ("organize my downloads by type", "find the report I edited last week", "free up disk space"). Emit at most ONE [TASK:] per reply, only when the user asked for something actionable on the computer, and place it at the very end. After emitting it, say briefly that you are on it. Your hands will report back and you will relay what they say. Never claim a task started, progressed or finished unless a [YOUR HANDS] event told you so. "[YOUR HANDS]" is only the label of the events you RECEIVE: never write it yourself; "use your hands" means [TASK:].`;
 
 const ACTION_TOOL = {
     run: ['run_command', 'command'], search: ['web_search', 'query'], fetch: ['fetch_url', 'url'],
@@ -219,7 +226,7 @@ const ACTION_RE = new RegExp(`\\[\\s*(${ACTION_TAGS.join('|')})\\b\\s*(?::\\s*([
 
 /** Quita los tags de acción del texto hablado (con [ ], ( ) o * * como delimitador). */
 export const stripActionTags = (text) => String(text).replace(
-    new RegExp(`[[(*]\\s*(${STRIP_TAGS.join('|')})\\b\\s*:?[^\\])*\\n]*[\\])*]`, 'gi'), '');
+    new RegExp(`[[(*]\\s*(${STRIP_TAGS.join('|')}|YOUR HANDS)\\b\\s*:?[^\\])*\\n]*[\\])*]`, 'gi'), '');
 
 function parseActions(text) {
     const acts = []; let m; ACTION_RE.lastIndex = 0;

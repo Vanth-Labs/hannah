@@ -36,3 +36,12 @@ describe('parseLlmResponse', () => {
         expect(text).toBe('Primera parte.  Segunda parte.');
     });
 });
+
+describe('[YOUR HANDS] echoed by the model', () => {
+  test('keepOnlyTask keeps only the label so the prose is never spoken', async () => {
+    const { keepOnlyTask, stripActionTags } = await import('../../src/pipeline/llm.js');
+    expect(keepOnlyTask('[YOUR HANDS] Creating a file named notes.txt now. [EMOTION:happy]')).toBe('[YOUR HANDS]');
+    expect(keepOnlyTask('Sure thing! [EMOTION:happy]')).toBe('Sure thing! [EMOTION:happy]');
+    expect(stripActionTags('[YOUR HANDS] hello').trim()).toBe('hello');
+  });
+});

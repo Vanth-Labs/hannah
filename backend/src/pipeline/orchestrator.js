@@ -1,9 +1,9 @@
 // src/pipeline/orchestrator.js
 import { transcribeAudio } from './asr.js';
-import { generateDialogueStream, stripActionTags } from './llm.js';
+import { generateDialogueStream, stripActionTags, HANDS_LABEL_RE } from './llm.js';
 import { synthesizeSpeechStream } from './tts.js';
 import { generateVisemesFromText } from './lipsync.js';
-import { generateMotion, generateMotionFromText } from './motion.js';
+import { generateMotion, generateMotionFromText, wavDurationS, MOTION_TAIL_S } from './motion.js';
 import { moveWindow, parseMoveIntent } from './windowControl.js';
 import * as agentBridge from './agentBridge.js';
 import { handleOpenIntent, handleCloseIntent, resolveDataAction } from './tools.js';
@@ -53,9 +53,10 @@ const recentUserMove = new Map();   // sessionId -> timestamp
 // Últimas palabras del usuario por sesión: son el `title` de la tarea (lo que ve el HUD y el
 // historial), en vez de la descripción imperativa que escribe el modelo.
 const lastUserWords = new Map();
+const lastUserText = new Map();     // sessionId -> la frase entera (para delegarla literal a las manos)
 // Estado por sesión de este módulo: se limpia cuando la sesión muere (si no, crece para siempre).
 conversationManager.onDelete((sessionId) => {
-    gestureUsed.delete(sessionId); recentUserMove.delete(sessionId); lastUserWords.delete(sessionId);
+    gestureUsed.delete(sessionId); recentUserMove.delete(sessionId); lastUserWords.delete(sessionId); lastUserText.delete(sessionId);
 });
 export const taskMisuse = { count: 0 };
 const markUserMove = (sessionId) => recentUserMove.set(sessionId || 'default', Date.now());
@@ -89,8 +90,13 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
     // Si el agente no está, el tag no estaba en el prompt; si el modelo lo emite igual, se
     // stripea y se degrada a conversación: nunca a error.
     const taskMatch = rawText.match(/[[(*]\s*TASK:\s*([^\])*\n]+?)\s*[\])*]/i);
-    if (taskMatch) {
-        const description = (taskMatch[1] || '').trim();
+    // "[YOUR HANDS]" sin [TASK:]: el modelo quiso delegar y copió la etiqueta (ver keepOnlyTask).
+    // La tarea son las palabras literales del usuario — más fieles que cualquier paráfrasis del 7B.
+    const handsEcho = !taskMatch && HANDS_LABEL_RE.test(rawText) && lastUserText.get(sessionId);
+    if (taskMatch || handsEcho) {
+        const description = taskMatch
+            ? (taskMatch[1] || '').trim()
+            : `The user asked, in their own words: "${lastUserText.get(sessionId)}". Do exactly that and report what you did.`;
         agentBridge.dispatch(sessionId, description, { title: lastUserWords.get(sessionId) || description })
             .then((r) => {
                 if (r.error) {
@@ -157,9 +163,10 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
         if (config.motion.enabled) {
             let motionResult;
             if (config.motion.provider === 'lab') {
-                // Duración real del WAV de Kokoro: PCM 16-bit mono (header 44 bytes)
-                const sampleRate = ttsResult.sample_rate || 24000;
-                const durationS = Math.max(0.5, (audioBuffer.length - 44) / (sampleRate * 2));
+                // Duración real del WAV (cabecera parseada; antes se asumía 24 kHz mono 16-bit) más
+                // una cola corta: el clip debe SOBREVIVIR al audio y asentarse, no acabar a la vez
+                // que la última sílaba y caer a idle a medio gesto (se veía "cortado").
+                const durationS = Math.max(0.5, wavDurationS(audioBuffer, ttsResult.sample_rate || 24000)) + MOTION_TAIL_S;
                 const session = conversationManager.getSession(sessionId);
                 motionResult = await generateMotionFromText(
                     text, durationS, session?.emotion || 'neutral', sessionId);
@@ -196,6 +203,7 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
  */
 async function runDeterministicLayer(text, sessionId, onStreamSegment) {
     lastUserWords.set(sessionId, String(text || '').slice(0, 80));
+    lastUserText.set(sessionId, String(text || '').slice(0, 400));
     const ctx = { sessionId, send: onStreamSegment };
     const moveSpec = parseMoveIntent(text);
     if (moveSpec) {

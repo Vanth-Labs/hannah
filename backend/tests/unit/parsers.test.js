@@ -123,3 +123,44 @@ describe('resolveDataAction — el borrado negado no es una orden', () => {
     expect(await resolveDataAction('revisá mis descargas pero no borres el archivo notas.txt', {})).toBeFalsy();
   });
 });
+
+describe('deterministic layer hands writes to the agent when the hands are on', () => {
+  test('crea un archivo … goes to the agent with the user\'s own words, not to a local touch', async () => {
+    process.env.AGENT_ENABLED = 'true';
+    process.env.TOOLS_RUN_POLICY = 'agent-first';
+    const bridge = await import('../../src/pipeline/agentBridge.js');
+    const { config } = await import('../../src/config.js');
+    config.agent.enabled = true; config.tools.runPolicy = 'agent-first';
+    const created = [];
+    const fake = {
+      health: async () => ({ healthy: true, version: 't' }),
+      listTasks: async () => ({ tasks: [] }),
+      subscribe: () => ({ close() {} }),
+      createTask: async (req) => { created.push(req); return { taskId: 't_1', title: req.title, state: 'queued' }; },
+    };
+    bridge._reset();
+    await bridge.init({ client: fake, narrate: async () => {} });
+    bridge._setHealthy(true);
+    const { resolveDataAction } = await import('../../src/pipeline/tools.js');
+    const out = await resolveDataAction('crea un archivo prueba.txt en mi carpeta Documentos que diga hola', { sessionId: 's1', send: () => {} });
+    expect(created).toHaveLength(1);
+    expect(created[0].prompt).toContain('crea un archivo prueba.txt en mi carpeta Documentos que diga hola');
+    expect(out).toMatch(/Handed to your HANDS/);
+    await bridge.shutdown().catch(() => {});
+  });
+});
+
+describe('wavDurationS', () => {
+  test('reads channels, rate and bits from the header', async () => {
+    const { wavDurationS } = await import('../../src/pipeline/motion.js');
+    const rate = 22050, channels = 2, bits = 16, seconds = 1.5;
+    const dataLen = Math.round(rate * channels * (bits / 8) * seconds);
+    const b = Buffer.alloc(44 + dataLen);
+    b.write('RIFF', 0); b.writeUInt32LE(36 + dataLen, 4); b.write('WAVE', 8);
+    b.write('fmt ', 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(channels, 22);
+    b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * channels * bits / 8, 28); b.writeUInt16LE(channels * bits / 8, 32); b.writeUInt16LE(bits, 34);
+    b.write('data', 36); b.writeUInt32LE(dataLen, 40);
+    expect(wavDurationS(b)).toBeCloseTo(seconds, 3);
+    expect(wavDurationS(Buffer.alloc(44 + 24000 * 2), 24000)).toBeCloseTo(1, 3);   // no header: fallback
+  });
+});
