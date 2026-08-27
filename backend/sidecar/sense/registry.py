@@ -100,6 +100,9 @@ class Watch:
     fires: int = 0
     #: Muestras no sanas seguidas. Llega a debounce_n y recién ahí hay trip.
     streak: int = 0
+    #: Ya disparó por esta caída y todavía no volvió a leer una muestra sana.
+    #: Un trip es una TRANSICIÓN, no un estado: ver la nota en scheduler._sample.
+    tripped: bool = False
     #: Por qué falló el último sample, en vocabulario fijo (nunca el texto de la
     #: excepción: eso lleva rutas). Alimenta el `reason` de watch.blind.
     last_error: str | None = None

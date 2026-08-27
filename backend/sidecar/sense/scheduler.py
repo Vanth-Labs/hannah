@@ -192,12 +192,26 @@ class Scheduler:
 
         if sample.healthy:
             watch.streak = 0
+            # Volvió a estar sana: la próxima caída es una caída NUEVA y vuelve a
+            # tener derecho a un evento.
+            watch.tripped = False
+            return True
+
+        if watch.tripped:
+            # Ya disparó por esta misma caída. Un entrenamiento muerto sigue
+            # muerto, y sin este pestillo el watch emite un watch.tripped cada
+            # debounce_n muestras para siempre: a las 3am son ochenta avisos de
+            # lo mismo, y el que llora lobo ochenta veces no sirve la vez
+            # ochenta y uno. El trip es la TRANSICIÓN "estaba y dejó de estar".
+            # (Esto NO reemplaza a maxFires + cooldown de M5.2.3: aquello acota
+            # un crash-loop, que son transiciones de verdad, muchas y seguidas.)
             return True
 
         watch.streak += 1
         if watch.streak < watch.debounce_n:
             return True
         watch.streak = 0
+        watch.tripped = True
         watch.fires += 1
         self._bus.publish(watch.watch_id, "watch.tripped", {
             "label": watch.label,

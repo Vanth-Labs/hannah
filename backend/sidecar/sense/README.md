@@ -121,13 +121,18 @@ Hannah, y en una fase de solo observar ella no arranca nada, así que no hay
 wrapper cuyo código mirar. El enum de ids del contrato `sense.v1` es R1..R10, así
 que la fila no se emite; la razón vive en `capability.R0_ABSENT_REASON`.
 
-Una regla que está en el código y no en un comentario, porque es la que evita
-que la vigilancia mienta:
+Dos reglas que están en el código y no en un comentario, porque son las que
+evitan que la vigilancia mienta:
 
 - **R4 nunca dispara sola.** `base.build()` rechaza cualquier watch cuyo único
   sensor sea corroborante. Checkpointing y un dataloader lento leen los dos 0 %:
   un watch de GPU sola relanzaría un entrenamiento que está guardando la época 12
   y, en una placa de 4 GB, eso son dos entrenamientos peleándose la memoria.
+- **Un trip es una transición.** Después de disparar, el watch no vuelve a
+  disparar hasta que lee una muestra sana. Un entrenamiento muerto sigue muerto:
+  sin esto emitía un `watch.tripped` cada `debounceN` muestras, o sea ochenta
+  avisos de lo mismo a las 3am. Acotar un *crash-loop* (transiciones de verdad,
+  muchas y seguidas) es otra cosa y es el trabajo de `maxFires` en M5.2.3.
 
 ## Las rutas: la tabla es del agente
 
