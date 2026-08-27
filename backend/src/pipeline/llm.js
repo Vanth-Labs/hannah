@@ -3,9 +3,10 @@ import { OpenAI } from 'openai';
 import { config } from '../config.js';
 import { memoryStore } from '../state/memoryStore.js';
 import { embed, cosine } from '../state/embeddings.js';
-import { runTool } from './tools.js';
+import { runTool, WATCH_SENSORS, armableWatchSensors } from './tools.js';
+import * as senseClient from './senseClient.js';
 import { skillsPromptSection, resolveSkill } from '../state/skills.js';
-import { isHealthy as agentHealthy, handsStatus, dispatch as dispatchTask } from './agentBridge.js';
+import { isHealthy as agentHealthy, handsStatus, clean, dispatch as dispatchTask } from './agentBridge.js';
 import { referencePromptSection } from '../state/reference.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
@@ -68,7 +69,12 @@ export async function buildSystemPrompt(history, withActions, noActions = false)
     const runSection = withActions && run ? config.llm.runProtocol : '';
     const hands = handsOn ? (run ? TASK_PROTOCOL : TASK_ONLY_PROTOCOL) : (withActions && !run ? NO_RUN_PROTOCOL : '');
     const protocol = config.llm.protocol.replace('{{RUN_PROTOCOL}}', runSection);
-    return `${config.llm.persona}${memorySection}\n\n${protocol}${skillsSection}${hands}${handsStatus()}`;
+    // Las vigilancias entran con el MISMO criterio que las manos (encendidas y con algo que
+    // ofrecer), y su vocabulario se arma acá, con la sonda viva: el turno de narración no lo ve,
+    // y un escalón que esta máquina no tiene no se nombra. El [WATCH STATUS], en cambio, va
+    // siempre — como handsStatus() —, porque preguntar "¿cómo va?" es narración, no acción.
+    const watch = !noActions && config.sense.enabled ? await watchProtocolSection() : '';
+    return `${config.llm.persona}${memorySection}\n\n${protocol}${skillsSection}${hands}${watch}${handsStatus()}${await watchStatus()}`;
 }
 
 /**
@@ -221,12 +227,89 @@ const ACTION_TOOL = {
 export const ACTION_TAGS = [...Object.keys(ACTION_TOOL).map((k) => k.toUpperCase()), 'SKILL'];
 // TASK no es una acción del bucle síncrono (una tarea dura minutos): la despacha el orquestador
 // como [MOTION:]/[MOVE:]. Pero SÍ se stripea: el TTS jamás debe leerla.
-const STRIP_TAGS = [...ACTION_TAGS, 'RECALL', 'TASK', 'YOUR HANDS', 'HANDS STATUS', 'YOUR EYES'];
+// WATCH viaja acá por lo mismo que TASK: la arma el orquestador, no el bucle síncrono, pero el
+// TTS jamás debe leerla. 'WATCH STATUS' va ANTES que 'WATCH' porque la alternancia prueba en
+// orden y la más larga tiene que ganar.
+const STRIP_TAGS = [...ACTION_TAGS, 'RECALL', 'TASK', 'WATCH STATUS', 'WATCH', 'YOUR HANDS', 'HANDS STATUS', 'YOUR EYES'];
 const ACTION_RE = new RegExp(`\\[\\s*(${ACTION_TAGS.join('|')})\\b\\s*(?::\\s*([^\\]\\n]*))?\\]`, 'gi');
 
+// GUARDIA DE TAG SIN CERRAR. `max_tokens` es 400: una respuesta cortada a mitad de tag deja
+// "[WATCH: pid 1234" o "[SEARCH: how to" SIN delimitador de cierre, y el regex de arriba lo
+// EXIGE — así que hasta acá ese resto llegaba al TTS y se oía en voz alta. Anclado a fin de
+// línea o de texto (`m`) a propósito: un tag sin cerrar en medio de una frase es texto del
+// modelo, no un tag truncado, y borrar desde ahí hasta el final se comería la frase entera.
+const UNCLOSED_TAG_RE = new RegExp(`[[(*]\\s*(?:${STRIP_TAGS.join('|')})\\b[^\\])*\\n]*$`, 'gim');
+
 /** Quita los tags de acción del texto hablado (con [ ], ( ) o * * como delimitador). */
-export const stripActionTags = (text) => String(text).replace(
-    new RegExp(`[[(*]\\s*(${STRIP_TAGS.join('|')}|YOUR HANDS)\\b\\s*:?[^\\])*\\n]*[\\])*]`, 'gi'), '');
+export const stripActionTags = (text) => String(text)
+    .replace(new RegExp(`[[(*]\\s*(${STRIP_TAGS.join('|')}|YOUR HANDS)\\b\\s*:?[^\\])*\\n]*[\\])*]`, 'gi'), '')
+    .replace(UNCLOSED_TAG_RE, '');
+
+// ── VIGILANCIAS: el vocabulario se ARMA, no se escribe (plan VIGILANCE §6 y M5.1.3) ─────
+// Encabezado de la sección, exportado porque los tests cortan el prompt por acá: afirmar "no
+// hay vocabulario de pantalla" sobre el prompt ENTERO sería falso por culpa de
+// [MOVE:next-screen], que no tiene nada que ver con vigilar.
+export const WATCH_HEADER = '### WATCHING SOMETHING FOR THE USER';
+
+/**
+ * La sección de [WATCH:] del system prompt, construida con la sonda VIVA de capacidades del
+ * sidecar. Es la regla del catálogo de macros llevada a la escalera de detección: un escalón
+ * que esta máquina no puede muestrear no se le NOMBRA al modelo. Si se lo nombráramos "por
+ * completitud", el 7B lo emitiría, POST /v1/watches lo rechazaría — y para entonces Hannah ya
+ * dijo que sí. Vacía (sección ausente) si no hay nada armable: no poder vigilar nada se dice
+ * callándose el tag, no explicando un tag que no sirve.
+ * El vocabulario sale de WATCH_SENSORS (tools.js), que es también quien construye el spec: una
+ * sola fuente para lo que se ofrece y lo que se arma.
+ */
+export async function watchProtocolSection() {
+    const armable = armableWatchSensors(await senseClient.survey());
+    if (!armable.length) return '';
+    const menu = armable.map((s) => `  ${s.usage.padEnd(38)}${s.hint}`).join('\n');
+    return `\n\n${WATCH_HEADER}
+The user can ask you to keep an eye on something while they are away ("check that my training
+doesn't stop", "tell me if the render dies"). Emit exactly ONE [WATCH: kind | argument] at the
+very end of your reply, and say in one sentence what you will be looking at. A watch only
+LOOKS: it never restarts, fixes or touches anything. Never say you are watching something
+unless a [WATCH STATUS] line says you are. These are the ONLY things you can watch:
+${menu}
+Anything that is not on that list you can NOT watch: say so plainly instead of promising it.`;
+}
+
+// Estados y sensores son ENUMS del contrato sense.v1, no texto libre. Se validan contra estas
+// listas antes de entrar al prompt: lo que llegue en esos campos y no esté acá es un sidecar
+// roto o suplantado, y se dice "unknown" en vez de copiarlo.
+const WATCH_STATES = new Set(['armed', 'blind', 'suspended', 'expired', 'disarmed', 'faulted']);
+// Perezoso, y no una constante de módulo: agentBridge -> conversationManager -> llm.js -> tools.js
+// es un ciclo ESM que ya existía, así que el cuerpo de este módulo puede correr ANTES que el de
+// tools.js y WATCH_SENSORS estar en su zona muerta. Al llamarla, ya está.
+let watchKinds = null;
+const kindEnum = () => (watchKinds ??= new Set([...WATCH_SENSORS.map((s) => s.kind), 'gpu']));
+// Las que siguen mirando (o creen mirar). Las terminales son cosa del HUD: el prompt habla de
+// lo que está pasando ahora, y veinte filas desarmadas no le dicen nada al modelo.
+const WATCH_LIVE = new Set(['armed', 'blind', 'suspended']);
+const asEnum = (value, allowed) => (allowed.has(value) ? value : 'unknown');
+
+/**
+ * El estado de las vigilancias para el system prompt. Hermano de handsStatus() y con su MISMA
+ * cláusula final, palabra por palabra: sin ella el 7B, preguntado "¿cómo va el entrenamiento?",
+ * inventa una curva de pérdida.
+ *
+ * Emite SOLO cuatro cosas: la etiqueta (las palabras del usuario, saneadas), el NOMBRE del
+ * sensor como enum, el estado y los disparos. Ni un valor muestreado, ni una línea de log, ni
+ * una ruta, ni un host, ni un comando. La razón es estructural, no estética: esto se anexa al
+ * system prompt de CADA turno mientras la vigilancia esté armada, así que cualquier contenido
+ * observado que entrara acá sería un punto de inyección permanente durante horas (plan §10,
+ * §9 T9) — leído por el modelo justo cuando el usuario no está para desmentirlo.
+ */
+export async function watchStatus() {
+    const { watches } = await senseClient.watchRows();
+    const live = watches.filter((w) => WATCH_LIVE.has(w?.state));
+    if (!live.length) return '';
+    return '\n\n[WATCH STATUS] ' + live.slice(0, 5).map((w) =>
+        `"${clean(w.label, 80)}": ${asEnum(w.state, WATCH_STATES)}, watching ${asEnum(w.sensorKind, kindEnum())}`
+        + `, ${Number.isInteger(w.fires) ? w.fires : 0} trips`).join(' | ')
+        + '\nIf the user asks how a watch is going, answer from this status only.';
+}
 
 function parseActions(text) {
     const acts = []; let m; ACTION_RE.lastIndex = 0;

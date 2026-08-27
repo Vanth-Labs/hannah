@@ -42,6 +42,23 @@ describe('stripActionTags (lo que NO debe llegar al TTS)', () => {
         const t = 'Voy a run un rato, es time de open bar.';
         expect(stripActionTags(t)).toBe(t);
     });
+    // `max_tokens` es 400 y el modelo se corta a mitad de frase: sin la guardia de tag sin
+    // cerrar, TODO esto llegaba al TTS y Hannah leía el corchete en voz alta. El cierre no es
+    // opcional en el regex de tags cerrados, así que hasta acá "[WATCH: proc | python train.py"
+    // era, para el limpiador, texto normal.
+    test('un tag TRUNCADO a mitad (max_tokens) tampoco llega al audio', () => {
+        expect(stripActionTags('Sure. [WATCH: proc | python train.py').trim()).toBe('Sure.');
+        expect(stripActionTags('On it. [TASK: rm -rf ~').trim()).toBe('On it.');
+        expect(stripActionTags('Let me check. [SEARCH: how to').trim()).toBe('Let me check.');
+        // Cortado en el renglón, con más texto después: se va el tag, se queda la frase.
+        expect(stripActionTags('Voy a mirarlo. [WATCH: file | /tmp/x.log\nListo.').replace(/\s+/g, ' ').trim())
+            .toBe('Voy a mirarlo. Listo.');
+    });
+
+    test('la guardia NO se come una frase que solo MENCIONA la palabra', () => {
+        expect(stripActionTags('I will watch the movie later')).toBe('I will watch the movie later');
+        expect(stripActionTags('the task: finish it later')).toBe('the task: finish it later');
+    });
 });
 
 describe('parseFrontmatter (SKILL.md que edita el usuario)', () => {

@@ -6,7 +6,7 @@ import { generateVisemesFromText } from './lipsync.js';
 import { generateMotion, generateMotionFromText, wavDurationS, MOTION_TAIL_S } from './motion.js';
 import { moveWindow, parseMoveIntent } from './windowControl.js';
 import * as agentBridge from './agentBridge.js';
-import { handleOpenIntent, handleCloseIntent, resolveDataAction } from './tools.js';
+import { handleOpenIntent, handleCloseIntent, resolveDataAction, armWatch } from './tools.js';
 import { resolveSkillPhrase } from '../state/skills.js';
 import { conversationManager } from '../state/conversationManager.js';
 import { config } from '../config.js';
@@ -130,6 +130,36 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
             .catch((e) => logger.error('agent dispatch threw', { message: e.message }));
     }
 
+    // Director de la vigilancia: [WATCH: tipo | argumento] arma una vigilancia de pie en el
+    // sidecar hannah-sense. Misma forma que [TASK:] y por la misma razón: armar es un ida y
+    // vuelta HTTP cuyo resultado no puede frenar la voz, así que se despacha y se sigue.
+    // La ETIQUETA de la vigilancia son las palabras del USUARIO (lastUserWords), nunca la
+    // paráfrasis del modelo: es lo único de la vigilancia que vuelve al system prompt en cada
+    // turno mientras esté armada (plan §9 T9).
+    // Se gatea igual que [TASK:]: en un turno de narración el texto de entrada lo escribió otro,
+    // y una vigilancia armada desde ahí es un proceso que mira archivos por orden de una línea
+    // de log.
+    const watchMatch = rawText.match(/[[(*]\s*WATCH:\s*([^\])*\n]+?)\s*[\])*]/i);
+    if (watchMatch && noActions) {
+        refuseAction('WATCH', watchMatch[1]);
+    } else if (watchMatch) {
+        armWatch(sessionId, (watchMatch[1] || '').trim(), lastUserWords.get(sessionId))
+            .then((r) => {
+                if (!r.error) { logger.info('watch armed from [WATCH:]', { watchId: r.watchId }); return; }
+                logger.warn('watch not armed', { reason: r.error, detail: String(r.reason || '').slice(0, 160) });
+                // Ya dijo "listo, lo miro": si no se armó, tiene que corregirse en voz alta. Un
+                // fallo silencioso acá deja al usuario creyendo que hay alguien mirando, que es
+                // la peor falla que tiene esta feature. Mismo criterio que reportDispatchFailure.
+                processTextTurn(sessionId, '[SYSTEM] The watch you just announced could NOT be armed'
+                    + `${r.reason ? ` (${r.reason})` : ''}. Tell the user in ONE short sentence that you are`
+                    + ' not watching it after all, and why. Do not promise to retry.',
+                // SIN `signal` a propósito: si el usuario interrumpió el turno, la corrección
+                // es justo lo que no se puede perder — quedaría creyendo que hay algo mirando.
+                sendCallback, { noActions: true });
+            })
+            .catch((e) => logger.error('watch arm threw', { message: e.message }));
+    }
+
     // Quitar etiquetas MOTION:/EMOTION:/MOVE:/TASK: con cualquier delimitador: no deben verse
     // en el subtítulo, oírse en el TTS ni condicionar el co-speech. Incluye variantes
     // sin cerrar (streaming parcial) para que nunca se filtre un corchete suelto.
@@ -140,6 +170,10 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
         .replace(/[[(*]?\s*(MOTION|EMOTION|MOVE)\s*:[^\])*\n]*[\])*]?/gi, '')
         // TASK solo CON delimitador: "the task: finish it" es una frase normal y no debe borrarse.
         .replace(/[[(*]\s*TASK\s*:[^\])*\n]*[\])*]?/gi, '')
+        // WATCH, igual: "watch the movie" es una frase normal. Cierre OPCIONAL, como TASK, para
+        // que un tag truncado por max_tokens ("[WATCH: proc |") no se oiga; stripActionTags ya
+        // trae la misma guardia, esto es el hermano local del vocabulario del orquestador.
+        .replace(/[[(*]\s*WATCH\s*:[^\])*\n]*[\])*]?/gi, '')
         // Tags inventados por el modelo, tipo [FULLSCREEN] / [DONE] (corchete + MAYÚSCULAS, sin :).
         .replace(/[[(*]\s*[A-Z][A-Z_ -]{2,}\s*[\])*]/g, '')
         .replace(/[[(*]\s*$/g, '')                                       // delimitador abierto al final

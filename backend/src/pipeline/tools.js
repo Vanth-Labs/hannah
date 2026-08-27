@@ -10,7 +10,8 @@ import { logger } from '../utils/logger.js';
 import { describeFrame } from './vlm.js';
 import { getLastFrame } from '../state/frameStore.js';
 import { runCommand, requestConfirm } from './terminal.js';
-import { isHealthy as handsHealthy, dispatch as dispatchTask } from './agentBridge.js';
+import { isHealthy as handsHealthy, dispatch as dispatchTask, clean } from './agentBridge.js';
+import * as senseClient from './senseClient.js';
 import { closeWindows } from './desktop/index.js';
 import { getShortcuts } from '../state/shortcuts.js';
 
@@ -267,6 +268,173 @@ export async function handleCloseIntent(text, ctx) {
   return true;   // manejado aunque n===0 (no había esa ventana), para no alucinar
 }
 
+// ── VIGILANCIAS: armar una por voz (plan VIGILANCE, M5.1.3) ─────────────────────────────
+// Una vigilancia es un estado de atención que SOBREVIVE al turno: el sidecar hannah-sense
+// (:8007) muestrea cada tanto y avisa cuando lo mirado cambia. Acá vive lo determinista:
+// reconocer el pedido, NEGARSE antes de prometer nada si el escalón que haría falta no está en
+// esta máquina, y construir el spec tipado que viaja al sidecar. El sidecar solo MIRA (regla R1
+// del plan): nada de esto ejecuta ni arregla nada.
+
+// El catálogo de sensores, en el orden de la escalera. ÚNICA fuente de tres cosas que si no
+// serían tres listas que se separan solas: qué escalón implementa cada sensor, qué vocabulario
+// ve el modelo (llm.js renderiza el protocolo desde acá) y cómo se arma el spec. Regla R2: un
+// sensor es un objeto TIPADO con campos con nombre, NUNCA una cadena de comando — por eso
+// `build` devuelve campos y en ninguna parte se concatena nada.
+export const WATCH_SENSORS = [
+  {
+    rung: 'R1', kind: 'proc', tag: 'proc',
+    usage: '[WATCH: proc | <pattern>]', hint: 'a process is still alive',
+    build: ([pattern]) => (pattern
+      ? { sensor: { kind: 'proc', pattern } }
+      : { error: 'a proc watch needs the pattern that matches the process' }),
+  },
+  {
+    rung: 'R2', kind: 'file', tag: 'file',
+    usage: '[WATCH: file | <path> | <minutes>]', hint: 'a file stopped being written to for that many minutes',
+    build: ([path, minutes]) => {
+      if (!path) return { error: 'a file watch needs the path of the file' };
+      // El modelo escribe MINUTOS porque es como lo dice el usuario ("cinco minutos"); el
+      // contrato del sensor son segundos. La conversión vive acá, en un solo lugar, y se acota
+      // a los límites del sensor para que un "0" no se convierta en un 400 después de que
+      // Hannah ya dijo que estaba mirando.
+      const asked = Number(String(minutes ?? '').replace(/[^\d.]/g, '')) || 5;
+      return { sensor: { kind: 'file', path, stallSeconds: Math.min(86400, Math.max(5, Math.round(asked * 60))) } };
+    },
+  },
+  {
+    rung: 'R3', kind: 'logmatch', tag: 'log',
+    usage: '[WATCH: log | <path> | <pattern>]', hint: 'a pattern shows up in a log',
+    build: ([path, pattern]) => {
+      if (!path) return { error: 'a log watch needs the path of the log' };
+      if (!pattern) return { error: 'a log watch needs the pattern to look for' };
+      return { sensor: { kind: 'logmatch', path, pattern } };
+    },
+  },
+  {
+    rung: 'R5', kind: 'port', tag: 'port',
+    usage: '[WATCH: port | <number>]', hint: 'something is still listening on a port',
+    build: ([port]) => {
+      const n = Number.parseInt(String(port ?? '').replace(/[^\d]/g, ''), 10);
+      return Number.isInteger(n) && n >= 1 && n <= 65535
+        ? { sensor: { kind: 'port', port: n } }
+        : { error: 'a port watch needs a port number between 1 and 65535' };
+    },
+  },
+  {
+    rung: 'R6', kind: 'unit', tag: 'unit',
+    usage: '[WATCH: unit | <name.service>]', hint: 'a system service is still up',
+    build: ([unit]) => (unit && !/\s/.test(unit)
+      ? { sensor: { kind: 'unit', unit } }
+      : { error: 'a unit watch needs the name of a single service, like docker.service' }),
+  },
+];
+
+/** Los sensores que ESTA máquina puede armar hoy, según la sonda viva de /v1/capabilities. */
+export const armableWatchSensors = (survey) => WATCH_SENSORS.filter(
+  (s) => survey?.rungs?.[s.rung]?.available === true && (survey.sensors || []).includes(s.kind));
+
+// Verbos que SIEMPRE son un pedido de vigilancia, y verbos que lo son solo si además se nombra
+// una forma de romperse. "avisame si" y "tell me if" sueltos son conversación normal ("tell me
+// if you know"); con "se para"/"stops" al lado son un pedido de vigilancia. Partirlo en dos
+// mitades es lo que evita que cada "decime si" arme algo.
+// Sin `\b` de cierre a propósito, y no por descuido: `á`/`ó` no son \w en JS, así que un
+// `\b` detrás de "vigilá" o de "se cayó" NUNCA casa y la mitad castellana quedaba muerta.
+// Donde hace falta cortar la palabra se usa (?!\w), que solo mira hacia adelante.
+const WATCH_VERB_STRONG = /(?:^|\s)(?:vigil|monitore|keep an eye on)/i;
+const WATCH_VERB_WEAK = /(?:^|\s)(?:av[ií]s[aá]me|dec[ií]me|asegur[aá]te|f[ií]jate|let me know|tell me|ping me|check|make sure|watch\w*)(?!\w)/i;
+const WATCH_TRIP = /(?:^|\W)(?:se\s+(?:para|frena|cae|cuelga|muere|corta|detiene|traba|cay[oó])|deja\s+de\s+\w+|stops?|stopped|dies?|died|crash\w*|fails?|failed|freezes?|hangs?|goes\s+down)(?!\w)/i;
+
+// Los tiers que esta fase NO tiene. Se detectan por lo que dice la FRASE para poder contestar
+// lo que se pidió ("no puedo mirar la pantalla") en vez de la lista de lo que sí hay: el que
+// pidió mirar una ventana no quiere enterarse de que puede mirar puertos. La razón hablada la
+// escribe el backend a propósito: la del sidecar es para el operador ("llega en P5.5, falta
+// tesseract") y nombra hitos internos que no significan nada dichos en voz alta.
+const WATCH_TIERS = [
+  {
+    rung: 'R6b',
+    re: /(?:^|\W)(?:ssh|remot\w*|el\s+servidor|the\s+server|otra\s+m[aá]quina|another\s+machine|remote\s+host)(?!\w)/i,
+    why: 'watching a machine over the network is not something I can do from here',
+  },
+  {
+    rung: 'R8',
+    re: /(?:^|\W)(?:pantalla|screen|ventana|window|bot[oó]n|button|barra\s+de\s+progreso|progress\s+bar|pixel\w*)(?!\w)/i,
+    why: 'I cannot look at what is on the display; I can only watch processes, files, logs, ports and services',
+  },
+  {
+    rung: 'R7',
+    re: /(?:^|\W)(?:widget|at-spi|accesibilidad|accessibility)(?!\w)/i,
+    why: 'I cannot reach inside another application to watch its controls',
+  },
+];
+
+/**
+ * ¿Es esta frase un pedido de vigilancia, y se puede? Devuelve:
+ *   null            -> no es un pedido de vigilancia; el turno sigue normal
+ *   { refuse: why } -> lo es y NO se puede: se habla la razón y no se arma nada
+ *   { pass: true }  -> lo es y se puede: lo arma el modelo con [WATCH:], que ya vio en el
+ *                      prompt el vocabulario de los escalones disponibles
+ * Negarse ACÁ, antes de que hable, es la mitad que importa: una vigilancia que se arma y
+ * falla después ya fue prometida en voz alta, y la corrección llega cuando el usuario se fue.
+ */
+export async function resolveWatchIntent(text) {
+  const t = String(text || '');
+  if (!WATCH_VERB_STRONG.test(t) && !(WATCH_VERB_WEAK.test(t) && WATCH_TRIP.test(t))) return null;
+
+  const survey = await senseClient.survey();
+  const tier = WATCH_TIERS.find((x) => x.re.test(t));
+  if (tier && survey.rungs?.[tier.rung]?.available !== true) {
+    // La razón del sidecar al log, la del backend a la voz: son dos audiencias distintas.
+    logger.info('vigilancia rechazada por tier', { rung: tier.rung, reason: survey.rungs?.[tier.rung]?.reason || 'ausente' });
+    return { refuse: tier.why };
+  }
+  if (!armableWatchSensors(survey).length) {
+    return { refuse: survey.error
+      ? 'the part of me that watches things is not running right now'
+      : 'there is nothing on this machine I can keep an eye on right now' };
+  }
+  return { pass: true };
+}
+
+/** Parsea el argumento de [WATCH: kind | a | b] al spec TIPADO del sidecar. Puro. */
+export function parseWatchTag(arg) {
+  const parts = String(arg || '').split('|').map((s) => s.trim());
+  const tag = (parts.shift() || '').toLowerCase().replace(/[^a-z]/g, '');
+  const entry = WATCH_SENSORS.find((s) => s.tag === tag || s.kind === tag);
+  if (!entry) return { error: `"${tag || arg}" is not something I know how to watch` };
+  return entry.build(parts);
+}
+
+/**
+ * Arma la vigilancia que pidió el modelo con [WATCH:]. Devuelve { watchId } o { error, reason }.
+ * Nunca lanza (senseClient tampoco). La narración de lo que pase DESPUÉS (disparos, ceguera,
+ * el buzón) es del puente senseBridge.js (M5.1.4); acá solo se arma y se dice si no se pudo.
+ */
+export async function armWatch(sessionId, tagArg, label) {
+  const parsed = parseWatchTag(tagArg);
+  if (parsed.error) return { error: 'bad_watch_spec', reason: parsed.error };
+  const survey = await senseClient.survey();
+  if (!armableWatchSensors(survey).some((s) => s.kind === parsed.sensor.kind)) {
+    return { error: 'rung_unavailable', reason: 'that rung is not available on this machine' };
+  }
+  const r = await senseClient.createWatch({
+    // La ETIQUETA son las palabras del USUARIO, saneadas: ni la paráfrasis del modelo ni una
+    // línea observada. Es lo único de esta vigilancia que vuelve al system prompt en cada turno
+    // mientras esté armada, así que es el punto exacto donde una inyección se volvería
+    // permanente (plan §9 T9). `clean` es el mismo saneador que usa el puente del agente.
+    label: clean(label, 80) || 'what you asked me to watch',
+    sensor: parsed.sensor,
+    periodMs: config.sense.minPeriodMs,
+    debounceN: config.sense.debounceN,
+    // Asunción A3: no hay vigilancias abiertas para siempre. El sidecar EXIGE expiresAt.
+    expiresAt: Date.now() + config.sense.watchTtlMs,
+    // Preferencia de entrega, no dueño: la vigilancia vive en el sidecar y sobrevive a la
+    // sesión que la armó (plan §10).
+    ...(sessionId ? { sessionId } : {}),
+  });
+  senseClient.invalidate();   // la foto anterior de watches/capacidades ya es mentira
+  return r;
+}
+
 // Intents de DATOS deterministas: "ejecuta X", "busca X", "lee la url X". Ejecuta la
 // acción y devuelve el RESULTADO real para inyectarlo al LLM (así no lo inventa). null
 // si no aplica. (open/move se manejan aparte porque no necesitan resultado.)
@@ -309,6 +477,24 @@ export async function resolveDataAction(text, ctx) {
     const r = await runTool('run_command', { command: cmd }, ctx);
     return `[Salida real de "${cmd}"]:\n${r}`;
   };
+  // ANTES que cualquier rama de "correr": el verbo `run` de RUN_VERBS se come "check that my
+  // training RUN doesn't stop" — verificado, la rama 3 matchea y ejecuta `doesn't stop` —, y la
+  // rama 1 (comillas + RUN_HINT) se comería "vigilá `train.py`". Un pedido de vigilancia que
+  // llega acá ya no es un pedido de vigilancia: es un comando basura y un turno de narración.
+  const watch = await resolveWatchIntent(t);
+  if (watch?.refuse) {
+    // Se contesta ANTES de que el modelo hable, así que no puede prometer nada. Es la mitad del
+    // hito: la alternativa es armar algo que falla cuando el usuario ya no está mirando.
+    return `[You can NOT watch that: ${watch.refuse}. Tell the user plainly, in one sentence, `
+      + 'that you will NOT be keeping an eye on it, and why. Do NOT promise to check later and '
+      + 'do NOT claim any watch is running.]';
+  }
+  // Es una vigilancia y se puede: ni "corré" ni "leé" ni "borrá" la tocan. Devolver null (y no
+  // un resultado) deja el turno con las acciones VIVAS, que es lo que hace falta para que el
+  // modelo pueda emitir su [WATCH:]. Una frase que pide las dos cosas ("corré X y avisame si se
+  // para") también cae acá: la arma el modelo, que tiene [TASK:] y [WATCH:] a la vez.
+  if (watch?.pass) return null;
+
   // Verbos imperativos de "correr" (voseo/tú/infinitivo/enclítico + EN). Preciso a
   // propósito: excluye "hace" (calor/tiempo) y "tira"/"correo" para no correr basura.
   const RUN_VERBS = 'corr[eé]r?(?:me|lo)?|ejecut[aá]r?(?:me|lo)?|lanz[aá]r?|tir[aá]r|run|exec(?:ute)?|haz|hac[eé]lo|hac[é]';
