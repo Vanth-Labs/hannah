@@ -255,6 +255,40 @@ export function useWebSocket() {
                 st.setCommandRun({ command: `hands · ${msg.title} · ${msg.state}`, output: msg.data?.summary || msg.data?.error || '', at: Date.now() });
                 break;
             }
+            // ── Vigilancia (watches). Igual que con las manos, la VOZ la pone la persona por
+            // audio_chunk; esto es solo lo visual. Nada optimista en ninguno de los cuatro: el
+            // estado que se pinta es siempre el que acaba de contar el servidor.
+            case 'watch_armed':
+                useHannahStore.getState().upsertWatch({
+                    watchId: msg.watchId, label: msg.label, rung: msg.rung, tier: msg.tier,
+                    // doneAt explícito: re-armar sobre una fila ya terminal la dejaría diciendo
+                    // "armed" y desapareciendo igual a los 15s.
+                    expiresAt: msg.expiresAt, state: 'armed', doneAt: null,
+                });
+                addLog(`[vigilancia] armada: ${msg.label} (${msg.rung})`, 'info');
+                break;
+
+            case 'watch_state':
+                // El mensaje más frecuente (una muestra por periodo, >= 15s). Va derecho al store
+                // y solo re-renderiza la columna de píldoras, no el HUD.
+                useHannahStore.getState().upsertWatch({
+                    watchId: msg.watchId, state: msg.state, lastSampleAt: msg.lastSampleAt,
+                    samplesOk: msg.samplesOk, fires: msg.fires,
+                });
+                break;
+
+            case 'watch_tripped':
+                useHannahStore.getState().tripWatch({
+                    watchId: msg.watchId, label: msg.label, trippedAt: msg.at, fires: msg.fires,
+                });
+                addLog(`[vigilancia] saltó: ${msg.label} (${msg.confidence})`, 'error');
+                break;
+
+            case 'watch_disarmed':
+                useHannahStore.getState().upsertWatch({ watchId: msg.watchId, state: 'disarmed' });
+                addLog(`[vigilancia] desarmada: ${msg.watchId} (${msg.reason})`, 'info');
+                break;
+
             case 'agent_command_failed':
                 useHannahStore.getState().setCommandRun({ command: `hands · ${msg.command} failed`, output: msg.reason === 'hud_confirmation_required' ? 'This action is high risk: confirm it with the button.' : String(msg.reason || ''), at: Date.now() });
                 break;
@@ -370,6 +404,15 @@ export function useWebSocket() {
         }
     }, []);
 
+    // Desarmar una vigilancia desde la HUD. Solo manda la orden: la fila del store cambia cuando
+    // llega el `watch_disarmed` del servidor. Va por el WebSocket y no por DELETE /api/v1/watches
+    // porque esa ruta exige el token de la UI incluso en loopback (es la única del backend que lo
+    // hace) y en la app local no hay token.
+    const watchDisarm = useCallback((watchId) => {
+        if (!watchId) return;
+        sendCommand({ command: 'WATCH_DISARM', watchId });
+    }, [sendCommand]);
+
     const sendAudio = useCallback((buffer) => {
         if (ws.current?.readyState === WebSocket.OPEN) {
             ws.current.send(buffer);
@@ -400,5 +443,5 @@ export function useWebSocket() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    return { sendCommand, sendAudio, sendText, stopPlayback, ws };
+    return { sendCommand, sendAudio, sendText, watchDisarm, stopPlayback, ws };
 }

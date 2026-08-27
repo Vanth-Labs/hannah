@@ -1,7 +1,27 @@
 // src/store/hannahStore.js
 import { create } from 'zustand';
 
-export const useHannahStore = create((set) => ({
+// ── Vigilancia (watches, sense.v1) ──────────────────────────────────────────
+// Estados terminales: la vigilancia ya no mira nada. Se marcan con `doneAt` para que la píldora
+// los retire pasados unos segundos, igual que la tarea del agente.
+export const WATCH_TERMINAL = ['expired', 'disarmed', 'faulted'];
+
+// Fila por defecto. La UI no inventa datos: lo que el servidor no manda se queda en el neutro,
+// nunca en un valor que parezca una medición.
+const WATCH_DEFAULTS = {
+    label: '', state: 'armed', rung: '', sensorKind: '', tier: '',
+    fires: 0, samplesOk: 0, lastSampleAt: null, trippedAt: null, expiresAt: null, doneAt: null,
+};
+
+// Quita las claves ausentes del parche. Sin esto un `watch_state` (que no trae `label` ni
+// `rung`) los pisaría con undefined al mezclar y la píldora se quedaría sin etiqueta.
+const definedOnly = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+
+// `doneAt` se sella UNA vez, la primera que la fila entra en un estado terminal: si se re-sellara
+// con cada mensaje posterior la píldora no se retiraría nunca.
+const stampDone = (w) => (WATCH_TERMINAL.includes(w.state) && !w.doneAt ? { ...w, doneAt: Date.now() } : w);
+
+export const useHannahStore = create((set, get) => ({
     // Conexión
     sessionId: null,
     connected: false,
@@ -29,6 +49,10 @@ export const useHannahStore = create((set) => ({
     pendingConfirm: null,      // { id, command } — comando destructivo esperando tu OK
                                // o, con kind:'agent', { kind, taskId, approvalId|questionId, summary, risk, expiresAt, isQuestion }
     agentTask: null,           // { taskId, title, state, lastSummary } — la tarea viva de las "manos" (píldora en el dock)
+    watches: [],               // [{ watchId, label, state, rung, sensorKind, fires, lastSampleAt, ... }]
+                               // Lista plana: la referencia solo cambia cuando cambia algo de verdad,
+                               // así `s.watches` es un selector atómico como los demás y leerla no
+                               // re-renderiza con cada visema.
     commandRun: null,          // { command, output, at } — último comando ejecutado (toast, sin abrir terminal)
     terminalOpen: false,       // terminal abierta -> la ventana se divide (avatar arriba, terminal abajo)
     handsFree: false,          // conversación manos-libres por VAD (Fase B) + barge-in
@@ -55,6 +79,42 @@ export const useHannahStore = create((set) => ({
     setOverlayGaze: (overlayGaze) => set({ overlayGaze }),
     setPendingConfirm: (pendingConfirm) => set({ pendingConfirm }),
     setAgentTask: (agentTask) => set({ agentTask }),
+
+    // El servidor es la verdad: la UI no crea watches ni adelanta estados (mismo contrato que
+    // agentTask). MEZCLA por watchId — un `watch_armed` repetido, que es lo que llega al
+    // reconectar o al re-sincronizar, tiene que actualizar la fila, no duplicarla.
+    upsertWatch: (patch) => set((state) => {
+        if (!patch?.watchId) return {};
+        const i = state.watches.findIndex((w) => w.watchId === patch.watchId);
+        const merged = stampDone(i === -1
+            ? { ...WATCH_DEFAULTS, ...definedOnly(patch) }
+            : { ...state.watches[i], ...definedOnly(patch) });
+        if (i === -1) return { watches: [...state.watches, merged] };
+        const watches = state.watches.slice();
+        watches[i] = merged;
+        return { watches };
+    }),
+
+    // Un disparo. El `watch_tripped` del contrato backend->HUD no lleva `fires` (el evento
+    // sense.v1 sí), y un contador que solo avanzara con la siguiente muestra dejaría a la píldora
+    // mintiendo justo sobre lo único que existe para mostrar: que esta vigilancia gritó "lobo".
+    // Por eso se cuenta aquí cuando el mensaje no trae el número, y se usa el del servidor cuando
+    // sí lo trae.
+    tripWatch: (patch) => {
+        if (!patch?.watchId) return;
+        const prev = get().watches.find((w) => w.watchId === patch.watchId);
+        const fires = typeof patch.fires === 'number' ? patch.fires : (prev?.fires || 0) + 1;
+        get().upsertWatch({ ...patch, fires });
+    },
+
+    // Instantánea del servidor (GET /api/v1/watches): sustituye la lista entera, porque es la
+    // verdad completa — una fila que ya no está allí tampoco está aquí.
+    setWatches: (rows) => set({
+        watches: (rows || [])
+            .filter((r) => r?.watchId)
+            .map((r) => stampDone({ ...WATCH_DEFAULTS, ...definedOnly(r) })),
+    }),
+
     setCommandRun: (commandRun) => set({ commandRun }),
     setTerminalOpen: (terminalOpen) => set({ terminalOpen }),
 
