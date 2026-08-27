@@ -15,7 +15,7 @@
     "sidecar:vision": "cd sidecar/vision && ../.venv/bin/python -m uvicorn main:app --port 8003 --reload",
     "sidecar:motion": "cd sidecar/motion && ../../../.venv/bin/python -m uvicorn main:app --port 8004",
     "lint": "eslint src tests",
-    "sidecar:agent": "cd ../hannah-agent && bun run dev serve --port 8006"
+    "sidecar:agent": "d=../hannah-agent; [ -d \"$d\" ] || d=../agent; [ -d \"$d\" ] || { echo 'sidecar:agent: no encuentro el repo del agente (probé ../hannah-agent, layout instalado, y ../agent, checkout de desarrollo)' >&2; exit 1; }; cd \"$d\" && bun run dev serve --port 8006"
   },
   "jest": {
     "testEnvironment": "node",

@@ -1,6 +1,6 @@
 // tests/unit/agentBridge.test.js
 // El puente entre la persona y el agente, probado con los FIXTURES REALES del agente
-// (hannah-agent/docs/fixtures/*.jsonl, generados de su fachada, no escritos a mano) y con
+// (docs/fixtures/*.jsonl del repo del agente, generados de su fachada, no escritos a mano) y con
 // un processTextTurn espía. Sin modelo, sin agente vivo.
 //
 // Lo que se verifica es la regla de la voz única y sus tres invariantes de seguridad:
@@ -9,7 +9,8 @@
 //  - que un "sí" dicho ANTES de la pregunta no concede
 //  - que la ambigüedad deja la aprobación pendiente (nunca concede)
 //  - que el timeout deniega y se dice
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 process.env.AGENT_ENABLED = 'true';
 process.env.AGENT_NARRATE_PROGRESS_MS = '20000';
@@ -30,7 +31,33 @@ const fakeClient = {
 };
 const boot = (extra = {}) => bridge.init({ client: fakeClient, narrate: async (sid, prompt) => { narrated.push(prompt); }, ...extra });
 
-const FIX = new URL('../../../hannah-agent/docs/fixtures/', import.meta.url);
+// Los fixtures viven en el OTRO repo, y su carpeta cambia de nombre según el layout: el
+// instalador (site/install.sh) clona `hannah-agent/`, un checkout de desarrollo mantiene el
+// nombre de upstream, `agent/`. Adivinar UNO solo es lo que tenía estos cinco tests rotos con
+// ENOENT. Orden: HANNAH_AGENT_FIXTURES manda, después el nombre instalado, después el de
+// desarrollo. Si no hay ninguno los tests se SALTAN, pero AVISANDO: un skip mudo es
+// indistinguible de un test que pasa, y así es como esto se quedó roto sin que nadie mirara.
+const FIX = (() => {
+    const env = process.env.HANNAH_AGENT_FIXTURES;
+    // La barra final es obligatoria: sin ella `new URL(nombre, dir)` resuelve contra el PADRE.
+    const tried = env
+        ? [pathToFileURL(env.replace(/\/?$/, '/'))]
+        : [new URL('../../../hannah-agent/docs/fixtures/', import.meta.url),
+            new URL('../../../agent/docs/fixtures/', import.meta.url)];
+    const hit = tried.find((u) => existsSync(u));
+    if (!hit) {
+        // process.stderr.write y no console.warn: jest se COME la consola de los tests (probado:
+        // ni en el cuerpo del módulo ni dentro de un test sale nada), y un aviso que no se ve
+        // deja el skip tan mudo como el fallo que vino a reemplazar.
+        process.stderr.write('\n[agentBridge.test] SIN FIXTURES DEL AGENTE: se saltan los tests que los usan.\n'
+            + '  Busqué en: ' + tried.map((u) => fileURLToPath(u)).join('\n             ') + '\n'
+            + '  Apuntá HANNAH_AGENT_FIXTURES a <repo-del-agente>/docs/fixtures para correrlos.\n\n');
+    }
+    return hit;
+})();
+// `test` si los fixtures están, `test.skip` si no. Solo para los tests que los leen: el resto
+// del archivo no depende del otro repo y tiene que seguir corriendo igual.
+const testFix = FIX ? test : test.skip;
 const fixture = (name) => readFileSync(new URL(name + '.jsonl', FIX), 'utf8')
     .split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
@@ -56,7 +83,7 @@ afterEach(() => bridge._reset());
 afterAll(() => bridge._reset());
 
 describe('voz única: qué se narra y qué no', () => {
-    test('organize-downloads: acepta, pide permiso y termina — las tres se narran; tool/plan/resolved no', async () => {
+    testFix('organize-downloads: acepta, pide permiso y termina — las tres se narran; tool/plan/resolved no', async () => {
         await bridge.dispatch('s1', 'organize downloads', { title: 'ordenar descargas' });
         const [{ taskId }] = bridge.snapshot();
         await feed(fixture('organize-downloads'), { taskId });
@@ -70,7 +97,7 @@ describe('voz única: qué se narra y qué no', () => {
         for (const p of narrated) expect(p).toMatch(/Do NOT invent/);
     });
 
-    test('todo llega al HUD aunque no se narre, con los nombres del contrato', async () => {
+    testFix('todo llega al HUD aunque no se narre, con los nombres del contrato', async () => {
         await bridge.dispatch('s1', 'x', { title: 't' });
         const [{ taskId }] = bridge.snapshot();
         await feed(fixture('organize-downloads'), { taskId });
@@ -83,7 +110,7 @@ describe('voz única: qué se narra y qué no', () => {
         expect(appr.expiresAt).toBeGreaterThan(Date.now());          // cuenta atrás para el HUD
     });
 
-    test('failed-task: el fallo se narra como FAILED, y tool no se narra', async () => {
+    testFix('failed-task: el fallo se narra como FAILED, y tool no se narra', async () => {
         await bridge.dispatch('s1', 'x', { title: 'copiar' });
         const [{ taskId }] = bridge.snapshot();
         await feed(fixture('failed-task'), { taskId });
@@ -93,7 +120,7 @@ describe('voz única: qué se narra y qué no', () => {
         expect(sent.at(-1).state).toBe('failed');
     });
 
-    test('cancelled-task: se narra la cancelación', async () => {
+    testFix('cancelled-task: se narra la cancelación', async () => {
         await bridge.dispatch('s1', 'x', { title: 'algo' });
         const [{ taskId }] = bridge.snapshot();
         await feed(fixture('cancelled-task'), { taskId });
@@ -114,7 +141,7 @@ describe('voz única: qué se narra y qué no', () => {
         expect(sent.filter((m) => m.kind === 'progress')).toHaveLength(3);
     });
 
-    test('status-report: el resultado con answer llega en la narración de completed', async () => {
+    testFix('status-report: el resultado con answer llega en la narración de completed', async () => {
         await bridge.dispatch('s1', 'x', { title: 'estado' });
         const [{ taskId }] = bridge.snapshot();
         await feed(fixture('status-report'), { taskId });
