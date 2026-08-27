@@ -53,6 +53,10 @@ const recentUserMove = new Map();   // sessionId -> timestamp
 // Últimas palabras del usuario por sesión: son el `title` de la tarea (lo que ve el HUD y el
 // historial), en vez de la descripción imperativa que escribe el modelo.
 const lastUserWords = new Map();
+// Estado por sesión de este módulo: se limpia cuando la sesión muere (si no, crece para siempre).
+conversationManager.onDelete((sessionId) => {
+    gestureUsed.delete(sessionId); recentUserMove.delete(sessionId); lastUserWords.delete(sessionId);
+});
 export const taskMisuse = { count: 0 };
 const markUserMove = (sessionId) => recentUserMove.set(sessionId || 'default', Date.now());
 const userMovedRecently = (sessionId) => Date.now() - (recentUserMove.get(sessionId || 'default') || 0) < 15000;

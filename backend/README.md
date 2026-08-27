@@ -355,6 +355,28 @@ the policy. **The terminal panel also echoes the hands**: every command the agen
 …`) and the first lines of its output show up there, read-only, with a backlog for when the panel
 is opened later — one place to see what ran on the machine, whoever ran it.
 
+### Who may talk to the backend
+
+The backend still binds to `127.0.0.1`, but Vite proxies `/api` and `/ws` to it, so "loopback"
+only means something once you know who is behind the proxy. `src/api/auth.js` decides:
+
+- a client on **this machine** (the Electron app, a local browser through Vite) is served as-is;
+- anything else — another device on the LAN, reachable only when Vite runs with `HANNAH_LAN=1`,
+  i.e. `./hannah services` — must present the **UI token** (`Authorization: Bearer …` or
+  `?token=` on the WebSocket URL). The token is `HANNAH_UI_TOKEN` or `data/ui-token`, generated
+  on first run with mode `0600`; the launcher prints the URL with it.
+
+The real client address is the **last** entry of `X-Forwarded-For` (Vite adds it with `xfwd`),
+so a client cannot spoof itself into loopback. The rate limiter uses the same address. `/health`
+and `GET /avatar` (the 3D model, fetched by the loader without headers) are the only exceptions.
+The old `POST /api/v1/text` test route is gone: it ran the action loop without a session.
+
+Other hardening in the same spirit: the pty and the agent never inherit `*_API_KEY`/`*_TOKEN`
+variables; `settings.json`, `memory.db` and `ui-token` are written `0600`; `fetch_url` refuses
+loopback, private and link-local addresses (`publicHostOnly`); what the camera sees is injected
+with `noActions` (a sign held up to the webcam cannot trigger a command); `kdotool` is called with
+argv, never through a shell; `NODE_ENV` defaults to `production` (no stack traces to clients).
+
 ### Runtime configuration
 
 The ⚙ panel writes `data/settings.json`, which **overrides `.env`** and is applied **without a

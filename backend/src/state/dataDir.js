@@ -31,8 +31,10 @@ export function jsonFile(name) {
     },
     write(obj) {
       try {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(file, JSON.stringify(obj, null, 2));
+        fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+        // 0600: settings.json lleva API keys; nadie más en la máquina tiene por qué leerlo.
+        fs.writeFileSync(file, JSON.stringify(obj, null, 2), { mode: 0o600 });
+        try { fs.chmodSync(file, 0o600); } catch { /* fs sin permisos POSIX (Windows) */ }
         return true;
       } catch (error) {
         logger.error(`No se pudo persistir ${name}`, { message: error.message });

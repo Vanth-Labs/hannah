@@ -3,6 +3,8 @@
 // (formato OpenAI) + handler(args, ctx). ctx trae { sessionId } para las que lo
 // necesitan (look_now). SEGURIDAD: system control por allowlist / flag (ver abajo).
 import { exec, execFile } from 'child_process';
+import net from 'node:net';
+import dns from 'node:dns/promises';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { describeFrame } from './vlm.js';
@@ -28,6 +30,38 @@ export async function confirmIfDangerous(command, ctx) {
   return approved
     ? { approved: true }
     : { approved: false, message: `the user did NOT approve running: ${command}` };
+}
+
+/**
+ * Guardia SSRF para lo que el modelo pide leer: solo hosts públicos. Rechaza loopback, redes
+ * privadas, link-local (metadata de nube), IPv6 local, y nombres que no resuelven a algo
+ * público. Devuelve el motivo (string) si hay que rechazar, o '' si es público.
+ */
+export async function publicHostOnly(u) {
+  let parsed;
+  try { parsed = new URL(u); } catch { return 'invalid url'; }
+  if (!/^https?:$/.test(parsed.protocol)) return 'only http(s)';
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return 'local name';
+  const bad = (ip) => {
+    if (net.isIPv4(ip)) {
+      const [a, b] = ip.split('.').map(Number);
+      return a === 127 || a === 10 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+    }
+    if (net.isIPv6(ip)) {
+      const v = ip.toLowerCase();
+      if (v === '::1' || v === '::' || v.startsWith('fe80:') || v.startsWith('fc') || v.startsWith('fd')) return true;
+      const m4 = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+      return m4 ? bad(m4[1]) : false;
+    }
+    return true;
+  };
+  if (net.isIP(host)) return bad(host) ? 'private address' : '';
+  try {
+    const addrs = await dns.lookup(host, { all: true });
+    if (!addrs.length) return 'unresolvable';
+    return addrs.some((a) => bad(a.address)) ? 'resolves to a private address' : '';
+  } catch { return 'unresolvable'; }
 }
 
 // Normaliza a URL absoluta https:// si el modelo/usuario dio solo el dominio.
@@ -76,7 +110,10 @@ const TOOLS = {
     handler: async ({ url }) => {
       try {
         const u = ensureHttps(url);
-        const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(9000) });
+        // SSRF: nunca leer direcciones internas (sidecars, el agente, metadata de nube).
+        const why = await publicHostOnly(u);
+        if (why) return `refused to fetch that address (${why})`;
+        const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(9000), redirect: 'manual' });
         const html = await r.text();
         const text = html
           .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -270,7 +307,7 @@ export async function resolveDataAction(text, ctx) {
       || /\b(?:le[eé]|leer|read|mostr|muestr|ense[ñn]|imprim)\w*/i.test(t);
     const isUrl = /https?:\/\//i.test(t) || /\b[\w-]+\.(?:com|org|net|io|dev|gg|tv|co|app|ai)\b/i.test(t);
     const fileTok = t.match(/((?:~|\.{0,2})\/[^\s"'`]+|[^\s"'`/]+\.[A-Za-z0-9]{1,5})/);
-    if (wantsRead && !isUrl && fileTok) return runAndReport(`cat ${fileTok[1]}`);
+    if (wantsRead && !isUrl && fileTok) return runAndReport(`cat ${JSON.stringify(fileTok[1])}`);
   }
 
   // 2) CREAR un archivo: "creá/creame [un] archivo <nombre> [con (el) contenido/texto <...>]".
@@ -303,7 +340,7 @@ export async function resolveDataAction(text, ctx) {
   // 2.5) LISTAR la carpeta: "listá/listame/lista/ls" o "mostrá los archivos" (ruta opcional).
   if (/(?:^|\s)(?:list[aá]\w*|ls\b)/i.test(t) || /\bmostr\w*\s+(?:los\s+)?archivos?\b/i.test(t)) {
     const dir = t.match(/((?:~|\.{0,2})\/[^\s"'`]+)/);
-    return runAndReport(dir ? `ls -la ${dir[1]}` : 'ls -la');
+    return runAndReport(dir ? `ls -la ${JSON.stringify(dir[1])}` : 'ls -la');
   }
 
   // (Las frases comunes tipo "qué kernel", "cuánto espacio" migraron a SKILLS cross-platform

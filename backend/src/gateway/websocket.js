@@ -1,5 +1,6 @@
 // src/gateway/websocket.js
 import { WebSocketServer } from 'ws';
+import { authorize } from '../api/auth.js';
 import { processVoiceTurn } from '../pipeline/orchestrator.js';
 import { conversationManager } from '../state/conversationManager.js';
 import { logger } from '../utils/logger.js';
@@ -13,12 +14,20 @@ import { attach as terminalAttach, input as terminalInput, resize as terminalRes
 import * as agentBridge from '../pipeline/agentBridge.js';
 
 export const initWebSocketGateway = (httpServer) => {
-    const wss = new WebSocketServer({ noServer: true });
+    // maxPayload: el buffer de audio se corta en 5 MB; un frame mayor no tiene sentido (por
+    // defecto ws aceptaría 100 MiB por frame antes de que el tope de arriba actúe).
+    const wss = new WebSocketServer({ noServer: true, maxPayload: 6 * 1024 * 1024 });
 
     httpServer.on('upgrade', (request, socket, head) => {
         const url = new URL(request.url, `http://${request.headers.host}`);
         const sessionId = url.searchParams.get('sessionId');
 
+        // Mismo criterio que la API REST: loopback real sin más; otro equipo, con ?token=.
+        if (!authorize(request).ok) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
+        }
         if (!sessionId || !conversationManager.getSession(sessionId)) {
             socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
             socket.destroy();
@@ -216,7 +225,7 @@ export const initWebSocketGateway = (httpServer) => {
 
                         const sceneSummary = await describeScene(lastFrame);
                         const yoloPrompt = `[SISTEMA - CÁMARA]: Escaneo completado. Veo: "${sceneSummary}". Reacciona de inmediato de forma hablada adoptando tu personalidad de Hannah AI. Sé directa y concisa.`;
-                        await processTextTurn(sessionId, yoloPrompt, safeSend);
+                        await processTextTurn(sessionId, yoloPrompt, safeSend, { noActions: true });   // lo que ve la cámara no dispara acciones
                         break;
                     }
 

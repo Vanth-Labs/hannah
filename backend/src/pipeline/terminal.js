@@ -14,8 +14,12 @@ function create(sessionId) {
   const isWin = process.platform === 'win32';
   const shell = isWin ? (process.env.COMSPEC || 'powershell.exe') : (process.env.SHELL || 'bash');
   const args = isWin ? [] : ['-l'];
+  // Sin secretos en el shell: las API keys del backend no tienen por qué verlas los comandos
+  // (un `env` en el panel, una skill, o un modelo con mala intención las leería).
+  const env = Object.fromEntries(Object.entries(process.env)
+    .filter(([k]) => !/(_API_KEY|_TOKEN|_PASSWORD|_SECRET)$/i.test(k) && !/^HANNAH_AGENT_/.test(k)));
   const p = pty.spawn(shell, args, {
-    name: 'xterm-color', cols: 100, rows: 30, cwd: os.homedir(), env: process.env,
+    name: 'xterm-color', cols: 100, rows: 30, cwd: os.homedir(), env,
   });
   const s = { pty: p, subs: new Set(), lastData: Date.now() };
   p.onData((d) => {

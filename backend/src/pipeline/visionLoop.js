@@ -75,7 +75,9 @@ export function startVisionLoop(sessionId, send) {
                 + `If there's something natural and worth saying, say ONE short casual line directly `
                 + `TO them (second person, like a friend who just noticed something). Do NOT narrate `
                 + `or describe the image like a caption.`;
-            await processTextTurn(sessionId, prompt, send);
+            // Lo que ve la cámara es texto ajeno: no puede disparar acciones (alguien podría
+            // enseñarle un cartel a la cámara). Igual que la narración de las manos.
+            await processTextTurn(sessionId, prompt, send, { noActions: true });
         } catch (err) {
             logger.error('Vision loop error', { message: err.message });
         } finally {

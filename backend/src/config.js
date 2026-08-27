@@ -18,7 +18,10 @@ export const config = {
   // esta máquina — así el backend (terminal, settings con API keys, memoria) nunca queda
   // expuesto a la red. Poné HOST=0.0.0.0 solo si necesitás hablarle al backend directo.
   host: process.env.HOST || '127.0.0.1',
-  env: process.env.NODE_ENV || 'development',
+  env: process.env.NODE_ENV || 'production',   // production por defecto: sin stack traces al cliente
+  // Token de la UI para clientes que NO son de esta máquina (modo services/LAN). Vacío = se
+  // genera en data/ui-token la primera vez. Ver api/auth.js.
+  uiToken: process.env.HANNAH_UI_TOKEN || '',
   logLevel: process.env.LOG_LEVEL || 'info',
   asr: {
     provider: process.env.ASR_PROVIDER || 'cloud',

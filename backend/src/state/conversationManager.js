@@ -139,9 +139,13 @@ class ConversationManager {
   /**
    * Purges a session immediately from RAM (Privacy Directive Compliance)
    */
+  /** Registra un callback que corre cuando una sesión se borra (limpieza de estado ajeno). */
+  onDelete(fn) { (this._onDelete ||= new Set()).add(fn); return () => this._onDelete.delete(fn); }
+
   deleteSession(sessionId) {
     if (this.sessions.has(sessionId)) {
       this.sessions.delete(sessionId);
+      for (const fn of this._onDelete || []) { try { fn(sessionId); } catch { /* nunca romper el borrado */ } }
       logger.info('Session purged successfully from memory', { sessionId });
       return true;
     }

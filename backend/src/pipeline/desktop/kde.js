@@ -5,7 +5,7 @@
 //
 // Nota: los ids de kdotool son UUIDs internos de KWin (no ventanas X11), por eso `getMonitors`
 // no puede salir de ahí y se usa xrandr (disponible vía XWayland) como fuente de monitores.
-import { sh } from './sh.js';
+import { sh, run } from './sh.js';
 
 const TITLE = 'Hannah';
 
@@ -36,10 +36,10 @@ export async function getCursor() {
 }
 
 export async function findWindow() {
-  const ids = await sh(`kdotool search --name '^${TITLE}'`);
+  const ids = await run('kdotool', ['search', '--name', `^${TITLE}`]);
   const id = ids && ids.trim().split('\n').filter(Boolean).pop();
   if (!id) return null;
-  const geo = await sh(`kdotool getwindowgeometry --shell ${id}`);
+  const geo = await run('kdotool', ['getwindowgeometry', '--shell', String(id)]);
   const gx = geo && geo.match(/X=(-?\d+)/); const gy = geo && geo.match(/Y=(-?\d+)/);
   const gw = geo && geo.match(/WIDTH=(\d+)/); const gh = geo && geo.match(/HEIGHT=(\d+)/);
   if (!gx || !gw) return null;
@@ -47,10 +47,10 @@ export async function findWindow() {
 }
 
 export async function place(win, x, y, w, h) {
-  await sh(`kdotool windowsize ${win.id} ${w} ${h}`);
-  await sh(`kdotool windowmove ${win.id} ${x} ${y}`);
-  await sh(`kdotool windowstate --add above ${win.id}`);          // siempre encima
-  await sh(`kdotool set_desktop_for_window ${win.id} -1`);        // en todos los escritorios
+  await run('kdotool', ['windowsize', String(win.id), String(w), String(h)]);
+  await run('kdotool', ['windowmove', String(win.id), String(x), String(y)]);
+  await run('kdotool', ['windowstate', '--add', 'above', String(win.id)]);          // siempre encima
+  await run('kdotool', ['set_desktop_for_window', String(win.id), '-1']);        // en todos los escritorios
   return true;
 }
 
@@ -58,11 +58,11 @@ export async function place(win, x, y, w, h) {
 export async function close(queries) {
   let n = 0;
   for (const q of queries.filter(Boolean)) {
-    const ids = await sh(`kdotool search --name '${q}'`);
+    const ids = await run('kdotool', ['search', '--name', String(q)]);
     for (const id of (ids || '').trim().split('\n').filter(Boolean)) {
-      const name = await sh(`kdotool getwindowname ${id}`);
+      const name = await run('kdotool', ['getwindowname', String(id)]);
       if ((name || '').trim().startsWith(TITLE)) continue;
-      await sh(`kdotool windowclose ${id}`);
+      await run('kdotool', ['windowclose', id]);
       n++;
     }
   }

@@ -9,6 +9,7 @@ import { config } from './config.js';
 import { logger } from './utils/logger.js';
 import { router as apiRouter } from './api/router.js';
 import { initWebSocketGateway } from './gateway/websocket.js';
+import { requireUiAuth, clientIp, isLoopback } from './api/auth.js';
 import * as agentBridge from './pipeline/agentBridge.js';
 import { processTextTurn } from './pipeline/orchestrator.js';
 import { classifyIntent } from './pipeline/llm.js';
@@ -46,9 +47,13 @@ const limiter = rateLimit({
   // LOCALHOST EXENTO: es la propia app (panel ⚙, sesiones, reconexiones). Limitarla solo
   // servía para romperse solo — con el backend en 127.0.0.1 no hay nada de qué protegerse.
   // El límite queda para cuando alguien pone HOST=0.0.0.0 y lo expone a la red.
-  skip: (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip),
+  // OJO: a través del proxy de Vite TODO llega como 127.0.0.1; la IP real es la que Vite
+  // añade en X-Forwarded-For (api/auth.js). Solo se exime al loopback de verdad.
+  skip: (req) => isLoopback(clientIp(req)),
 });
 app.use('/api/', limiter);
+// Quién puede usar la API: esta máquina sin más; otro equipo, con el token de la UI.
+app.use('/api/v1', requireUiAuth);
 
 // 3. Body Parsing Middleware
 app.use(express.json());
