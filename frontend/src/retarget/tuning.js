@@ -9,6 +9,7 @@ export const TUNING = {
     pinFeet: true,         // ankles and toes stay at rest (the motion splays the soles)
     pinFingers: true,      // fingers stay at rest (the model is weak there: clenched, shaky)
     shoulderAbduct: 0.22,  // rad, upper arms pushed away from a torso wider than SMPL-X's
+    shoulderRaise: 0.09,   // rad, collars lifted while co-speech plays (the motion model rolls them down)
     // Body-shape bones take the motion as a DELTA over the avatar's own rest (its shoulder
     // slope, its neck) instead of adopting SMPL-X's shape; limbs are absolute (see offsets.js).
     deltaBones: new Set(['spine', 'chest', 'upperChest', 'neck', 'head', 'leftShoulder', 'rightShoulder']),

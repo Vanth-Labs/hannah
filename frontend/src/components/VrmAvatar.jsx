@@ -152,13 +152,16 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         // A-pose or an asymmetric rig all end up arms down.
         node('hips').quaternion.copy(TUNING.pelvisYawOnly ? hipsYaw : offsets['0'].A);
         const abduct = {};
-        for (const [upperIdx, lowerIdx, side] of [['16', '18', 'left'], ['17', '19', 'right']]) {
+        for (const [upperIdx, lowerIdx, side, shoulderIdx] of [['16', '18', 'left', '13'], ['17', '19', 'right', '14']]) {
             const arm = restArm(offsets[upperIdx]?.dir, side, TUNING);
             if (!arm) continue;
             offsets[upperIdx].node.quaternion.copy(arm.upper);
             if (offsets[lowerIdx]) offsets[lowerIdx].node.quaternion.copy(arm.lower);
             // Shoulder abduction: raise the upper arm away from the torso about the same axis.
             abduct[upperIdx] = new THREE.Quaternion().setFromAxisAngle(arm.axis, -TUNING.shoulderAbduct);
+            // Collar lift, same axis, applied only while co-speech plays: the shoulders are delta
+            // bones (they keep the model's slope) but the generated motion still rolls them down.
+            if (offsets[shoulderIdx]) abduct[shoulderIdx] = new THREE.Quaternion().setFromAxisAngle(arm.axis, -TUNING.shoulderRaise);
         }
 
         const bodyBones = {}, restQuat = {};
