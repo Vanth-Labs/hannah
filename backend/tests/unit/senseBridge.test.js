@@ -158,15 +158,20 @@ describe('la regla de entrega: la sesión que armó, o el buzón — nunca una t
         expect((sentTo[b] || []).some((m) => m.type === 'watch_tripped')).toBe(false);
         expect(bridge.pendingTrips()).toBe(1);
 
-        // Y cuando la conversación de A se termina de verdad, el disparo deja de ser de nadie: se
-        // le cuenta a B, que es quien está, PERO sin atribuírselo.
+        // Y cuando la conversación de A se termina de verdad, el disparo TAMPOCO pasa a B. Antes sí:
+        // se lo leía con una frase que hedgeaba la atribución, pero la etiqueta que dictó A —"el
+        // entrenamiento de la tesis de Marta"— entraba igual en el oído de B. Plan §10: "if that
+        // session is gone the trip is persisted, not spoken to a stranger".
         conversationManager.deleteSession(a);
         await bridge._settle();
-        expect(narrated).toHaveLength(1);
-        expect(narrated[0].sessionId).toBe(b);
-        expect(narrated[0].prompt).toMatch(/EARLIER conversation/);
-        expect(narrated[0].prompt).not.toMatch(/the thing you were keeping an eye on/);
-        expect(bridge.pendingTrips()).toBe(0);
+        expect(narrated).toHaveLength(0);
+        expect((sentTo[b] || []).some((m) => m.type === 'watch_tripped')).toBe(false);
+        // Y no desaparece, que es la otra mitad de la decisión: sigue guardado, en disco y contado.
+        expect(bridge.pendingTrips()).toBe(1);
+        expect(trips()[0]).toMatchObject({ watchId: 'w_1', sessionId: a });
+        expect((await bridge.watchCounters()).pending).toBe(1);
+        // Y el HUD de B ve la vigilancia y su contador de disparos: la fila es del PROCESO.
+        expect(sentTo[b].some((m) => m.type === 'watch_state' && m.fires === 1)).toBe(true);
     });
 
     test('la sesión dueña expira con el socket abierto: el disparo va al buzón, no al vacío', async () => {
@@ -189,14 +194,16 @@ describe('la regla de entrega: la sesión que armó, o el buzón — nunca una t
         // El HUD igual ve que disparó: el contador es estado de pantalla, no voz.
         expect(sentTo[s].some((m) => m.type === 'watch_state' && m.fires === 1)).toBe(true);
 
-        // Y cuando el usuario vuelve (sesión nueva: el HUD pide una por cada conexión), se lo
-        // cuenta, sin fingir que la vigilancia era de esta conversación.
+        // Y cuando el usuario vuelve con una sesión NUEVA (el HUD pide una por cada conexión), esa
+        // conversación no es la que armó: no se le cuenta. La vieja ya no puede volver a attachear
+        // —websocket.js rechaza el upgrade de un id que el manager no conoce—, así que esto se
+        // queda guardado para siempre antes que decirle a alguien lo que dictó otro.
         const s2 = open();
         attach(s2);
         await bridge._settle();
-        expect(narrated).toHaveLength(1);
-        expect(narrated[0].sessionId).toBe(s2);
-        expect(narrated[0].prompt).toMatch(/EARLIER conversation/);
+        expect(narrated).toHaveLength(0);
+        expect(bridge.pendingTrips()).toBe(1);
+        expect(trips()).toHaveLength(1);
     });
 
     test('si la sesión se muere MIENTRAS la narración espera su turno, el disparo tampoco se pierde', async () => {
@@ -283,25 +290,35 @@ describe('ACEPTACIÓN — armar, cerrar todo, disparar, volver: se narra UNA vez
         expect(narrated).toHaveLength(1);
     });
 
-    test('si la sesión dueña ya no puede volver, se cuenta igual pero sin fingir que era suya', async () => {
-        // "Ya no vuelve" no es una corazonada: websocket.js rechaza el upgrade (401) de un
-        // sessionId que conversationManager no conoce, así que un id borrado no puede attachear
-        // nunca más. Recién ahí el disparo deja de ser de alguien.
+    test('si la sesión dueña ya no puede volver, el disparo se GUARDA: no se le lee a un extraño', async () => {
+        // El caso del plan, con la etiqueta que lo hace evidente. A dicta "el entrenamiento de la
+        // tesis de Marta", se va, la vigilancia dispara y la conversación de A se borra. B no armó
+        // nada: que se entere del entrenamiento de Marta —y de que existe una tesis de Marta— es
+        // una fuga, la diga con las palabras que la diga. "Ya no vuelve" no es una corazonada:
+        // websocket.js rechaza el upgrade (401) de un sessionId que conversationManager no conoce.
         const s1 = open();
         attach(s1);
-        await arm('w_1', s1, 'the training');
+        await arm('w_1', s1, 'el entrenamiento de la tesis de Marta');
         detach(s1);
-        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now() - 60000, fires: 1 });
+        await emit('w_1', 2, 'watch.tripped', { label: 'el entrenamiento de la tesis de Marta', at: Date.now() - 60000, fires: 1 });
         conversationManager.deleteSession(s1);
 
         const s2 = open();
         attach(s2);
         await bridge._settle();
-        expect(narrated).toHaveLength(1);
-        expect(narrated[0].sessionId).toBe(s2);
-        expect(narrated[0].prompt).toMatch(/EARLIER conversation/);
-        expect(narrated[0].prompt).not.toMatch(/while the user was away/);
-        expect(bridge.pendingTrips()).toBe(0);
+        expect(narrated).toHaveLength(0);
+        expect(JSON.stringify(sentTo[s2])).not.toContain('Marta');
+        // Y no se pierde: en el buzón, en disco, contado, y con la fila dibujada en el HUD.
+        expect(bridge.pendingTrips()).toBe(1);
+        expect(trips()[0].label).toBe('el entrenamiento de la tesis de Marta');
+        expect(sentTo[s2].some((m) => m.type === 'watch_armed' && m.watchId === 'w_1')).toBe(true);
+
+        // Ni siquiera cuando se conectan otros dos: no hay ningún número de extraños que lo haga
+        // decible. Y no se reintenta contra nadie, así que tampoco gasta el techo de intentos.
+        attach(open()); attach(open());
+        await bridge._settle();
+        expect(narrateCalls).toBe(0);
+        expect(trips()[0].attempts).toBe(0);
     });
 
     test('el buzón sobrevive a un reinicio del backend: se lee del disco al arrancar', async () => {
@@ -315,13 +332,16 @@ describe('ACEPTACIÓN — armar, cerrar todo, disparar, volver: se narra UNA vez
         await bridge.init();
         expect(bridge.pendingTrips()).toBe(1);
         // Un reinicio de verdad también se lleva las sesiones, que viven en RAM: ninguna de las de
-        // antes puede volver, así que lo pendiente ya no es de nadie.
+        // antes puede volver, así que lo pendiente ya no es de nadie — y por eso no se dice, se
+        // guarda. Es el caso más común de disparo huérfano y el que más tienta a "contárselo a
+        // alguien": lo que sobrevivió al reinicio son las palabras de una conversación que ya no
+        // existe (plan §10).
         conversationManager.deleteSession(s1);
 
         attach(open());
         await bridge._settle();
-        expect(narrated).toHaveLength(1);
-        expect(narrated[0].prompt).toMatch(/EARLIER conversation/);
+        expect(narrated).toHaveLength(0);
+        expect(bridge.pendingTrips()).toBe(1);
     });
 });
 
@@ -637,7 +657,7 @@ describe('el contador de /api/v1/health', () => {
             { ...row('w_3', 's1'), state: 'suspended', lastSampleAt: null },
             { ...row('w_4', 's1'), state: 'disarmed', lastSampleAt: 2000 },
         ];
-        expect(await bridge.watchCounters()).toEqual({ armed: 1, degraded: 0, blind: 1, suspended: 1, lastSampleAt: 5000 });
+        expect(await bridge.watchCounters()).toEqual({ armed: 1, degraded: 0, blind: 1, suspended: 1, pending: 0, lastSampleAt: 5000 });
     });
 });
 

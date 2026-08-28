@@ -182,7 +182,10 @@ describe('lo que entra y lo que sale', () => {
     test('/api/v1/health gana el contador de vigilancias, y sigue siendo abierto', async () => {
         rows = [row('w_1'), row('w_2', { state: 'blind', lastSampleAt: 9000 })];
         const body = await (await get('/api/v1/health')).json();
-        expect(body.watches).toEqual({ armed: 1, degraded: 0, blind: 1, suspended: 0, lastSampleAt: 9000 });
+        // `pending` son disparos ocurridos y todavía no contados en voz alta: con el buzón vacío es
+        // 0, y es el único lugar donde un huérfano —que por plan §10 no se narra nunca— se ve sin
+        // leer el disco.
+        expect(body.watches).toEqual({ armed: 1, degraded: 0, blind: 1, suspended: 0, pending: 0, lastSampleAt: 9000 });
     });
 });
 

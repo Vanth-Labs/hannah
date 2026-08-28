@@ -224,14 +224,12 @@ const EYES = {
     tripped_away: ({ label, when, ago }) => `while the user was away, "${label}" — the thing you were `
         + `keeping an eye on — STOPPED at ${when}, ${ago}. Say FIRST that this happened while they `
         + 'were not here, then what it was and at what time.',
-    // El disparo huérfano: la sesión que lo pidió ya no existe y no puede volver, así que se lo
-    // cuenta a quien esté acá SIN atribuírselo. La diferencia con tripped_away no es cosmética:
-    // "lo que estabas mirando se paró" dicho a alguien que no armó nada es una mentira sobre de
-    // quién era la vigilancia, y encima invita a preguntar por un entrenamiento que no es suyo.
-    tripped_orphan: ({ label, when, ago }) => `"${label}" — something you were asked to keep an eye on in `
-        + `an EARLIER conversation that has already ended — STOPPED at ${when}, ${ago}. Say FIRST that it `
-        + 'was set up before this conversation, so you do not know whether it was this person who asked '
-        + 'for it, and only then what it was and at what time. Do NOT say they asked you to watch it.',
+    // NO HAY FRASE PARA EL DISPARO HUÉRFANO, y su ausencia es la decisión. Había una: envolvía la
+    // etiqueta en "esto lo pidió una conversación anterior" y se la leía a quien estuviera. Pero
+    // la etiqueta es TEXTO LIBRE QUE DICTÓ OTRA PERSONA ("el entrenamiento de la tesis de Marta"),
+    // y hedgear la atribución no impide que esas palabras entren igual en el oído de un tercero.
+    // El plan §10 no deja lugar: "if that session is gone the trip is persisted, NOT spoken to a
+    // stranger". Un disparo sin dueña vivo se guarda y se muestra; ver flushInbox.
     blind: ({ label }) => `you LOST SIGHT of "${label}": right now you are NOT watching it and you do `
         + 'not know whether it is still running. Say exactly that, and do not guess how it is going.',
     recovered: ({ label }) => `you can see "${label}" again and you are watching it like before.`,
@@ -443,7 +441,7 @@ export async function onEvent(env) {
  */
 function deliverTrip(w, trip) {
     const item = toInbox(w, trip);
-    if (canSpeakTo(w.sessionId)) tryDeliver(item, w.sessionId, 'tripped');
+    if (canSpeakTo(w.sessionId)) tryDeliver(item, 'tripped');
 }
 
 /**
@@ -472,20 +470,21 @@ function toInbox(w, trip) {
 }
 
 /**
- * Intenta DECIR una fila del buzón. Se marca en vuelo para que dos flush simultáneos (dos
- * pestañas que se conectan a la vez) no la narren dos veces, y solo sale del buzón con el acuse.
- * `inFlight` no se persiste: si el proceso muere en vuelo, la fila tiene que volver a estar
- * disponible al arrancar, no marcada como "ya se está entregando".
+ * Intenta DECIRLE UN DISPARO A SU DUEÑA. No recibe destinatario a propósito: el único que existe
+ * es `trip.sessionId`, y que la función no pueda nombrar otro es lo que vuelve estructural la
+ * regla del plan §10 en vez de dejarla a cargo de quien llama. Acá vivía la fuga: el que llamaba
+ * podía pasar la sesión que estuviera conectada.
+ *
+ * Se marca en vuelo para que dos flush simultáneos (dos pestañas que se conectan a la vez) no la
+ * narren dos veces, y solo sale del buzón con el acuse. `inFlight` no se persiste: si el proceso
+ * muere en vuelo, la fila tiene que volver a estar disponible al arrancar, no marcada como "ya se
+ * está entregando".
  */
-function tryDeliver(trip, sessionId, kind) {
+function tryDeliver(trip, kind) {
     trip.inFlight = true;
-    // La etiqueta, otra vez, solo para su dueña: en un reenvío el que escucha puede no ser quien
-    // la dictó. Una fila del panel se lee sin la frase que aclara de quién era la vigilancia, y
-    // se queda en pantalla mucho después de que esa frase terminó.
-    toSession(sessionId, { type: 'watch_tripped', watchId: trip.watchId,
-        label: owns(trip, sessionId) ? trip.label : null,
+    toSession(trip.sessionId, { type: 'watch_tripped', watchId: trip.watchId, label: trip.label,
         at: trip.at, confidence: trip.confidence });
-    eyes(sessionId, trip.watchId, kind,
+    eyes(trip.sessionId, trip.watchId, kind,
         { label: trip.label, when: clockOf(trip.at), ago: agoOf(trip.at) },
         { onSaid: () => outOfInbox(trip), onLost: () => failedDelivery(trip) });
 }
@@ -520,21 +519,33 @@ function failedDelivery(trip) {
 }
 
 /**
- * Vacía lo que se pueda entregar AHORA y deja guardado lo demás.
+ * Entrega lo que se le pueda entregar A SU DUEÑA ahora, y deja guardado todo lo demás.
  *
  * "Esa sesión ya no vuelve" NO es una heurística: es que conversationManager no la conozca más.
  * websocket.js rechaza el upgrade (401) de cualquier sessionId que el manager no tenga, así que un
  * id olvidado —expirado, borrado a mano, o de antes de un reinicio del backend, que se lleva el
- * mapa entero porque vive en RAM— no puede volver a attachear nunca. Mientras la conversación siga
- * viva, aunque su socket esté cerrado, el disparo es SUYO y se guarda: puede volver con el mismo
- * id. Cuando muere deja de ser de nadie y se le cuenta a quien esté escuchando, con otras palabras.
+ * mapa entero porque vive en RAM— no puede volver a attachear nunca.
  *
- * Se llama cuando cambia QUIÉN puede oír, que son dos momentos: alguien se conecta, o se muere la
- * dueña de algo guardado. No en el momento del disparo: un disparo que nace huérfano espera a que
- * alguien llegue en vez de interrumpir a quien está usando la máquina para otra cosa. Y esa espera
- * tiene techo, SESSION_TTL_MINUTES, no "hasta mañana": el hook de onDelete lo suelta al expirar.
+ * Y CUANDO MUERE, EL DISPARO NO PASA A OTRA PERSONA. Acá se le contaba a quien estuviera
+ * conectado, con una frase que hedgeaba la atribución ("lo pidió una conversación anterior"). Eso
+ * contradice el plan §10, que sobre esto no deja lugar: "if that session is gone the trip is
+ * persisted, NOT spoken to a stranger". Y el hedge no arreglaba lo que importa: la etiqueta es
+ * texto libre que dictó OTRA persona —"el entrenamiento de la tesis de Marta"— y aclarar de quién
+ * era no impide que esas palabras entren igual en el oído de un tercero.
+ *
+ * LA TENSIÓN ES REAL Y SE RESUELVE A FAVOR DEL PLAN, no alrededor: si la dueña no vuelve nunca,
+ * esto significa que ese disparo no se le dice a NADIE en voz alta. Se acepta, y solo se puede
+ * aceptar porque el disparo no desaparece, que es la otra mitad de la decisión y por eso está
+ * escrita acá: queda en el buzón EN DISCO, sigue contado en pendingTrips() (y por ahí en
+ * GET /api/v1/health, o sea en `hannah doctor`), su vigilancia sigue dibujada en el HUD con el
+ * contador de disparos que ya se emitió por broadcast, y se grita por el log. Vigilar de noche
+ * para una conversación que se terminó no vale una fuga; vale un registro.
+ *
+ * Se llama cuando cambia QUIÉN puede oír: alguien se conecta, o se muere la dueña de algo
+ * guardado. No en el momento del disparo: uno que nace sin nadie escuchando espera a que su dueña
+ * vuelva en vez de interrumpir a quien está usando la máquina para otra cosa.
  */
-function flushInbox(arrived = null) {
+function flushInbox() {
     if (!inbox.length) return;
     // NO SE VACÍA LA LISTA. Antes se hacía un splice de todo ANTES de narrar, y ese era el bug:
     // el archivo quedaba en {"trips": []} y lo que fallara después no estaba en ningún lado.
@@ -544,24 +555,34 @@ function flushInbox(arrived = null) {
     for (const trip of [...inbox]) {
         if (trip.inFlight) continue;
         if ((trip.attempts || 0) >= TRIP_MAX_ATTEMPTS) continue;   // se rindió y ya se gritó: no se insiste
-        if (canSpeakTo(trip.sessionId)) { tryDeliver(trip, trip.sessionId, 'tripped_away'); continue; }
+        if (canSpeakTo(trip.sessionId)) { tryDeliver(trip, 'tripped_away'); continue; }
         if (conversationManager.hasSession(trip.sessionId)) continue;   // viva: el disparo sigue siendo SUYO
-        const listener = currentListener(arrived);
-        if (listener) tryDeliver(trip, listener, 'tripped_orphan');
+        orphaned(trip);
     }
+}
+
+/**
+ * Un disparo sin dueña que pueda volver. No se dice en voz alta (ver flushInbox), así que lo
+ * único que queda es dejarlo ANOTADO donde un humano lo vea: el log, el archivo y el contador.
+ * Una vez por disparo, no una por cada attach: el buzón no puede volverse un log de repetidos.
+ */
+function orphaned(trip) {
+    if (trip.orphanLogged) return;
+    trip.orphanLogged = true;
+    logger.warn('disparo HUÉRFANO: la conversación que lo pidió ya no existe, así que NO se dice en voz alta',
+        { watchId: trip.watchId, at: trip.at, pending: inbox.length });
 }
 
 /**
  * La sesión dueña se terminó (DELETE explícito, o el barrido de los 30 min, que desde M5.0.5 sí
  * dispara los hooks). NO se la saca de `sessions`: ese mapa es la PANTALLA, y un HUD con el socket
  * abierto sigue teniendo derecho a ver el estado de las vigilancias aunque su conversación ya no
- * pueda hablar. Lo que cambia es que desde acá lo guardado para ella no es de nadie, y hay que
- * dárselo a quien esté escuchando en vez de esperar un attach que puede no llegar hoy.
+ * pueda hablar. Lo que cambia es que desde acá lo guardado para ella no es de nadie — y quedarse
+ * sin dueño no es un motivo para hablar, es un motivo para ANOTAR: acá se le pasaba a quien
+ * estuviera conectado, que es la fuga que el plan §10 prohíbe.
  */
 function onOwnerGone(sessionId) {
-    if (!inbox.some((trip) => trip.sessionId === sessionId)) return;
-    logger.info('la sesión que armó una vigilancia se terminó: sus disparos quedan sin dueño', { sessionId });
-    flushInbox();
+    for (const trip of inbox) if (trip.sessionId === sessionId) orphaned(trip);
 }
 
 /**
@@ -669,7 +690,7 @@ export function attachSession(sessionId, send) {
     // que la lista es la del sidecar y no la que recordamos.
     reconcile().catch((e) => logger.error('reconciliar vigilancias al conectar falló', { message: e.message }));
     // "Esto pasó mientras no estabas": llegó un humano, así que cambió quién puede oír el buzón.
-    flushInbox(sessionId);
+    flushInbox();
     // Una ceguera que sigue siendo verdad se dice ahora: no es historia, es el estado actual.
     for (const w of watches.values()) if (w.state === 'blind') sayBlind(w);
 }
@@ -705,7 +726,10 @@ export async function disarm(watchId) {
  */
 export async function watchCounters() {
     const { watches: rows, error } = await senseClient.watchRows();
-    const counters = { armed: 0, degraded: 0, blind: 0, suspended: 0, lastSampleAt: null };
+    // `pending` son disparos que ocurrieron y todavía no se contaron en voz alta. Va acá porque un
+    // disparo huérfano NO se narra nunca (plan §10) y este es el único lugar donde alguien puede
+    // enterarse de que existe sin leer el disco: `hannah doctor` pega a esta ruta.
+    const counters = { armed: 0, degraded: 0, blind: 0, suspended: 0, pending: inbox.length, lastSampleAt: null };
     if (error) return { ...counters, error };
     for (const row of rows) {
         if (row.state === 'armed') counters.armed++;
