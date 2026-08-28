@@ -29,6 +29,7 @@ import pytest  # noqa: E402
 
 import capability  # noqa: E402
 import paths  # noqa: E402
+import sensors  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +41,24 @@ def _clean_caches():
     capability.pin(None)
     capability.reset()
     paths.reset()
+
+
+@pytest.fixture(autouse=True)
+def _test_sensors():
+    """Abre la costura del andamio (`stub`) para toda la suite, y la cierra al
+    salir de cada test.
+
+    El proceso real arranca con la costura CERRADA: `stub` no sale en
+    `/v1/capabilities` y un POST con ese kind responde lo mismo que uno
+    inventado. Acá se abre porque el scheduler, la persistencia y el SSE se
+    prueban con un sensor que no toca la máquina. Los tests que miran el
+    comportamiento de producción la vuelven a cerrar a mano con
+    `sensors.allow_test_sensors(False)`, y este fixture es el que garantiza que
+    eso no se derrame al test siguiente.
+    """
+    sensors.allow_test_sensors(True)
+    yield
+    sensors.allow_test_sensors(False)
 
 
 @pytest.fixture

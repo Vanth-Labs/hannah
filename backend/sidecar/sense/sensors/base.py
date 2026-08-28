@@ -122,6 +122,8 @@ class Sensor:
     confidence: ClassVar[str] = DETERMINISTIC
     #: R4 (GPU) es corroborante: nunca puede ser el único sensor de un watch.
     corroborating_only: ClassVar[bool] = False
+    #: Andamio de la suite, no una capacidad de la máquina. Ver `allow_test_sensors()`.
+    test_only: ClassVar[bool] = False
 
     @classmethod
     def parse(cls, spec: Mapping[str, Any]) -> "Sensor":
@@ -148,16 +150,60 @@ def register(cls: type[Sensor]) -> type[Sensor]:
     return cls
 
 
+#: Si los sensores de andamio se pueden armar. Apagado en el proceso real y sin
+#: perilla de entorno a propósito: una variable la puede tener puesta el shell
+#: que arrancó el sidecar, y entonces el catálogo depende de cómo se lanzó.
+_TEST_SENSORS = False
+
+
+def allow_test_sensors(enabled: bool = True) -> None:
+    """La costura de la suite: habilita los sensores `test_only` EN ESTE PROCESO.
+
+    La regla del catálogo de macros dice que una capacidad que no es real es una
+    que Hannah no aprende, porque el vocabulario de `[WATCH:]` se arma con
+    `/v1/capabilities` y nombrar `stub` sería enseñarle a prometer una vigilancia
+    que no mira nada y que además ocupa uno de los dos cupos de
+    `SENSE_MAX_WATCHES`. El contrato `sense.v1` nombra exactamente
+    proc/file/logmatch/gpu/port/unit para esta fase.
+
+    El andamio sigue existiendo porque el scheduler, la persistencia y el SSE se
+    prueban sin tocar la máquina, y el brazo de control del demo de salida (el
+    hijo que nunca se mata, cero trips) se arma con él. Lo llama `conftest.py`;
+    nada que venga de HTTP puede llegar acá.
+    """
+    global _TEST_SENSORS
+    _TEST_SENSORS = bool(enabled)
+
+
+def test_sensors_allowed() -> bool:
+    return _TEST_SENSORS
+
+
+def public_kinds() -> list[str]:
+    """El enum de kinds que se anuncia por cable, ordenado.
+
+    No es `sorted(SENSORS)`: el registro tiene además el andamio. Los dos números
+    tienen que poder ser distintos, porque lo que existe en el proceso y lo que
+    la máquina ofrece vigilar no son la misma lista.
+    """
+    return sorted(kind for kind, cls in SENSORS.items()
+                  if not cls.test_only or _TEST_SENSORS)
+
+
 def build(spec: Any) -> Sensor:
     """Construye el sensor desde el spec del POST. Levanta SpecError/DeniedPath."""
     if not isinstance(spec, Mapping):
         raise SpecError("sensor tiene que ser un objeto")
     kind = spec.get("kind")
-    if not isinstance(kind, str) or kind not in SENSORS:
+    cls = SENSORS.get(kind) if isinstance(kind, str) else None
+    if cls is None or (cls.test_only and not _TEST_SENSORS):
         # No se lista qué kinds existen: eso lo contesta /v1/capabilities, que
-        # ya pasó por el token.
+        # ya pasó por el token. Y un kind de andamio contesta EXACTAMENTE lo
+        # mismo que uno inventado: una razón distinta ("ese kind es solo para
+        # tests") le confirmaría a quien prueba que existe y que hay una perilla
+        # que lo abre.
         raise SpecError("sensor.kind desconocido")
-    sensor = SENSORS[kind].parse(spec)
+    sensor = cls.parse(spec)
     if sensor.corroborating_only:
         # ACÁ es donde R4 no puede disparar solo, y por eso está en código y no en
         # un comentario: un watch de GPU sola vería 0% en un checkpoint y en un
@@ -437,11 +483,18 @@ class StubSensor(Sensor):
     Existe para que se pueda probar el scheduler, la persistencia y el SSE sin
     ningún subproceso, y para que el brazo de control del demo de salida de P5.1
     (el hijo que nunca se mata, cero trips) tenga con qué armarse.
+
+    NO se anuncia y NO se puede armar por HTTP: `test_only` lo saca de
+    `public_kinds()` y hace que `build()` lo trate como un kind inventado, salvo
+    que la suite abra la costura con `allow_test_sensors()`. Sin eso aparecía en
+    `/v1/capabilities`, o sea en el vocabulario que Hannah aprende, y un POST con
+    `kind: "stub"` devolvía 201 y se comía uno de los dos cupos.
     """
 
     kind = "stub"
     rung = None
     confidence = DETERMINISTIC
+    test_only = True
 
     @classmethod
     def parse(cls, spec: Mapping[str, Any]) -> "StubSensor":

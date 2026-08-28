@@ -26,11 +26,14 @@ from .base import (  # noqa: F401  (superficie pública del módulo `sensors`)
     SpecError,
     SENSORS,
     Watched,
+    allow_test_sensors,
     build,
     classify_path,
     open_watched,
+    public_kinds,
     register,
     run_argv,
+    test_sensors_allowed,
 )
 # Importados por su efecto: cada módulo se registra en SENSORS al importarse.
 from . import file, gpu, logmatch, port, proc, unit  # noqa: F401,E402
@@ -99,9 +102,15 @@ def capabilities(resolve: capability.Resolver | None = None) -> dict[str, object
     """Lo que ESTA máquina puede vigilar hoy, en la forma del contrato sense.v1.
 
     `rungs[].available` es la autoridad sobre qué se puede armar. `sensors` es el
-    enum CERRADO de kinds que el proceso conoce, que no es lo mismo: `gpu` está
-    en la lista y su escalón no está disponible, porque el kind existe (P5.2 lo
-    va a usar para corroborar) y armar un watch de GPU sola no.
+    enum CERRADO de kinds que se ANUNCIAN, que no es lo mismo: `gpu` está en la
+    lista y su escalón no está disponible, porque el kind existe (P5.2 lo va a
+    usar para corroborar) y armar un watch de GPU sola no.
+
+    Y no es `sorted(SENSORS)`: el andamio (`stub`) está registrado en el proceso
+    y no sale por cable. `capabilities()` es de donde el backend saca el
+    vocabulario de `[WATCH:]`, así que un kind que no es una capacidad real acá
+    es una palabra que Hannah aprende y una vigilancia que promete sin mirar
+    nada. Ver `base.allow_test_sensors()`.
 
     `resolve` es inyectable para los tests: leer el estado real de la máquina en
     un fixture es lo que hace que un test pase donde se escribió y falle en la
@@ -115,7 +124,7 @@ def capabilities(resolve: capability.Resolver | None = None) -> dict[str, object
         if reason:
             entry["reason"] = reason
         rungs.append(entry)
-    return {"rungs": rungs, "sensors": sorted(SENSORS)}
+    return {"rungs": rungs, "sensors": public_kinds()}
 
 
 def rung_of(kind: str) -> str | None:

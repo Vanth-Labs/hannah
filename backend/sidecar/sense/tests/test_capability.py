@@ -8,13 +8,19 @@ algo o si le falta un paquete. La única excepción es
 `test_which_encuentra_un_binario_real`, que prueba el resolutor de verdad y por
 eso se saltea solo si la máquina no tiene ni /bin/sh.
 """
+import json
 import os
 import stat
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 import capability
 import sensors
+
+SENSE_DIR = Path(__file__).resolve().parent.parent
 
 #: Una máquina con todo lo de la fase instalado.
 COMPLETA = {"pgrep": "/usr/bin/pgrep", "nvidia-smi": "/usr/bin/nvidia-smi",
@@ -149,7 +155,46 @@ def test_sin_la_tabla_de_rutas_los_escalones_con_ruta_se_bajan(monkeypatch):
     assert survey["R5"]["available"] is True
 
 
+#: Los seis kinds que nombra el contrato sense.v1 para esta fase. `stub` no está.
+DEL_CONTRATO = ["file", "gpu", "logmatch", "port", "proc", "unit"]
+
+
 def test_el_enum_de_kinds_es_cerrado():
-    assert sorted(sensors.SENSORS) == ["file", "gpu", "logmatch", "port", "proc", "stub", "unit"]
+    """Dos listas, y a propósito: lo que el proceso conoce incluye el andamio, lo
+    que se anuncia por cable no. Confundirlas es lo que metió `stub` en el
+    vocabulario de `[WATCH:]`."""
+    assert sorted(sensors.SENSORS) == sorted(DEL_CONTRATO + ["stub"])
+    assert sensors.capabilities(resolver(COMPLETA))["sensors"] != DEL_CONTRATO  # costura abierta
     with pytest.raises(sensors.SpecError):
         sensors.build({"kind": "shell", "command": "rm -rf ~"})
+
+
+def test_el_andamio_no_se_anuncia_ni_se_puede_armar():
+    """La regla del catálogo: una capacidad que no es real es una que Hannah
+    nunca escucha. `capabilities()` es de donde sale el vocabulario de
+    `[WATCH:]`, y el POST le daba 201 y uno de los dos cupos de
+    SENSE_MAX_WATCHES a un sensor que no mira nada."""
+    sensors.allow_test_sensors(False)   # el estado del proceso real; ver conftest
+    assert sensors.capabilities(resolver(COMPLETA))["sensors"] == DEL_CONTRATO
+
+    with pytest.raises(sensors.SpecError) as armado:
+        sensors.build({"kind": "stub"})
+    with pytest.raises(sensors.SpecError) as inventado:
+        sensors.build({"kind": "noexiste"})
+    # La MISMA razón que un kind inventado: una distinta le confirmaría a quien
+    # prueba que el kind existe y que hay una perilla que lo abre.
+    assert str(armado.value) == str(inventado.value)
+
+
+def test_el_proceso_real_arranca_con_la_costura_cerrada():
+    """La costura la abre `conftest.py`, así que el default no se puede afirmar
+    desde adentro de la suite: se pregunta en un intérprete nuevo, que es el
+    estado en el que corre el sidecar de verdad."""
+    hecho = subprocess.run(
+        [sys.executable, "-c",
+         "import json, sensors; print(json.dumps(sensors.capabilities()['sensors']))"],
+        cwd=SENSE_DIR, capture_output=True, text=True, timeout=60)
+    assert hecho.returncode == 0, hecho.stderr
+    anunciados = json.loads(hecho.stdout)
+    assert "stub" not in anunciados, "el sidecar de verdad anuncia el andamio"
+    assert anunciados == DEL_CONTRATO

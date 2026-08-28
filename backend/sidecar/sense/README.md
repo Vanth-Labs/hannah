@@ -68,7 +68,7 @@ portados de la fachada del agente (`facade/routes.ts`), en el mismo orden.
 | ruta | qué devuelve |
 | --- | --- |
 | `GET /health` | `{healthy, version, watches:{armed,degraded,blind,suspended}}`. Sin ruta de home ni nombre de usuario (AUDIT M22) |
-| `GET /v1/capabilities` | `{rungs:[{id,available,reason}], sensors:[kind]}` — la escalera R1..R10 de esta máquina |
+| `GET /v1/capabilities` | `{rungs:[{id,available,reason}], sensors:[kind]}` — la escalera R1..R10 de esta máquina. `sensors` son los seis del contrato: el andamio no sale |
 | `POST /v1/watches` | `201 {watchId}`. `400` malformado o período bajo el mínimo, `403` ruta denegada, `409` no hay cupo |
 | `GET /v1/watches` | una fila por watch: label, estado, escalón, contadores. **Nunca un valor de muestra** |
 | `GET /v1/watches/{id}` | la fila, o `404` |
@@ -234,6 +234,16 @@ Dos cosas que no son opcionales:
   `SENSE_BLIND_MS`, el watch pasa a `blind` y Hannah lo dice. Un sensor roto
   termina el watch como `faulted`, que es otra cosa y se narra distinto.
 
-`stub` sigue existiendo: siempre reporta sano y no toca la máquina, y es con lo
-que se arma el brazo de control del demo de salida de P5.1 (el hijo que nunca se
-mata, cero trips).
+`stub` sigue existiendo, pero **no se anuncia ni se puede armar por HTTP**:
+siempre reporta sano, no toca la máquina, y es con lo que se arma el brazo de
+control del demo de salida de P5.1 (el hijo que nunca se mata, cero trips). El
+contrato `sense.v1` nombra seis kinds para esta fase y `stub` no es uno: sale de
+`/v1/capabilities`, que es de donde el backend saca el vocabulario de `[WATCH:]`,
+y un `POST` con `kind: "stub"` contesta lo mismo que uno con un kind inventado
+(la misma razón a propósito: una distinta confirmaría que existe). Antes daba
+`201` y se comía uno de los dos cupos de `SENSE_MAX_WATCHES`.
+
+La costura es `sensors.allow_test_sensors()`, en proceso y **sin variable de
+entorno**: una perilla de entorno la puede tener puesta el shell que arrancó el
+sidecar, y entonces el catálogo depende de cómo se lanzó. La abre `conftest.py`
+para toda la suite y la cierra al salir de cada test.
