@@ -13,10 +13,11 @@
 //
 //  1. LA REGLA DE ENTREGA. `sendTo`/`speak` del agente caen a [...sessions.values()].at(-1), la
 //     sesión más reciente, y `speak` se va sin encolar nada si no hay ninguna. Un disparo NO usa
-//     ese fallback: se ata a la sesión que armó la vigilancia, y si esa sesión ya no está el
-//     disparo se GUARDA en un buzón durable y se cuenta en el próximo attach, una sola vez y con
-//     su hora real. Las dos alternativas son inaceptables: leerle un traceback de entrenamiento
-//     a quien justo abrió el HUD es una fuga, y perderlo en silencio anula la feature entera.
+//     ese fallback: se ata PARA SIEMPRE a la sesión que armó la vigilancia, y si esa sesión no
+//     puede oírlo el disparo se GUARDA en un buzón durable y se cuenta cuando cambia quién puede
+//     oírlo, una sola vez y con su hora real. Las dos alternativas son inaceptables: leerle un
+//     traceback de entrenamiento a quien justo abrió el HUD es una fuga, y perderlo en silencio
+//     anula la feature entera.
 //  2. LA NARRACIÓN ES EFÍMERA (plan §9): no deja fila en memory.db ni embedding. Ocho horas de
 //     vigilancia desalojarían la conversación real de la ventana de 10 turnos y grabarían para
 //     siempre lo observado en una base que la propia política del agente marca como sensible.
@@ -70,7 +71,7 @@ const INBOX_MAX = 10;
 // backend, y el dueño del dato es quien conoce al destinatario. Si algún día el buzón se muda a
 // :8007, esto se borra entero y se reemplaza por dos rutas nuevas.
 export const INBOX_FILE = process.env.HANNAH_WATCH_INBOX_FILE || path.join(DATA_DIR, 'watch-inbox.json');
-let inbox = [];   // [{ watchId, label, at, confidence, fires }]
+let inbox = [];   // [{ watchId, label, sessionId, at, confidence, fires }]
 
 function loadInbox() {
     try {
@@ -112,6 +113,24 @@ function toSession(sessionId, payload) {
 // Esto es el estado para la pantalla, no la voz — la voz sí está atada (ver eyes()).
 function broadcast(payload) { for (const send of sessions.values()) send(payload); }
 
+/**
+ * DOS CLASES DE FRASE, con reglas de entrega distintas a propósito:
+ *
+ *  - EL DISPARO es un hecho privado y fechado de lo que ESTA persona pidió mirar. Va a la sesión
+ *    que armó o al buzón, nunca en vivo a otra (plan §10). Ni pasa por acá.
+ *  - EL ESTADO de la vigilancia (ciega, la recuperó, expiró, se rompió) no es historia: es cómo
+ *    está el mundo AHORA, es igual de cierto para cualquiera que esté sentado en esta máquina, y
+ *    callarlo es la peor falla que tiene esta feature ("cree que mira y no mira"). Si la dueña no
+ *    puede oír, se lo dice a quien pueda: mejor que se entere otro a que no se entere nadie.
+ *
+ * Devuelve la sesión dueña si puede oír, si no la última que se conectó y pueda, si no null.
+ */
+function currentListener(preferred) {
+    if (hasSession(preferred)) return preferred;
+    for (const sessionId of [...sessions.keys()].reverse()) if (hasSession(sessionId)) return sessionId;
+    return null;
+}
+
 function pushState(w) {
     broadcast({ type: 'watch_state', watchId: w.watchId, state: w.state,
         lastSampleAt: w.lastSampleAt || null, samplesOk: w.samplesOk || 0, fires: w.fires || 0 });
@@ -127,6 +146,14 @@ const EYES = {
     tripped_away: ({ label, when, ago }) => `while the user was away, "${label}" — the thing you were `
         + `keeping an eye on — STOPPED at ${when}, ${ago}. Say FIRST that this happened while they `
         + 'were not here, then what it was and at what time.',
+    // El disparo huérfano: la sesión que lo pidió ya no existe y no puede volver, así que se lo
+    // cuenta a quien esté acá SIN atribuírselo. La diferencia con tripped_away no es cosmética:
+    // "lo que estabas mirando se paró" dicho a alguien que no armó nada es una mentira sobre de
+    // quién era la vigilancia, y encima invita a preguntar por un entrenamiento que no es suyo.
+    tripped_orphan: ({ label, when, ago }) => `"${label}" — something you were asked to keep an eye on in `
+        + `an EARLIER conversation that has already ended — STOPPED at ${when}, ${ago}. Say FIRST that it `
+        + 'was set up before this conversation, so you do not know whether it was this person who asked '
+        + 'for it, and only then what it was and at what time. Do NOT say they asked you to watch it.',
     blind: ({ label }) => `you LOST SIGHT of "${label}": right now you are NOT watching it and you do `
         + 'not know whether it is still running. Say exactly that, and do not guess how it is going.',
     recovered: ({ label }) => `you can see "${label}" again and you are watching it like before.`,
@@ -230,13 +257,13 @@ export async function onEvent(env) {
 
         case 'watch.expired':
             w.state = 'expired';
-            eyes(w.sessionId, w.watchId, 'expired', { label: w.label });
+            eyes(currentListener(w.sessionId), w.watchId, 'expired', { label: w.label });
             break;
 
         case 'watch.faulted':
             w.state = 'faulted';
             logger.error('sensor de vigilancia roto', { watchId: w.watchId, error: clean(d.error, 120) });
-            eyes(w.sessionId, w.watchId, 'faulted', { label: w.label });
+            eyes(currentListener(w.sessionId), w.watchId, 'faulted', { label: w.label });
             break;
 
         case 'watch.disarmed':
@@ -260,18 +287,47 @@ export async function onEvent(env) {
 
 /** La regla de entrega, en un solo lugar: la sesión que armó, o el buzón. Nunca una tercera. */
 function deliverTrip(w, trip) {
-    if (!hasSession(w.sessionId)) return toInbox(w.watchId, w.label, trip);
+    if (!hasSession(w.sessionId)) return toInbox(w, trip);
     toSession(w.sessionId, { type: 'watch_tripped', watchId: w.watchId, label: w.label,
         at: trip.at, confidence: trip.confidence });
     eyes(w.sessionId, w.watchId, 'tripped', { label: w.label, when: clockOf(trip.at) },
-        () => toInbox(w.watchId, w.label, trip));
+        () => toInbox(w, trip));
 }
 
-function toInbox(watchId, label, trip) {
-    inbox.push({ watchId, label, at: trip.at, confidence: trip.confidence, fires: trip.fires });
+/**
+ * Al buzón, CON su dueño. Sin el sessionId adentro no se puede decidir después con qué palabras se
+ * cuenta, que es la única diferencia honesta entre "esto pasó mientras no estabas" y "esto lo armó
+ * una conversación que ya se terminó".
+ */
+function toInbox(w, trip) {
+    inbox.push({ watchId: w.watchId, label: w.label, sessionId: w.sessionId || null,
+        at: trip.at, confidence: trip.confidence, fires: trip.fires });
     while (inbox.length > INBOX_MAX) inbox.shift();
     saveInbox();
-    logger.info('disparo al buzón: no hay sesión dueña conectada', { watchId, pending: inbox.length });
+    logger.info('disparo al buzón: la sesión que armó no puede oírlo', { watchId: w.watchId, pending: inbox.length });
+}
+
+/**
+ * Vacía lo que se pueda entregar AHORA y deja guardado lo demás. Se llama cuando llega alguien:
+ * el buzón es "esto pasó mientras no estabas", y esa frase solo tiene sentido cuando el usuario
+ * vuelve. Un disparo que nace sin nadie escuchando espera al próximo attach en vez de
+ * interrumpir a quien está usando la máquina para otra cosa.
+ */
+function flushInbox(arrived = null) {
+    if (!inbox.length) return;
+    // Se VACÍA antes de narrar (y se persiste): si dos pestañas se conectan a la vez, el disparo se
+    // cuenta una sola vez. Lo que no se pudo entregar vuelve, así que "una sola vez" nunca degrada
+    // a "ninguna".
+    const pending = inbox.splice(0, inbox.length);
+    const held = [];
+    for (const trip of pending) {
+        if (hasSession(trip.sessionId)) { replay(trip.sessionId, trip, 'tripped_away'); continue; }
+        const listener = currentListener(arrived);
+        if (listener) replay(listener, trip, 'tripped_orphan');
+        else held.push(trip);
+    }
+    inbox.push(...held);
+    saveInbox();
 }
 
 /**
@@ -280,9 +336,11 @@ function toInbox(watchId, label, trip) {
  * no es historia, es el estado actual, y sigue siendo verdad cuando el usuario vuelve.
  */
 function sayBlind(w) {
-    if (w.blindSpoken || !hasSession(w.sessionId)) return;
+    if (w.blindSpoken) return;
+    const listener = currentListener(w.sessionId);
+    if (!listener) return;
     w.blindSpoken = true;
-    eyes(w.sessionId, w.watchId, 'blind', { label: w.label }, () => { w.blindSpoken = false; });
+    eyes(listener, w.watchId, 'blind', { label: w.label }, () => { w.blindSpoken = false; });
 }
 
 function goBlind(w) {
@@ -298,7 +356,7 @@ function goBlind(w) {
 function goVisible(w) {
     if (!w.blindSpoken) return;
     w.blindSpoken = false;
-    eyes(w.sessionId, w.watchId, 'recovered', { label: w.label });
+    eyes(currentListener(w.sessionId), w.watchId, 'recovered', { label: w.label });
 }
 
 // ── Contacto con el sidecar ────────────────────────────────────────────────────────────
@@ -344,46 +402,38 @@ export function attachSession(sessionId, send) {
     sessions.set(sessionId, send);
     for (const w of watches.values()) {
         if (terminal(w.state)) continue;
-        // ADOPCIÓN de las huérfanas, que NO es el fallback prohibido y la diferencia es CUÁNDO:
-        // aquel elegía oyente en el momento del EVENTO, con la sesión dueña posiblemente viva, y
-        // por eso podía leerle a un tercero lo que pasó en el entrenamiento de otro. Acá la dueña
-        // ya no existe y lo que pasa es que un humano se está conectando. Es el mismo patrón que
-        // agentBridge.attachSession, y sin él un disparo con el HUD abierto (pero recargado)
-        // caería al buzón, que se vacía en el próximo attach: podría ser mañana.
-        if (!w.sessionId || !sessions.has(w.sessionId)) w.sessionId = sessionId;
+        // Este socket ve TODAS las vigilancias del proceso, pero no se queda con ninguna: acá había
+        // una adopción (`w.sessionId = sessionId` para las huérfanas) y era la mitad tranquila del
+        // mismo error que detachSession. La vigilancia es de quien la armó; lo que este HUD recibe
+        // es la PANTALLA, y la voz la decide deliverTrip.
         send({ type: 'watch_armed', watchId: w.watchId, label: w.label, rung: w.rung, tier: w.tier, expiresAt: w.expiresAt });
         send({ type: 'watch_state', watchId: w.watchId, state: w.state,
             lastSampleAt: w.lastSampleAt || null, samplesOk: w.samplesOk || 0, fires: w.fires || 0 });
     }
-    // "Esto pasó mientras no estabas". Se VACÍA el buzón antes de narrar (y se persiste): si dos
-    // pestañas se conectan a la vez, el disparo se cuenta una sola vez. Lo que no se pudo
-    // entregar vuelve al buzón, así que "una sola vez" nunca degrada a "ninguna".
-    if (inbox.length) {
-        const pending = inbox.splice(0, inbox.length);
-        saveInbox();
-        for (const trip of pending) replay(sessionId, trip);
-    }
+    // "Esto pasó mientras no estabas": llegó un humano, así que cambió quién puede oír el buzón.
+    flushInbox(sessionId);
     // Una ceguera que sigue siendo verdad se dice ahora: no es historia, es el estado actual.
     for (const w of watches.values()) if (w.state === 'blind') sayBlind(w);
 }
 
-function replay(sessionId, trip) {
+/** `kind` es 'tripped_away' si se lo entrega a su dueña y 'tripped_orphan' si no (ver flushInbox). */
+function replay(sessionId, trip, kind) {
     toSession(sessionId, { type: 'watch_tripped', watchId: trip.watchId, label: trip.label,
         at: trip.at, confidence: trip.confidence });
-    eyes(sessionId, trip.watchId, 'tripped_away',
+    eyes(sessionId, trip.watchId, kind,
         { label: clean(trip.label, 80), when: clockOf(trip.at), ago: agoOf(trip.at) },
         () => { inbox.push(trip); saveInbox(); });
 }
 
 export function detachSession(sessionId) {
     sessions.delete(sessionId);
-    // La vigilancia NO se muere con la sesión: vive en el sidecar y sigue mirando (plan §10: el
-    // sessionId es una preferencia de entrega, no la vida del watch). Si queda otro HUD abierto,
-    // se le pasa a ese; si no queda ninguno, se queda sin dueño y lo que dispare va al buzón.
-    // Dejarla huérfana con alguien conectado sería mandar al buzón un disparo que el usuario está
-    // ahí para escuchar, y el buzón se vacía recién en el próximo attach: podría ser mañana.
-    const heir = [...sessions.keys()].at(-1) || null;
-    for (const w of watches.values()) if (w.sessionId === sessionId) w.sessionId = heir;
+    // La vigilancia NO se muere con la sesión (vive en el sidecar y sigue mirando) y TAMPOCO
+    // cambia de dueño. Acá se le pasaba al último HUD conectado, y eso es exactamente la fuga que
+    // el plan §10 prohíbe: A arma "mirá mi entrenamiento", A cierra su pestaña, dispara, y B —que
+    // no pidió nada— escucha "lo que estabas mirando se paró", con la etiqueta que escribió A.
+    // Cerrar el socket no es dejar de ser dueño: la conversación de A sigue viva 30 minutos y
+    // puede volver a attachear con el mismo id. Lo que dispare mientras tanto va al buzón, y de
+    // ahí sale con las palabras que correspondan a quién lo termine escuchando.
 }
 
 // ── API para el resto del backend ──────────────────────────────────────────────────────
