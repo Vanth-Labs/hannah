@@ -3,6 +3,11 @@
 // HTTP + el stream SSE de eventos. No sabe de sesiones, de narración ni de qué significa un
 // escalón de la escalera — eso es del puente (senseBridge.js) y del prompt (llm.js).
 //
+// Casi todo acá es transporte y nada más. La excepción está marcada y es una sola: la
+// suscripción SSE mira el `boot=` del sidecar y, cuando cambia, dice en el vocabulario del
+// contrato que lo que estaba armado ya no mira. Es el único lugar del backend por donde ese
+// hecho pasa, porque el proceso que reinició no puede contarlo (ver `restarted()`).
+//
 // Contrato verificado contra backend/sidecar/sense/main.py:
 //   - GET /health abierto; TODA otra ruta exige el bearer. Ojo con la diferencia: con el token
 //     vacío el sidecar responde 401 SIEMPRE (falla cerrado), al revés que la fachada del
@@ -12,7 +17,9 @@
 //     es exactamente lo que se quiere.
 //   - POST /v1/watches -> 201 {watchId} · 400/403 {error,reason} · 409 {error}.
 //   - GET /v1/events: SSE con envelope {v:'sense.v1',watchId,seq,ts,type,data}; `id:` es un
-//     cursor global y Last-Event-ID (o ?after=) reanuda desde el anillo del sidecar.
+//     cursor global y Last-Event-ID (o ?after=) reanuda desde el anillo del sidecar. El
+//     comentario de bienvenida trae `boot=`, la identidad de ESE arranque del sidecar: el cursor
+//     solo quiere decir algo adentro del arranque que lo emitió.
 //
 // A diferencia de agentClient.js, acá NINGUNA función lanza: devuelven { error } como motion.js
 // y vision.js. Es deliberado y no una copia mal hecha: el 403 de una ruta denegada trae en
@@ -122,18 +129,87 @@ export function invalidate() { cache.survey = null; cache.rows = null; }
 
 // ── SSE ───────────────────────────────────────────────────────────────────────────────
 
+// Los tipos con los que un watch SALE del conjunto vivo. `watch.expired` y `watch.faulted`
+// siempre vienen seguidos de un `watch.disarmed`, pero se listan igual: si el anillo truncó el
+// replay puede llegar uno solo, y de los dos lados la conclusión es la misma (ya no se mira).
+const TERMINAL_TYPES = new Set(['watch.disarmed', 'watch.expired', 'watch.faulted']);
+
 /**
  * Se suscribe a GET /v1/events y llama onEvent(envelope) por cada evento. Reconecta solo,
  * con el mismo backoff que agentClient.subscribe, reanudando desde el último `id` visto
  * (Last-Event-ID). onStatus('up'|'down') marca las transiciones para que el puente pueda
  * contar el tiempo sin contacto (contrato de ceguera, M5.1.4).
  * Devuelve { close() }.
+ *
+ * Y UNA COSA MÁS, que no es transporte y está acá igual: DETECTA QUE EL SIDECAR REINICIÓ y lo
+ * dice en el vocabulario del contrato. Ver `restarted()`.
  */
 export function subscribe(onEvent, onStatus = () => {}) {
     let closed = false;
     let lastId = null;
     let attempt = 0;
     let ctl = null;
+    // El arranque del sidecar del que venimos leyendo, y los watches que ese arranque anunció
+    // armados, con el último `seq` que se entregó de cada uno. Las dos cosas son de ESTA
+    // suscripción (una por proceso) y mueren con ella.
+    let boot = null;
+    const watching = new Map();
+
+    /** Lo que se entregó, para saber después qué se creía armado y con qué `seq` iba. */
+    const track = (env) => {
+        if (env.type === 'watch.armed') { watching.set(env.watchId, env.seq); return; }
+        if (!watching.has(env.watchId)) return;
+        if (TERMINAL_TYPES.has(env.type)) watching.delete(env.watchId);
+        else watching.set(env.watchId, Math.max(watching.get(env.watchId), env.seq));
+    };
+
+    /**
+     * El sidecar reinició (`boot` distinto en el comentario de conexión) y hay que DECIRLO.
+     *
+     * Sin esto, un `systemctl restart` de un segundo deja a la persona creyendo que la miran:
+     * `scheduler.shutdown()` publica `watch.disarmed {reason:"shutdown"}` durante el lifespan de
+     * FastAPI, pero sse_starlette parchea la salida de uvicorn y mata todo EventSourceResponse
+     * apenas llega el SIGTERM, o sea ANTES de ese publish; y el anillo se muere con el proceso,
+     * así que tampoco se replaya. Reproducido: el evento queda en el log del sidecar en el cursor
+     * 2 y el stream del suscriptor terminó en el 1. Un `kill -9` no emite nada, ni siquiera eso.
+     * Del lado del backend el silencio no se nota: reconecta, el stream vuelve a `up`, el reloj de
+     * ceguera se cancela y la reconciliación escribe `suspended` sin una palabra.
+     *
+     * NO hace falta preguntar la lista para saber que ya nadie mira: la asunción A4 dice que lo
+     * persistido vuelve `suspended` y JAMÁS armado, así que un `boot` distinto ya es la prueba de
+     * que ningún watch de antes está muestreando. (Si algún día algo volviera armado solo, esto
+     * tendría que consultar GET /v1/watches en vez de confiar en A4.)
+     *
+     * El `seq` sigue la cuenta NUESTRA (+1 sobre el último entregado) y no la del sidecar: allá
+     * `_seq` vuelve a 1 en cada arranque (KNOWN-GAPS #23), y el puente descarta todo evento con
+     * `seq <= w.seq`, así que un 1 recién nacido se perdería en silencio igual que el original.
+     */
+    const restarted = () => {
+        for (const [watchId, seq] of watching) {
+            // Sin `label`: el texto lo escribió el usuario y este archivo no lo tiene. El puente
+            // lo saca de la fila del sidecar (getOrAdopt), que es de donde salió la primera vez.
+            onEvent({ v: 'sense.v1', watchId, seq: seq + 1, ts: Date.now(),
+                type: 'watch.disarmed', data: { reason: 'shutdown' } });
+        }
+        watching.clear();
+    };
+
+    /**
+     * `boot=` viaja en el comentario de bienvenida (`sense.v1 connected` o `sense.resume`) desde
+     * 1a231ff. Es lo único del stream que distingue "se cayó la conexión" de "se cayó el proceso",
+     * que para la persona son cosas opuestas: en la primera sus vigilancias siguen mirando.
+     */
+    const noteBoot = (comment) => {
+        const found = /(?:^|\s)boot=([0-9a-f]+)/.exec(comment);
+        if (!found) return;                                 // keep-alive y cualquier otro comentario
+        if (boot === null) { boot = found[1]; return; }     // primera conexión: no hay con qué comparar
+        if (found[1] === boot) return;
+        logger.warn('el sidecar sense reinició: lo que estaba armado ya no mira', { boot: found[1] });
+        boot = found[1];
+        // El cursor era de un arranque que ya no existe (el anillo nace vacío y vuelve a 0).
+        lastId = null;
+        restarted();
+    };
 
     const loop = async () => {
         while (!closed) {
@@ -150,8 +226,10 @@ export function subscribe(onEvent, onStatus = () => {}) {
                     if (id) lastId = id;
                     let env;
                     try { env = JSON.parse(data); } catch { return; }   // nunca tumbar el stream por un evento raro
-                    if (env && env.v === 'sense.v1') onEvent(env);
-                });
+                    if (!env || env.v !== 'sense.v1') return;
+                    track(env);
+                    onEvent(env);
+                }, noteBoot);
                 const reader = res.body.getReader();
                 const dec = new TextDecoder();
                 for (;;) {
@@ -176,10 +254,12 @@ export function subscribe(onEvent, onStatus = () => {}) {
 
 /**
  * Parser SSE mínimo: acumula líneas hasta la línea en blanco y entrega {id, event, data}.
- * Ignora comentarios (`: keep-alive`, `: sense.resume …`), que es como el sidecar mantiene
- * viva la conexión y como avisa que el replay quedó truncado.
+ * Los comentarios (`: keep-alive`, `: sense.resume …`) NO son ruido: son como el sidecar
+ * mantiene viva la conexión, como avisa que el replay quedó truncado y como dice de qué
+ * arranque suyo viene lo que sigue. Se entregan por `onComment`, sin cuerpo y sin flush,
+ * porque no forman parte de ningún evento.
  */
-export function makeSseParser(onMessage) {
+export function makeSseParser(onMessage, onComment = () => {}) {
     let buf = '';
     let cur = { id: null, event: null, data: [] };
     const flush = () => {
@@ -193,7 +273,7 @@ export function makeSseParser(onMessage) {
             const line = buf.slice(0, nl).replace(/\r$/, '');
             buf = buf.slice(nl + 1);
             if (line === '') { flush(); continue; }
-            if (line.startsWith(':')) continue;                 // comentario / keep-alive
+            if (line.startsWith(':')) { onComment(line.slice(1).replace(/^ /, '')); continue; }
             const i = line.indexOf(':');
             const field = i < 0 ? line : line.slice(0, i);
             const value = i < 0 ? '' : line.slice(i + 1).replace(/^ /, '');
