@@ -1,7 +1,7 @@
 // La slice de watches. Lo que aprendió por las malas la slice del agente: el servidor re-anuncia
 // lo mismo en cada reconexión, así que un reductor que APILA en vez de MEZCLAR llena el HUD de
 // filas duplicadas de la misma vigilancia.
-import { describe, expect, test, beforeEach } from 'vitest';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
 import { useHannahStore } from '../src/store/hannahStore.js';
 
 describe('slice de watches', () => {
@@ -61,5 +61,41 @@ describe('slice de watches', () => {
     test('un parche sin watchId no crea filas fantasma', () => {
         useHannahStore.getState().upsertWatch({ label: 'ninguna' });
         expect(useHannahStore.getState().watches).toHaveLength(0);
+    });
+
+    test('una instantánea no re-sella doneAt: la fila terminal no revive su cuenta atrás', () => {
+        // La instantánea reconstruía cada fila desde WATCH_DEFAULTS, y el servidor no manda
+        // `doneAt` (es un reloj local), así que cada instantánea le regalaba a la terminal otros
+        // WATCH_LINGER_MS en pantalla. Con reloj falso porque con el real las dos marcas pueden
+        // caer en el mismo milisegundo y el test pasaría estando roto.
+        vi.useFakeTimers();
+        try {
+            vi.setSystemTime(1787000000000);
+            const st = useHannahStore.getState();
+            st.upsertWatch({ watchId: 'w_a', label: 'el entrenamiento', state: 'disarmed' });
+            const first = useHannahStore.getState().watches[0].doneAt;
+            expect(first).toBe(1787000000000);
+
+            vi.setSystemTime(1787000030000);
+            st.setWatches([{ watchId: 'w_a', label: 'el entrenamiento', state: 'disarmed' }]);
+            expect(useHannahStore.getState().watches[0].doneAt).toBe(first);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test('una instantánea que trae la fila viva otra vez le quita el doneAt', () => {
+        // Re-armada: ya no hay desenlace que leer, y una cuenta atrás pendiente haría desaparecer
+        // una píldora que sí está mirando.
+        const st = useHannahStore.getState();
+        st.upsertWatch({ watchId: 'w_a', label: 'x', state: 'disarmed' });
+        expect(typeof useHannahStore.getState().watches[0].doneAt).toBe('number');
+        st.setWatches([{ watchId: 'w_a', label: 'x', state: 'armed' }]);
+        expect(useHannahStore.getState().watches[0].doneAt).toBe(null);
+    });
+
+    test('una fila terminal que la instantánea trae por primera vez sí se sella', () => {
+        useHannahStore.getState().setWatches([{ watchId: 'w_z', label: 'x', state: 'expired' }]);
+        expect(typeof useHannahStore.getState().watches[0].doneAt).toBe('number');
     });
 });

@@ -7,6 +7,7 @@
 // watch que NO está mirando (blind, suspended, expired, disarmed, faulted) no puede parecerse a
 // uno armado. El borde discontinuo lo dice sin depender del color (daltonismo, capturas en gris);
 // el color y el icono solo distinguen el motivo.
+import { useEffect, useState } from 'react';
 import { useHannahStore, WATCH_TERMINAL } from '../store/hannahStore.js';
 
 // Una fila terminal se queda unos segundos para que se lea el desenlace y luego desaparece,
@@ -58,13 +59,45 @@ export function WatchPill({ watch, onDisarm }) {
     );
 }
 
+/** Filas que se pintan a la hora `now`: las vivas, y las terminales que aún están de cuerpo presente. */
+export const visibleWatches = (rows, now) =>
+    rows.filter((w) => !w.doneAt || now - w.doneAt < WATCH_LINGER_MS);
+
+/**
+ * Instante en que la columna tiene que volver a mirar el reloj, o Infinity si no hay nada
+ * pendiente de irse. Sin esto no había ningún despertar: nadie re-renderiza cuando el único
+ * mensaje que faltaba ya llegó.
+ */
+export const nextRailWake = (rows, now) => rows.reduce(
+    (soonest, w) => (w.doneAt && now - w.doneAt < WATCH_LINGER_MS
+        ? Math.min(soonest, w.doneAt + WATCH_LINGER_MS)
+        : soonest),
+    Infinity,
+);
+
 // Columna de píldoras, arriba a la izquierda y bajo la línea de estado: la vigilancia es estado
 // ambiente, no un evento modal, así que no compite por el centro con AgentPill ni con el toast.
 // Se suscribe ELLA al store (selector atómico `s.watches`) en vez de recibir la lista por prop:
 // así una muestra que llega cada 15s no re-renderiza el HUD entero.
 export function WatchesRail({ onDisarm }) {
     const watches = useHannahStore((s) => s.watches);
-    const visible = watches.filter((w) => !w.doneAt || Date.now() - w.doneAt < WATCH_LINGER_MS);
+    // `Date.now()` dentro del filtro no es reactivo: el filtro solo se re-evaluaba cuando cambiaba
+    // el store, y `watch_disarmed` es POR DEFINICIÓN el último mensaje de esa vigilancia. La fila
+    // terminal se quedaba en pantalla para siempre, hasta que otro watch cualquiera mandara algo.
+    // Por eso el reloj es estado.
+    const [now, setNow] = useState(() => Date.now());
+    const visible = visibleWatches(watches, now);
+
+    // Un solo timeout al vencimiento más próximo, no un intervalo: esta columna vive lo que vive
+    // el HUD y mientras no haya una fila terminal esperando su turno no hay nada que refrescar.
+    const wake = nextRailWake(watches, now);
+    useEffect(() => {
+        if (!Number.isFinite(wake)) return undefined;
+        // El margen evita reprogramar en bucle si el timer despierta un pelo antes de la hora.
+        const id = setTimeout(() => setNow(Date.now()), Math.max(0, wake - Date.now()) + 20);
+        return () => clearTimeout(id);
+    }, [wake]);
+
     if (!visible.length) return null;
     return (
         <div style={{

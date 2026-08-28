@@ -17,9 +17,16 @@ const WATCH_DEFAULTS = {
 // `rung`) los pisaría con undefined al mezclar y la píldora se quedaría sin etiqueta.
 const definedOnly = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
 
-// `doneAt` se sella UNA vez, la primera que la fila entra en un estado terminal: si se re-sellara
-// con cada mensaje posterior la píldora no se retiraría nunca.
-const stampDone = (w) => (WATCH_TERMINAL.includes(w.state) && !w.doneAt ? { ...w, doneAt: Date.now() } : w);
+// `doneAt` es un reloj LOCAL ("desde cuándo esta fila dejó de mirar", para retirar la píldora a
+// los WATCH_LINGER_MS), no un dato del servidor: ningún mensaje ni ninguna instantánea lo trae.
+// Se sella UNA vez, la primera que la fila entra en un estado terminal — si se re-sellara con
+// cada mensaje posterior la píldora no se retiraría nunca. Y se borra si la fila vuelve a un
+// estado vivo (re-armada), porque entonces no hay desenlace que leer y la cuenta atrás pendiente
+// la haría desaparecer estando armada.
+const stampDone = (w) => {
+    if (!WATCH_TERMINAL.includes(w.state)) return w.doneAt ? { ...w, doneAt: null } : w;
+    return w.doneAt ? w : { ...w, doneAt: Date.now() };
+};
 
 export const useHannahStore = create((set, get) => ({
     // Conexión
@@ -107,12 +114,18 @@ export const useHannahStore = create((set, get) => ({
         get().upsertWatch({ ...patch, fires });
     },
 
-    // Instantánea del servidor (GET /api/v1/watches): sustituye la lista entera, porque es la
-    // verdad completa — una fila que ya no está allí tampoco está aquí.
-    setWatches: (rows) => set({
-        watches: (rows || [])
-            .filter((r) => r?.watchId)
-            .map((r) => stampDone({ ...WATCH_DEFAULTS, ...definedOnly(r) })),
+    // Instantánea completa: sustituye la lista entera, porque es la verdad completa — una fila que
+    // ya no está allí tampoco está aquí. Conserva el `doneAt` de la fila que ya teníamos: es un
+    // sello local y la instantánea no lo trae, así que reconstruir la fila desde WATCH_DEFAULTS
+    // le regalaba a cada terminal otros WATCH_LINGER_MS en pantalla con cada instantánea que
+    // llegara, y la píldora no se iba nunca.
+    setWatches: (rows) => set((state) => {
+        const before = new Map(state.watches.map((w) => [w.watchId, w.doneAt]));
+        return {
+            watches: (rows || [])
+                .filter((r) => r?.watchId)
+                .map((r) => stampDone({ ...WATCH_DEFAULTS, doneAt: before.get(r.watchId) ?? null, ...definedOnly(r) })),
+        };
     }),
 
     setCommandRun: (commandRun) => set({ commandRun }),

@@ -5,9 +5,10 @@
 // repo cuyos tests corren en `environment: node`. Sin JSX por la misma razón: la config de vitest
 // no monta el plugin de React.
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { WatchPill } from '../src/components/WatchPill.jsx';
+import { WatchPill, WATCH_LINGER_MS, nextRailWake, visibleWatches } from '../src/components/WatchPill.jsx';
 
 const pill = (watch) => renderToStaticMarkup(
     React.createElement(WatchPill, { watch: { watchId: 'w_abc', label: 'el entrenamiento', fires: 0, ...watch }, onDisarm: () => {} }),
@@ -31,6 +32,11 @@ describe('WatchPill', () => {
         }
     });
 
+    // Nota sobre la línea de aceptación de M5.1.5 en el ROADMAP: pide "armed / degraded / blind".
+    // `degraded` NO es uno de los seis estados del contrato (armed, blind, suspended, expired,
+    // disarmed, faulted): es un contador de salud de GET /api/v1/health que en esta fase tanto el
+    // sidecar como el puente dejan clavado en 0 (senseBridge.js::watchCounters). No hay nada que
+    // pintar, así que no hay test que escribir. Se cubren los seis de verdad y uno desconocido.
     test('un estado desconocido falla hacia "no está mirando"', () => {
         // Un backend más nuevo que esta HUD no puede conseguir que una fila mienta diciendo
         // que mira.
@@ -50,5 +56,51 @@ describe('WatchPill', () => {
 
     test('sin disparos no hay contador que distraiga', () => {
         expect(pill({ state: 'armed', fires: 0 })).not.toContain('⚡');
+    });
+});
+
+// La columna del HUD. El defecto que se arregló aquí: el filtro llamaba a `Date.now()` dentro del
+// render, y `watch_disarmed` es por definición el ÚLTIMO mensaje de esa vigilancia, así que nadie
+// volvía a re-renderizar y la fila terminal se quedaba en pantalla para siempre. El comentario del
+// componente prometía que se iba a los pocos segundos. Se prueban las dos funciones puras porque
+// aquí no hay DOM: sin montar de verdad no hay efectos, y con el store suscrito zustand serviría
+// `getInitialState`.
+describe('columna de píldoras (WatchesRail)', () => {
+    const DONE = 1787000000000;
+    const terminal = [{ watchId: 'w_a', label: 'el entrenamiento', state: 'disarmed', doneAt: DONE }];
+
+    test('una fila terminal tiene un despertar programado y al llegar ya no se pinta', () => {
+        const wake = nextRailWake(terminal, DONE + 1000);
+        expect(wake).toBe(DONE + WATCH_LINGER_MS);
+        expect(visibleWatches(terminal, wake - 1)).toHaveLength(1);
+        expect(visibleWatches(terminal, wake)).toHaveLength(0);
+    });
+
+    test('cuando ya se fue no queda nada que programar', () => {
+        // Si esto devolviera un número, el timeout se re-agendaría solo cada 20ms para siempre.
+        expect(nextRailWake(terminal, DONE + WATCH_LINGER_MS)).toBe(Infinity);
+    });
+
+    test('una vigilancia viva no agenda ningún timer', () => {
+        // La columna re-renderiza con cada muestra; un intervalo permanente aquí sería trabajo
+        // constante en un HUD que ya se re-renderiza con cada visema.
+        const rows = [{ watchId: 'w_a', state: 'armed', doneAt: null }];
+        expect(nextRailWake(rows, DONE)).toBe(Infinity);
+        expect(visibleWatches(rows, DONE + 10 * WATCH_LINGER_MS)).toHaveLength(1);
+    });
+
+    test('con dos filas terminales despierta primero por la que se va antes', () => {
+        const rows = [...terminal, { watchId: 'w_b', state: 'faulted', doneAt: DONE - 3000 }];
+        expect(nextRailWake(rows, DONE)).toBe(DONE - 3000 + WATCH_LINGER_MS);
+    });
+
+    test('el despertar es un timeout, no un intervalo permanente', () => {
+        // Se lee el fuente porque sin DOM no hay efectos que espiar. Lo que protege: la columna
+        // vive lo que vive el HUD, que se re-renderiza con cada visema, así que un setInterval
+        // aquí sería trabajo constante para no mirar nada la mayor parte del tiempo. Antes no
+        // había ni lo uno ni lo otro y por eso la fila terminal no se iba nunca.
+        const src = readFileSync(new URL('../src/components/WatchPill.jsx', import.meta.url), 'utf8');
+        expect(src).toContain('setTimeout(');
+        expect(src).not.toContain('setInterval(');
     });
 });
