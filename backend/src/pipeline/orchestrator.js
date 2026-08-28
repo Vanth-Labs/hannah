@@ -1,6 +1,7 @@
 // src/pipeline/orchestrator.js
 import { transcribeAudio } from './asr.js';
 import { generateDialogueStream, stripActionTags, HANDS_LABEL_RE } from './llm.js';
+import { isReady as brainReady } from './brain.js';
 import { synthesizeSpeechStream } from './tts.js';
 import { generateVisemesFromText } from './lipsync.js';
 import { generateMotion, generateMotionFromText, wavDurationS, MOTION_TAIL_S } from './motion.js';
@@ -301,6 +302,10 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
         const session = conversationManager.getSession(sessionId);
         if (!session) throw new Error('La sesión no existe o ha expirado');
 
+        // Sin cerebro elegido/usable no hay turno: el overlay muestra la bienvenida. Mejor un
+        // aviso claro que un [error llm] a medias en la primera frase.
+        if (!brainReady()) { onStreamSegment({ type: 'brain_required' }); return; }
+
         // 2. ASR: Transcribir el audio del usuario
         logger.info('Iniciando transcripción ASR...', { sessionId });
         const asrResult = await transcribeAudio(audioBuffer);
@@ -349,6 +354,7 @@ export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegm
         // 1. Validar la sesión
         const session = conversationManager.getSession(sessionId);
         if (!session) throw new Error('La sesión no existe o ha expirado');
+        if (!brainReady()) { onStreamSegment({ type: 'brain_required' }); return; }
 
         logger.info('⚙️ Procesando inyección visual en el pipeline de texto...', { sessionId });
 

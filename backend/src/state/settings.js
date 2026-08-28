@@ -6,6 +6,7 @@
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { jsonFile } from './dataDir.js';
+import { syncBrain, isLocalUrl } from '../pipeline/brain.js';
 
 const SETTINGS_FILE = jsonFile('settings.json');
 
@@ -21,6 +22,8 @@ const ALLOWED = {
   // primitiva que corre sin ninguna frase del usuario, y bajarlos desde la UI sería
   // ensancharlos con un click (plan §9, "el control plane es más estricto que el default").
   sense: ['url', 'token'],
+  // The first-run choice: 'local' (Ollama) or 'cloud' (a provider). Vision and memory recall follow it.
+  brain: ['mode'],
 };
 
 // Secretos: nunca vuelven al navegador (se redactan a hasApiKey/hasToken).
@@ -44,6 +47,12 @@ export function applySettings(patch = {}) {
       config[section][key] = value;
     }
   }
+  // The ⚙ panel's Brain card saves llm.* only: a new base URL implies the mode (local Ollama
+  // vs a provider), unless the caller set brain.mode explicitly (the welcome screen does).
+  if (!blank(patch.llm?.baseUrl) && blank(patch.brain?.mode)) {
+    config.brain.mode = isLocalUrl(patch.llm.baseUrl) ? 'local' : 'cloud';
+  }
+  syncBrain();
   return getSettings();
 }
 
@@ -82,7 +91,7 @@ export function persist() {
 /** Al boot: aplica data/settings.json POR ENCIMA de los defaults de .env. */
 export function loadPersisted() {
   const saved = SETTINGS_FILE.read();
-  if (!saved) return;
+  if (!saved) { syncBrain(); return; }
   applySettings(saved);
   logger.info('Settings de usuario cargados desde data/settings.json');
 }

@@ -58,6 +58,13 @@ jest.unstable_mockModule('../../src/pipeline/tts.js', () => ({
 jest.unstable_mockModule('../../src/pipeline/windowControl.js', () => ({ ...realWindow, moveWindow }));
 jest.unstable_mockModule('../../src/pipeline/agentBridge.js', () => ({ ...realBridge, dispatch }));
 jest.unstable_mockModule('../../src/pipeline/tools.js', () => ({ ...realTools, armWatch }));
+// El cerebro: desde que se elige en el primer arranque, sin uno NO HAY TURNO (orchestrator
+// devuelve `brain_required` y se va). Estas pruebas son sobre lo que el turno hace con los tags,
+// así que acá hay cerebro siempre. Que la puerta y la narración de una vigilancia se compongan
+// bien es otra prueba, la de abajo del todo, y esa sí la apaga a propósito.
+const brainReady = jest.fn(() => true);
+const realBrain = await import('../../src/pipeline/brain.js');
+jest.unstable_mockModule('../../src/pipeline/brain.js', () => ({ ...realBrain, isReady: brainReady }));
 
 const { processTextTurn } = await import('../../src/pipeline/orchestrator.js');
 const { conversationManager } = await import('../../src/state/conversationManager.js');
@@ -193,5 +200,25 @@ describe('lo que queda escrito de un [WATCH:]: la frase, nunca el tag ni la ruta
         await turn({});
         expect(conversationManager.getSession(sessionId).turns.at(-1).content)
             .toBe('(I handed this to my hands: list the files in Documents)');
+    });
+});
+
+// La puerta del cerebro (se elige en el primer arranque) y el acuse de un disparo se cruzan acá,
+// y el cruce es el caso de las 3 de la mañana: si no hay cerebro no hay turno, así que la frase
+// NO se dice. Lo único que importa entonces es que nadie la dé por dicha. processTextTurn se va
+// antes de la tubería y devuelve undefined; agentBridge lo lee con `!!r?.spoken`, así que sale
+// `spoken:false, reason:'no_ack'` y senseBridge deja el disparo en el buzón en vez de comérselo.
+// Sin esta prueba, alguien "arregla" ese return para que devuelva algo y el disparo se pierde.
+describe('sin cerebro no hay turno, y un disparo no puede darse por dicho', () => {
+    test('processTextTurn no devuelve un acuse que se pueda confundir con haber hablado', async () => {
+        brainReady.mockReturnValueOnce(false);
+        script = 'esto no se va a decir';
+        const sent = [];
+        const r = await processTextTurn(sessionId, '[YOUR EYES] algo se paró',
+            (m) => sent.push(m), { noActions: true, ephemeral: true });
+
+        expect(!!r?.spoken).toBe(false);
+        expect(sent.map((m) => m.type)).toContain('brain_required');
+        expect(sent.some((m) => m.type === 'audio_chunk')).toBe(false);
     });
 });

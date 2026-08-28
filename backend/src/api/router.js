@@ -4,6 +4,7 @@ import { handler } from './handler.js';
 import { getHealth } from './health.js';
 import { createSession, deleteSession } from './sessions.js';
 import { readSettings, writeSettings } from './settings.js';
+import { readBrain, chooseBrain, installOllama, startOllama, pullModels } from './brain.js';
 import { readShortcuts, writeShortcuts } from './shortcuts.js';
 import { readVoices, previewVoice } from './tts.js';
 import { readAvatar, avatarInfo, writeAvatar, removeAvatar, MAX_AVATAR_BYTES } from './avatar.js';
@@ -20,6 +21,12 @@ router.post('/session', handler('session_creation_failed', createSession));
 router.delete('/session/:id', handler('session_deletion_failed', deleteSession));
 
 // Config de proveedores (BYO model/API) — global, redactada al leer
+// First run: where Hannah thinks. The overlay shows the welcome screen until `configured`.
+router.get('/brain', handler('brain_status_failed', readBrain));
+router.post('/brain/choose', handler('brain_choose_failed', chooseBrain));
+router.post('/brain/ollama/install', handler('ollama_install_failed', installOllama));
+router.post('/brain/ollama/start', handler('ollama_start_failed', startOllama));
+router.post('/brain/ollama/pull', handler('ollama_pull_failed', pullModels));
 router.get('/settings', handler('settings_read_failed', readSettings));
 router.post('/settings', handler('settings_write_failed', writeSettings));
 router.get('/shortcuts', handler('shortcuts_read_failed', readShortcuts));

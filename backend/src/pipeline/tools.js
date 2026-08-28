@@ -85,6 +85,7 @@ const TOOLS = {
   look_now: {
     schema: fn('look_now', 'Look through your camera right now and describe what you currently see.'),
     handler: async (_args, ctx) => {
+      if (config.vision.provider === 'off') return 'vision is switched off on this install (no vision model); say so plainly';
       const frame = getLastFrame(ctx?.sessionId);
       if (!frame) return 'the camera is not active right now';
       return (await describeFrame(frame, 'Describe briefly what you see right now.')) || 'could not make it out';

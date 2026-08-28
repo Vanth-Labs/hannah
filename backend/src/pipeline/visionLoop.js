@@ -14,6 +14,7 @@ const VLM_PROMPT = 'You are looking through your own eyes (a webcam) at the pers
 
 // Describe la escena con el proveedor activo: VLM local (rico) o YOLO (etiquetas).
 export async function describeScene(frameBase64) {
+    if (config.vision.provider === 'off') return '';
     if (config.vision.provider === 'vlm') {
         return describeFrame(frameBase64, VLM_PROMPT);
     }
