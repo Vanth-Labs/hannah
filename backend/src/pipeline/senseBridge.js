@@ -43,7 +43,7 @@ import { logger } from '../utils/logger.js';
 import { DATA_DIR } from '../state/dataDir.js';
 import * as senseClient from './senseClient.js';
 import { conversationManager } from '../state/conversationManager.js';
-import { clean, hasSession, narrateTo } from './agentBridge.js';
+import { clean, hasSession, narrateTo, onSpoken, spokenCount } from './agentBridge.js';
 import { watchLabel } from './llm.js';
 
 // ── Estado ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +70,9 @@ let reconcileChain = Promise.resolve();
 // Baja de conversationManager.onDelete: hay que enterarse de que una sesión dueña se terminó,
 // porque desde ese momento sus disparos guardados ya no son de nadie (ver onOwnerGone).
 let forgetHook = null;
+// Baja de agentBridge.onSpoken: enterarse de que la voz volvió a funcionar. Es lo único que puede
+// reabrir un disparo que se rindió contra un proveedor caído (ver flushInbox y voiceCameBack).
+let spokenHook = null;
 
 // Cuánto se guarda una vigilancia terminada: lo justo para que el HUD muestre por qué se
 // desarmó y para contestar una pregunta tardía. Mismo criterio (y mismo número) que el agente.
@@ -78,12 +81,19 @@ const FORGET_MS = 5 * 60 * 1000;
 // la vuelta del usuario en veinte frases seguidas. Se tira lo VIEJO: el último disparo es el
 // que describe el estado actual.
 const INBOX_MAX = 10;
-// Cuántas veces se intenta DECIR un disparo guardado antes de rendirse en voz alta. Existe
-// porque desde ahora el disparo NO sale del buzón hasta que se acusa que se dijo: contra un
-// proveedor caído (un 401, Ollama apagado) reintentar sin techo es gastar una llamada al modelo
-// por disparo y por attach, para siempre, y ninguna de esas puede salir bien. Es un techo de
-// fallos SEGUIDOS: un acuse positivo prueba que la voz volvió y le devuelve el crédito entero a
-// todo lo que quede guardado (ver outOfInbox).
+// Cuántas veces se intenta DECIR un disparo guardado antes de rendirse. Existe porque desde ahora
+// el disparo NO sale del buzón hasta que se acusa que se dijo: contra un proveedor caído (un 401,
+// Ollama apagado) reintentar sin techo es gastar una llamada al modelo por disparo y por attach,
+// para siempre, y ninguna de esas puede salir bien.
+//
+// ES UN TECHO DE FALLOS SEGUIDOS, y eso hay que hacerlo cierto en los DOS casos, no en uno. El
+// reset era el acuse positivo de OTRA fila del buzón (ver outOfInbox), o sea inalcanzable cuando
+// el que se rindió es el ÚNICO disparo guardado — que es el caso NORMAL: SENSE_MAX_WATCHES son 2
+// y un disparo es raro. Así, tres recargas del HUD durante un hipo del proveedor silenciaban para
+// siempre un disparo real de las 3am, que encima seguía contado como pendiente: el comentario
+// decía "seguidos" y para la última fila contaba los de toda la vida. Ahora la puerta la reabre
+// cualquier prueba de que la voz anda, incluido un turno normal de la persona (voiceCameBack), y
+// rendirse se NOTA por los dos canales que no dependen del modelo (ver failedDelivery).
 const TRIP_MAX_ATTEMPTS = 3;
 
 // ── El buzón durable ───────────────────────────────────────────────────────────────────
@@ -110,6 +120,9 @@ let stream = { boot: null, cursor: 0 };
 // queda deliberadamente afuera: es cierto solo mientras este proceso viva, y persistirlo haría
 // que un disparo sobreviviente a un crash naciera marcado como "ya se está entregando" y no se
 // entregara nunca. `attempts` sí se guarda: es lo que acota el reintento entre reinicios.
+// `voiceAtGiveUp` tampoco se escribe, y por la misma razón que `inFlight`: es una marca del
+// contador de voz de ESTE proceso, y un backend que arranca de nuevo todavía no probó nada — así
+// que ausente (0) significa lo correcto, "la primera oración que diga alcanza".
 const persistable = ({ watchId, label, sessionId, at, confidence, fires, attempts }) =>
     ({ watchId, label, sessionId, at, confidence, fires, attempts: attempts || 0 });
 
@@ -619,13 +632,42 @@ function outOfInbox(trip) {
 function failedDelivery(trip) {
     trip.inFlight = false;
     trip.attempts = (trip.attempts || 0) + 1;
+    // Cómo estaba la voz al rendirse, no solo el hecho: es contra esta marca que se compara su
+    // vuelta, y sin ella "volvió" sería cualquier frase dicha alguna vez (ver voiceCameBack).
+    if (trip.attempts === TRIP_MAX_ATTEMPTS) trip.voiceAtGiveUp = spokenCount();
     saveInbox();
     if (trip.attempts < TRIP_MAX_ATTEMPTS) return;
     if (trip.attempts > TRIP_MAX_ATTEMPTS) return;                 // ya se gritó una vez
     logger.error('NO se pudo decir un disparo despues de varios intentos: queda guardado y sin contar',
         { watchId: trip.watchId, at: trip.at, attempts: trip.attempts });
+    // `undelivered` es la mitad que faltaba del grito. Antes salía un watch_tripped IDÉNTICO a los
+    // de los tres intentos, así que en la pantalla rendirse era indistinguible de haber hablado.
+    // La otra mitad la cuenta watchCounters (`stalled`), que es por donde lo ve `hannah doctor`.
     toSession(trip.sessionId, { type: 'watch_tripped', watchId: trip.watchId, label: trip.label,
-        at: trip.at, confidence: trip.confidence });
+        at: trip.at, confidence: trip.confidence, undelivered: true });
+}
+
+/** Se rindió: nadie está intentando decirlo hasta que la voz PRUEBE que volvió. */
+const gaveUp = (trip) => (trip.attempts || 0) >= TRIP_MAX_ATTEMPTS;
+
+/**
+ * ¿Volvió la voz DESPUÉS de que este disparo se rindiera? Tiene que ser una PRUEBA y no un plazo:
+ * reintentar cada tantos minutos contra un proveedor caído es exactamente lo que el techo existe
+ * para evitar. La prueba es que salió una oración más con su audio en algún lado del proceso
+ * (agentBridge.spokenCount) — un turno normal de la persona alcanza, y es lo que pasa en la vida
+ * real: alguien arregla la API key, le habla, y ella contesta bien.
+ * `voiceAtGiveUp` ausente —una fila que viene del disco— cuenta como "la primera oración alcanza",
+ * que es lo correcto: un backend recién arrancado todavía no probó nada.
+ */
+const voiceCameBack = (trip) => spokenCount() > (trip.voiceAtGiveUp || 0);
+
+/** Le vuelve el crédito ENTERO: el techo cuenta fallos seguidos y esta racha se cortó. */
+function reopen(trip) {
+    logger.info('la voz volvió: se reintenta un disparo que se había rendido',
+        { watchId: trip.watchId, at: trip.at, attempts: trip.attempts });
+    trip.attempts = 0;
+    trip.voiceAtGiveUp = 0;
+    saveInbox();
 }
 
 /**
@@ -664,8 +706,16 @@ function flushInbox() {
     // entregas modifican la lista mientras se itera.
     for (const trip of [...inbox]) {
         if (trip.inFlight) continue;
-        if ((trip.attempts || 0) >= TRIP_MAX_ATTEMPTS) continue;   // se rindió y ya se gritó: no se insiste
-        if (canSpeakTo(trip.sessionId)) { tryDeliver(trip, 'tripped_away'); continue; }
+        const speakable = canSpeakTo(trip.sessionId);
+        if (gaveUp(trip)) {
+            // No se insiste hasta que la voz pruebe que volvió, y cuando lo prueba se insiste en
+            // el acto. Se le pide ADEMÁS que haya a quién decírselo para no reescribir el archivo
+            // cada vez que ella diga una frase con la dueña desconectada: el crédito no sirve de
+            // nada mientras no haya oído.
+            if (!speakable || !voiceCameBack(trip)) continue;
+            reopen(trip);
+        }
+        if (speakable) { tryDeliver(trip, 'tripped_away'); continue; }
         if (conversationManager.hasSession(trip.sessionId)) continue;   // viva: el disparo sigue siendo SUYO
         orphaned(trip);
     }
@@ -912,6 +962,12 @@ export const isHealthy = () => healthy;
 export const snapshot = () => [...watches.values()].map(({ watchId, label, state, rung, sensorKind, fires, sessionId }) =>
     ({ watchId, label, state, rung, sensorKind, fires, sessionId }));
 export const pendingTrips = () => inbox.length;
+/**
+ * De lo pendiente, lo TRABADO: los que llegaron al techo y a los que nadie les está insistiendo
+ * hasta que la voz vuelva. Es una clase distinta de pendiente y por eso se cuenta aparte —
+ * "pending: 1" solo no distingue "está por decirse" de "se dejó de intentar".
+ */
+export const stalledTrips = () => inbox.filter(gaveUp).length;
 
 /** Desarma (HUD o DELETE). El sidecar es el dueño; acá solo se le pide y se invalida la foto. */
 export async function disarm(watchId) {
@@ -927,10 +983,12 @@ export async function disarm(watchId) {
  */
 export async function watchCounters() {
     const { watches: rows, error } = await senseClient.watchRows();
-    // `pending` son disparos que ocurrieron y todavía no se contaron en voz alta. Va acá porque un
-    // disparo huérfano NO se narra nunca (plan §10) y este es el único lugar donde alguien puede
-    // enterarse de que existe sin leer el disco: `hannah doctor` pega a esta ruta.
-    const counters = { armed: 0, degraded: 0, blind: 0, suspended: 0, pending: inbox.length, lastSampleAt: null };
+    // `pending` son disparos que ocurrieron y todavía no se contaron en voz alta, y `stalled` los
+    // que ADEMÁS se rindieron. Van acá porque un disparo huérfano NO se narra nunca (plan §10) y
+    // este es el único lugar donde alguien puede enterarse de que existen sin leer el disco:
+    // `hannah doctor` pega a esta ruta.
+    const counters = { armed: 0, degraded: 0, blind: 0, suspended: 0, pending: inbox.length,
+        stalled: stalledTrips(), lastSampleAt: null };
     if (error) return { ...counters, error };
     for (const row of rows) {
         if (row.state === 'armed') counters.armed++;
@@ -952,6 +1010,10 @@ export async function init(deps = {}) {
     // Enterarse de que una sesión se terminó, igual que agentBridge. Sin esto el puente cree que
     // una sesión existe hasta que se cierra su socket, que son dos cosas distintas.
     if (!forgetHook) forgetHook = conversationManager.onDelete(onOwnerGone);
+    // Y de que la voz volvió a andar, que es el otro cambio de "quién puede oír": un disparo que
+    // se rindió contra un proveedor caído se puede decir apenas ella vuelve a hablar bien, sin
+    // esperar a que la persona recargue el HUD (ver flushInbox).
+    if (!spokenHook) spokenHook = onSpoken(() => { if (inbox.length) flushInbox(); });
     loadInbox();
     if (inbox.length) logger.info('buzón de vigilancias con entregas pendientes', { pending: inbox.length });
     // De dónde se retoma el anillo del sidecar: es lo que explica qué eventos se van a descartar

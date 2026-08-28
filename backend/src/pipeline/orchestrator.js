@@ -417,7 +417,14 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
             if (signal?.aborted) return;
             // opts.noActions viaja hasta acá: el gate del prompt (llm.js) solo deja de OFRECER
             // los tags; si el modelo los emite igual, quien no los ejecuta es el segmento.
-            if (await processAndSendSegment(text, onStreamSegment, sessionId, signal, !!opts.noActions)) spoken = true;
+            if (await processAndSendSegment(text, onStreamSegment, sessionId, signal, !!opts.noActions)) {
+                spoken = true;
+                // Una oración salió con su audio: es la prueba de que el modelo y el TTS andan
+                // AHORA. La leen los ojos para reabrir un disparo de vigilancia que se rindió
+                // contra un proveedor caído; sin marcarla acá, el último disparo del buzón no se
+                // dice nunca más aunque la voz vuelva (senseBridge, TRIP_MAX_ATTEMPTS).
+                agentBridge.markSpoken();
+            }
         });
     };
 

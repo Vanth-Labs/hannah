@@ -88,6 +88,17 @@ const arm = async (watchId, sessionId, label = 'the training') => {
         periodMs: 15000, expiresAt: Date.now() + 3600000, tier: 'observe' });
 };
 
+/**
+ * UN TURNO NORMAL QUE SÍ HABLA: la persona le dice algo y ella contesta con voz. Es la única
+ * prueba de que el proveedor volvió cuando en el buzón no queda otra fila con la que probarlo.
+ * En el backend de verdad la marca la pone el orquestador en el único lugar donde se sabe que una
+ * oración salió con su audio — `if (await processAndSendSegment(...)) { spoken = true;
+ * agentBridge.markSpoken(); }` en executeLlmPipeline —, y que ESA línea existe lo afirma
+ * narrationGate.test.js, que corre el orquestador de verdad. Acá no hay orquestador, así que el
+ * turno normal se representa con la misma llamada y nada más.
+ */
+const turnoNormal = () => agentBridge.markSpoken();
+
 const trips = () => JSON.parse(fs.readFileSync(process.env.HANNAH_WATCH_INBOX_FILE, 'utf8')).trips;
 /** Igual, pero tolera que el archivo no exista todavía: se usa para mirar el disco A MITAD de una entrega. */
 const diskTrips = () => { try { return trips(); } catch { return []; } };
@@ -117,6 +128,12 @@ beforeEach(async () => {
             return { spoken: false, error: 'llm_failed' };
         }
         narrated.push({ sessionId, prompt, opts });
+        // Y (c) MARCA QUE LA VOZ ANDA cuando de verdad habló. Es la tercera cosa que hace el
+        // original y la que faltaba acá: el orquestador la pone en el único lugar donde se sabe
+        // que una oración salió con su audio (executeLlmPipeline). Sin esto el espía tiene ÉXITO
+        // de una manera que el de verdad no tiene, y el buzón no se entera de que puede volver a
+        // intentar lo que se había rendido.
+        agentBridge.markSpoken();
         return { spoken: true, error: null };
     } });
     await bridge.init();
@@ -581,15 +598,93 @@ describe('EL ACUSE DE RECIBO: nada sale del buzón hasta que se sabe que se DIJO
         expect(trips()[0].attempts).toBe(3);
         expect(sentTo[s1].filter((m) => m.type === 'watch_tripped')).toHaveLength(4);   // 3 intentos + el grito
 
-        // Y el crédito vuelve cuando la voz vuelve: un acuse positivo de OTRO disparo prueba que
+        // Y el crédito vuelve cuando la voz vuelve: el acuse positivo de OTRO disparo prueba que
         // el modelo contesta, así que lo guardado deja de estar condenado por los fallos viejos.
+        // Ya no hace falta esperar al próximo attach: la prueba de que la voz anda es en sí misma
+        // el momento de reintentar.
         llmDown = false;
         await arm('w_2', s1, 'the render');
         await emit('w_2', 2, 'watch.tripped', { label: 'the render', at: Date.now(), fires: 1 });
-        expect(trips()[0].attempts).toBe(0);
-        attach(s1);
         await bridge._settle();
         expect(bridge.pendingTrips()).toBe(0);
+        expect(narrated.filter((n) => /the training/.test(n.prompt))).toHaveLength(1);
+    });
+
+    test('el ÚLTIMO disparo del buzón tampoco se queda mudo para siempre: se dice cuando la voz vuelve', async () => {
+        // EL CASO NORMAL, no el borde: SENSE_MAX_WATCHES son 2 y un disparo es raro, así que lo
+        // habitual es que el que se rindió sea la ÚNICA fila del buzón. El reset del techo era el
+        // acuse de OTRA fila, o sea inalcanzable justo ahí: tres recargas del HUD durante un hipo
+        // del proveedor silenciaban PARA SIEMPRE un disparo real de las 3am, que encima seguía
+        // contándose como pendiente. El comentario decía "fallos seguidos" y para la última fila
+        // contaba los de toda la vida.
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'the training');
+        llmDown = true;
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+        for (let i = 0; i < 3; i++) { attach(s1); await bridge._settle(); }   // tres recargas del HUD
+        expect(narrateCalls).toBe(3);
+        expect(narrated).toHaveLength(0);
+        expect(trips()).toHaveLength(1);                  // es la única: nada más puede darle crédito
+        expect(trips()[0].attempts).toBe(3);
+
+        // Vuelve el proveedor y la persona habla un turno normal, que sí sale por los parlantes.
+        llmDown = false;
+        turnoNormal();
+        await bridge._settle();
+
+        expect(narrated.filter((n) => /STOPPED/.test(n.prompt))).toHaveLength(1);
+        expect(narrated[0].sessionId).toBe(s1);
+        expect(narrated[0].prompt).toContain('the training');
+        expect(bridge.pendingTrips()).toBe(0);
+        expect(trips()).toHaveLength(0);
+    });
+
+    test('mientras la voz sigue rota, rendirse SIGUE siendo rendirse: no se reintenta por reintentar', async () => {
+        // La otra mitad, y la que impide arreglar lo de arriba a lo bruto. El techo existe porque
+        // contra un proveedor caído cada attach gasta una llamada al modelo por disparo, para
+        // siempre y sin que ninguna pueda salir bien. Solo lo reabre una prueba de que la voz
+        // volvió: sin esa prueba, diez attachs más no gastan ni un intento.
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'the training');
+        llmDown = true;
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+        for (let i = 0; i < 10; i++) { attach(s1); await bridge._settle(); }
+
+        expect(narrateCalls).toBe(3);
+        expect(bridge.pendingTrips()).toBe(1);
+    });
+
+    test('rendirse se NOTA: el aviso dice que no se pudo decir, y hannah doctor lo cuenta', async () => {
+        // "Se rinde en voz alta" no puede ser literal —la voz es justo lo que está roto— así que
+        // tiene que serlo por los dos canales que no dependen del modelo. Y no alcanzaba con
+        // mandar OTRO watch_tripped igual a los tres intentos: la pantalla mostraba lo mismo que
+        // en una entrega normal, y /api/v1/health contaba el disparo como "pendiente" sin decir
+        // que ya nadie está intentando decirlo, que es una clase distinta de pendiente.
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'the training');
+        llmDown = true;
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+        for (let i = 0; i < 3; i++) { attach(s1); await bridge._settle(); }
+
+        const avisos = sentTo[s1].filter((m) => m.type === 'watch_tripped');
+        expect(avisos).toHaveLength(4);                   // 3 intentos + el grito
+        expect(avisos.slice(0, 3).every((m) => !m.undelivered)).toBe(true);
+        expect(avisos[3]).toMatchObject({ watchId: 'w_1', undelivered: true });
+
+        const counters = await bridge.watchCounters();
+        expect(counters).toMatchObject({ pending: 1, stalled: 1 });
+
+        // Y deja de estar trabado en cuanto la voz vuelve: el contador no es una lápida.
+        llmDown = false;
+        turnoNormal();
+        await bridge._settle();
+        expect(await bridge.watchCounters()).toMatchObject({ pending: 0, stalled: 0 });
     });
 
     test('rendirse no es una excusa para mostrarle la etiqueta a otro HUD', async () => {
@@ -684,7 +779,7 @@ describe('el contador de /api/v1/health', () => {
             { ...row('w_3', 's1'), state: 'suspended', lastSampleAt: null },
             { ...row('w_4', 's1'), state: 'disarmed', lastSampleAt: 2000 },
         ];
-        expect(await bridge.watchCounters()).toEqual({ armed: 1, degraded: 0, blind: 1, suspended: 1, pending: 0, lastSampleAt: 5000 });
+        expect(await bridge.watchCounters()).toEqual({ armed: 1, degraded: 0, blind: 1, suspended: 1, pending: 0, stalled: 0, lastSampleAt: 5000 });
     });
 });
 

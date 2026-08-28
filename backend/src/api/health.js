@@ -7,7 +7,10 @@ import { watchCounters } from '../pipeline/senseBridge.js';
 export const getHealth = async (req, res) => {
   // Los "ojos": el contador sale de las FILAS del sidecar, no de la config, y es lo que contesta
   // "¿sigue mirando?" sin abrir el HUD. Vacío y con error se ven igual: nadie está mirando.
-  const watches = config.sense.enabled ? await watchCounters() : { armed: 0, degraded: 0, blind: 0, suspended: 0, lastSampleAt: null };
+  // La forma es la MISMA con las vigilancias apagadas: `hannah doctor` lee campos, y uno ausente
+  // se lee distinto de uno en cero. `pending`/`stalled` faltaban acá desde que existen.
+  const watches = config.sense.enabled ? await watchCounters()
+    : { armed: 0, degraded: 0, blind: 0, suspended: 0, pending: 0, stalled: 0, lastSampleAt: null };
   res.status(200).json({
     status: 'ok',
     version: '0.1.0',

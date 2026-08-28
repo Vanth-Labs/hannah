@@ -133,6 +133,27 @@ describe('turno normal: la MISMA salida sí actúa (el gate no es una tubería r
     });
 });
 
+describe('la marca de "la voz FUNCIONA", que es lo que reabre un disparo rendido', () => {
+    // Esta suite es la única que corre el orquestador de VERDAD, y por eso la línea se afirma acá.
+    // senseBridge deja de reintentar un disparo después de TRIP_MAX_ATTEMPTS contra un proveedor
+    // caído, y lo ÚNICO que puede reabrirle la puerta es saber que una oración volvió a salir con
+    // su audio. Si esta marca no se pusiera, el último disparo del buzón se quedaría mudo para
+    // siempre y el test de senseBridge estaría probando una señal que nadie emite.
+    test('un turno que habla la deja puesta; uno que no llega a hablar, no', async () => {
+        const antes = realBridge.spokenCount();
+
+        script = '';                                    // el modelo no devuelve nada hablable
+        await turn({});
+        expect(spoken()).toBe('');
+        expect(realBridge.spokenCount()).toBe(antes);   // resolver no es haber hablado
+
+        script = 'todo bien por acá, ya lo miro.';
+        await turn({});
+        expect(spoken()).toContain('todo bien');
+        expect(realBridge.spokenCount()).toBeGreaterThan(antes);
+    });
+});
+
 // Lo que se EJECUTA es la mitad de arriba; esto es lo que queda ESCRITO. Un turno guardado va a
 // tres lugares a la vez: la ventana de contexto que el modelo relee, memory.db y el índice de
 // embeddings — y las dos bases están en data/, que la política del agente marca como sensible.

@@ -191,6 +191,44 @@ export function abortNarration(sessionId) {
     if (s?.narrating) { s.narrating.abort(); s.narrating = null; }
 }
 
+// ── ¿FUNCIONA LA VOZ? ──────────────────────────────────────────────────────────────────
+/**
+ * CUÁNTAS ORACIONES salieron DE VERDAD por un socket, con su audio, en todo el proceso. La marca el
+ * orquestador en el único lugar donde eso se sabe (executeLlmPipeline, donde se pone `spoken`) y la
+ * leen los OJOS: senseBridge deja de reintentar un disparo que no se pudo decir después de
+ * TRIP_MAX_ATTEMPTS, y esto es lo único que puede reabrirle la puerta. Sin esto, el último disparo
+ * guardado quedaba mudo para siempre — el único reset del techo era el acuse de OTRA fila del
+ * buzón, y con una sola fila ese reset no existe.
+ *
+ * ES UNA CUENTA Y NO UN RELOJ, y esa es la diferencia entre un test verde y uno que falla una vez
+ * cada tanto: quien la lee pregunta "¿pasó algo DESPUÉS de tal momento?", y con milisegundos ese
+ * "después" es falso cuando las dos cosas caen en el mismo milisegundo — que acá es lo normal, no
+ * el borde, porque rendirse y volver a hablar pasan en la misma vuelta del bucle de eventos. Una
+ * cuenta que solo sube contesta exacto y no depende de la resolución del reloj.
+ *
+ * ES DEL PROCESO Y NO DE LA SESIÓN, a propósito: el modelo y el TTS son del proceso, así que "la
+ * voz volvió" es un hecho global. A quién se le puede hablar es otra pregunta y la contesta cada
+ * quien por su lado (senseBridge.canSpeakTo); atar la prueba a un socket la borraría en cada F5,
+ * que es justo el gesto que rompía el caso.
+ */
+let spokenSentences = 0;
+const spokenHooks = new Set();
+
+export function markSpoken() {
+    spokenSentences++;
+    for (const hook of spokenHooks) {
+        try { hook(); } catch (e) { logger.error('un aviso de "la voz anda" falló', { message: e.message }); }
+    }
+}
+export const spokenCount = () => spokenSentences;
+
+/**
+ * Avisar cuando la voz vuelva a andar. Se suscribe UNA vez por proceso (ver senseBridge.init).
+ * Existe además del getter porque esperar al próximo attach sería pedirle a la persona que
+ * recargue el HUD para enterarse de algo que ya se le puede decir.
+ */
+export function onSpoken(hook) { spokenHooks.add(hook); return () => spokenHooks.delete(hook); }
+
 // ── Eventos del agente ─────────────────────────────────────────────────────────────────
 function getOrAdopt(env) {
     let t = tasks.get(env.taskId);
@@ -530,6 +568,9 @@ export async function shutdown() {
 // Solo para tests: estado limpio entre casos.
 export function _reset() {
     tasks.clear(); sessions.clear(); narrationQueue.clear(); recentTasks.clear(); narrate = null; classify = null; healthy = false; agent = agentClient;
+    // `spokenHooks` NO se limpia: se suscribe una vez por proceso y con un guard, así que
+    // vaciarlo acá dejaría a los ojos sordos para el resto del archivo de tests.
+    spokenSentences = 0;
     if (expireTimer) { clearInterval(expireTimer); expireTimer = null; }
     if (lostTimer) { clearTimeout(lostTimer); lostTimer = null; }
 }
