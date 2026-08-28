@@ -261,7 +261,7 @@ function LookCard() {
             const d = await r.json().catch(() => ({}));
             if (!r.ok) { setStatus(d.error === 'not_a_vrm' ? 'ese archivo no es un VRM (.vrm, o .glb con extensión VRM)' : `error (${r.status})`); return; }
             setStatus('listo ✓'); await load(); await reload();
-        } catch { setStatus('backend no disponible'); }
+        } catch (e) { setStatus(`no se pudo subir: ${e?.message || 'sin conexion con el backend'}`); }
     };
     const reset = async () => {
         setStatus('volviendo al de fábrica…');

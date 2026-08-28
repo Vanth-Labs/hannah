@@ -67,6 +67,8 @@ export const useHannahStore = create((set, get) => ({
     terminalOpen: false,       // terminal abierta -> la ventana se divide (avatar arriba, terminal abajo)
     terminalDisabled: false,   // el backend contesto terminal_disabled: falta encender "Puede actuar en este PC" (⚙ → Manos)
     handsFree: false,          // conversación manos-libres por VAD (Fase B) + barge-in
+    brainError: null,          // ultimo fallo del cerebro dicho por el backend (modelo retirado, key mala)
+    micError: null,            // el VAD no pudo abrir el microfono (permiso del SO, sin dispositivo)
     brain: null,               // GET /api/v1/brain — { mode, configured, ollama, hardware, recommendation, job } (null = aún no consultado)
 
     // Log de pipeline
@@ -89,6 +91,8 @@ export const useHannahStore = create((set, get) => ({
     setAutoLookat: (autoLookat) => set({ autoLookat }),
     setHandsFree: (handsFree) => set({ handsFree }),
     setBrain: (brain) => set({ brain }),
+    setBrainError: (brainError) => set({ brainError }),
+    setMicError: (micError) => set({ micError }),
     // el backend rechazó un turno por falta de cerebro: reabrir la bienvenida
     markBrainRequired: () => set((st) => ({ brain: { ...(st.brain || {}), configured: false } })),
     setOverlayGaze: (overlayGaze) => set({ overlayGaze }),

@@ -4,7 +4,7 @@
 export const CLOUD = [
     { id: 'anthropic', label: 'Anthropic (Claude)', baseUrl: 'https://api.anthropic.com/v1/', model: 'claude-haiku-4-5-20251001', keys: 'https://console.anthropic.com' },
     { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', keys: 'https://platform.openai.com/api-keys' },
-    { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.1-8b-instant', keys: 'https://console.groq.com/keys' },
+    { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', keys: 'https://console.groq.com/keys' },
     { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-3.1-8b-instruct', keys: 'https://openrouter.ai/keys' },
     // Google AI Studio speaks the OpenAI protocol on this path; the key goes as a bearer like the rest.
     { id: 'google', label: 'Google (Gemini, AI Studio)', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', model: 'gemini-2.5-flash', keys: 'https://aistudio.google.com/apikey' },

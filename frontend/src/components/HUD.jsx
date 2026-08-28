@@ -121,6 +121,7 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
     const pendingConfirm = useHannahStore((s) => s.pendingConfirm);
     const commandRun = useHannahStore((s) => s.commandRun);
     const agentTask = useHannahStore((s) => s.agentTask);
+    const micError = useHannahStore((s) => s.micError);
     const terminalOpen = useHannahStore((s) => s.terminalOpen);
     // Acciones: referencias estables en zustand -> no provocan re-render.
     const setHandsFree = useHannahStore((s) => s.setHandsFree);
@@ -202,6 +203,11 @@ export function HUD({ onSendText, onToggleVision, onToggleRecord, isRecording, s
             <WatchesRail onDisarm={onWatchDisarm} />
 
             {commandRun && <CommandToast run={commandRun} onClose={() => setCommandRun(null)} />}
+            {micError && (
+                <div style={{ position: 'fixed', top: '12px', left: '12px', right: '12px', zIndex: 33, padding: '8px 12px', borderRadius: '10px', background: 'rgba(255,138,128,0.14)', border: '1px solid rgba(255,138,128,0.45)', color: '#ffb4ad', fontFamily: "'DM Mono', monospace", fontSize: '11px', lineHeight: 1.4 }}>
+                    Sin microfono: {micError}. Windows: Configuracion → Privacidad → Microfono → permitir apps de escritorio. macOS: Ajustes → Privacidad → Microfono → Hannah.
+                </div>
+            )}
             {agentTask && (!agentTask.doneAt || Date.now() - agentTask.doneAt < 15000) && (
                 <AgentPill task={agentTask} onCancel={() => sendCommand?.({ command: 'AGENT_CANCEL', taskId: agentTask.taskId })} />
             )}

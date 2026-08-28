@@ -76,8 +76,14 @@ export default function App() {
     // tapa la escena y ni el VAD ni la cámara arrancan (no hay quién conteste ni quién mire).
     useEffect(() => {
         if (!connected) return;
-        apiFetch('/api/v1/brain').then((r) => r.json()).then(setBrain).catch(() => {});
-    }, [connected, setBrain]);
+        const ask = () => apiFetch('/api/v1/brain').then((r) => r.json()).then(setBrain).catch(() => {});
+        ask();
+        // Hasta que haya cerebro se vuelve a preguntar: el panel ⚙ tambien puede configurarlo, y
+        // sin esto la escucha se quedaba apagada aunque el cerebro ya estuviera listo.
+        if (brainReady) return undefined;
+        const t = setInterval(ask, 5000);
+        return () => clearInterval(t);
+    }, [connected, brainReady, setBrain]);
     const visionStarted = useRef(false);
     useEffect(() => {
         if (isOverlay && connected && brainReady && !visionStarted.current && brain?.vision !== 'off') {

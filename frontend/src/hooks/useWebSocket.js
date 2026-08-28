@@ -211,6 +211,12 @@ export function useWebSocket() {
                 break;
             case 'error':
                 if (msg.code === 'terminal_disabled') useHannahStore.getState().setTerminalDisabled(true);
+                if (msg.code === 'llm') {
+                    const st = useHannahStore.getState();
+                    st.setBrainError(msg.message || 'the brain failed');
+                    // modelo retirado o key mala: se vuelve a elegir cerebro, con el mensaje delante
+                    if ([401, 403, 404].includes(msg.status)) st.markBrainRequired();
+                }
                 addLog(`[error] ${msg.message}`, 'error');
                 break;
 

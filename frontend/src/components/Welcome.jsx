@@ -49,8 +49,12 @@ export function Welcome() {
     const setMode = setChoice;
     const setProvider = (c) => setProviderId(c.id);
     const [key, setKey] = useState('');
+    const [modelChoice, setModelChoice] = useState(null);   // null = el modelo por defecto del proveedor
+    const model = modelChoice ?? provider.model;
+    const [available, setAvailable] = useState([]);
     const [busy, setBusy] = useState('');
     const [err, setErr] = useState('');
+    const brainError = useHannahStore((s) => s.brainError);
     const timer = useRef(null);
 
     const refresh = useCallback(async () => {
@@ -72,7 +76,9 @@ export function Welcome() {
         try {
             const r = await apiFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
             const j = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(j.message || j.error || `HTTP ${r.status}`);
+            if (!r.ok) { setAvailable(j.available || []); throw new Error(j.message || j.error || `HTTP ${r.status}`); }
+            setAvailable([]);
+            useHannahStore.getState().setBrainError(null);
             await refresh();
             return j;
         } catch (e) { setErr(e.message); return null; }
@@ -95,7 +101,7 @@ export function Welcome() {
     const chooseCloud = async () => {
         if (!key.trim() && !brain.hasKey) { setErr('Pega la API key del proveedor.'); return; }
         setBusy('choose');
-        await post('/api/v1/brain/choose', { mode: 'cloud', llm: { baseUrl: provider.baseUrl, model: provider.model, ...(key.trim() ? { apiKey: key.trim() } : {}) } });
+        await post('/api/v1/brain/choose', { mode: 'cloud', llm: { baseUrl: provider.baseUrl, model, ...(key.trim() ? { apiKey: key.trim() } : {}) } });
         setBusy('');
     };
 
@@ -142,16 +148,23 @@ export function Welcome() {
                     <div style={S.card}>
                         <div style={S.hint}>Más lista y sin descargas, en cualquier máquina. Lo que le digas viaja al proveedor. La key se guarda en tu PC y nunca se muestra.</div>
                         <label style={S.label}>Proveedor</label>
-                        <select style={S.input} value={provider.id} onChange={(e) => setProvider(CLOUD.find((c) => c.id === e.target.value) || CLOUD[0])}>
+                        <select style={S.input} value={provider.id} onChange={(e) => { setProvider(CLOUD.find((c) => c.id === e.target.value) || CLOUD[0]); setModelChoice(null); setAvailable([]); }}>
                             {CLOUD.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                         </select>
+                        <label style={S.label}>Modelo</label>
+                        <input style={S.input} type="text" value={model} onChange={(e) => setModelChoice(e.target.value)} />
+                        {available.length > 0 && (
+                            <div style={{ ...S.hint, marginTop: '6px' }}>Disponibles con tu key: {available.map((m) => (
+                                <button key={m} type="button" onClick={() => setModelChoice(m)} style={{ ...S.btn, padding: '2px 7px', marginRight: '4px', marginTop: '4px' }}>{m}</button>
+                            ))}</div>
+                        )}
                         <label style={S.label}>API key <a href={provider.keys} target="_blank" rel="noreferrer" style={{ color: ACCENT }}>(dónde conseguirla)</a></label>
                         <input style={S.input} type="password" value={key} placeholder={brain.hasKey ? '•••••• (guardada)' : 'pega tu key'} onChange={(e) => setKey(e.target.value)} />
                         <button style={S.primary(!busy)} disabled={!!busy} onClick={chooseCloud}>Pensar con {provider.label}</button>
                     </div>
                 )}
 
-                {err && <div style={S.err}>{err}</div>}
+                {(err || brainError) && <div style={S.err}>{err || `El cerebro fallo: ${brainError}`}</div>}
                 <div style={S.foot}>Voz y oído ya están listos en tu PC. Ollama se instala solo si pulsas el botón, y solo en tu carpeta.</div>
             </div>
         </div>

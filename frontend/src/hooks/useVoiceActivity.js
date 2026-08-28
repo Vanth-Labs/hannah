@@ -63,8 +63,11 @@ export function useVoiceActivity({ enabled, onUtterance, onInterrupt, onSpeechSt
                 if (cancelled) { vad.destroy?.(); return; }
                 vadRef.current = vad;
                 vad.start();
+                useHannahStore.getState().setMicError(null);
             } catch (e) {
                 console.error('VAD init falló:', e);
+                // Que se vea en el HUD: sin esto "no me escucha" no tenia ninguna pista en pantalla.
+                useHannahStore.getState().setMicError(e?.message || String(e));
             }
         })();
 
