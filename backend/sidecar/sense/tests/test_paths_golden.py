@@ -107,7 +107,7 @@ def test_la_carpeta_data_del_backend_esta_denegada_sin_variable_de_entorno():
     # local del sidecar la que tiene que hacerlo. Lo que importa en los dos casos es la ultima
     # aserción: settings.json nunca es vigilable.
     faithful = paths.classify(target, "/").sensitive
-    named_like_installer = os.path.basename(os.path.dirname(os.path.dirname(paths.local_directories()[0]))) == "hannah-backend"
+    named_like_installer = os.path.basename(os.path.dirname(paths.local_directories()[0])) == "hannah-backend"
     assert faithful is named_like_installer, "el port fiel deniega exactamente cuando la carpeta se llama hannah-backend"
     with pytest.raises(sensors.DeniedPath) as denial:
         sensors.classify_path(target)
