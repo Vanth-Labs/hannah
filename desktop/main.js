@@ -58,6 +58,17 @@ if (process.platform === 'linux') {
   if (!process.env.ELECTRON_OZONE_PLATFORM_HINT) process.env.ELECTRON_OZONE_PLATFORM_HINT = ozone;
 }
 
+// ── Windows y macOS: la ventana NUNCA es "de fondo" ──────────────────────────────────
+// Chromium detecta oclusion (en Windows por geometria de ventanas nativas, en macOS por el
+// occlusionState de NSWindow) y a una ventana transparente, sin marco y siempre encima la da
+// por tapada: deja de pedir frames, el avatar se congela en la pose cruda del VRM (T-pose)
+// porque vrm.update() nunca corre, y los timers del renderer se estrangulan. En Linux no pasa.
+// Estos switches si llegan a tiempo fuera de Linux (el zygote es cosa de Linux, ver arriba).
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+if (process.platform === 'win32') app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+
 const DEV = !!process.env.HANNAH_DEV;   // cargar el Vite dev server
 const DEV_URL = 'http://localhost:5173/?overlay=1';
 const COMPACT = { w: 400, h: 620 };
@@ -392,6 +403,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
+      backgroundThrottling: false,   // el overlay siempre anima y escucha, tapado o no (ver arriba)
       // webSecurity queda ACTIVO (antes se apagaba "para evitar CORS"): el backend permite
       // cualquier origen de loopback, que es lo que este renderer es. Apagarlo dejaba al
       // renderer leer file:// y cualquier host sin política de origen.
