@@ -18,6 +18,7 @@
 fastapi==0.141.1
 uvicorn==0.52.4
 sse-starlette==3.4.8
+psutil>=6      # R1/R5 en Windows (sin pgrep ni ss); en Linux/macOS no se usa
 
 # Solo para `python -m pytest tests`. Va en este archivo y no en uno aparte a
 # propósito: un venv y un archivo. Un requirements-dev.txt que nadie instala es

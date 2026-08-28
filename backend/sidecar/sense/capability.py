@@ -22,9 +22,11 @@ contrato sense.v1 fija el enum de `rungs[].id` en R1..R10 sin R0, así que la fi
 no se emite; la razón queda escrita acá y en el README para que nadie la busque
 como bug. Cuando P5.2 despache acciones, R0 entra con su propio sensor.
 """
+import importlib.util
 import logging
 import os
 import stat
+import sys
 from typing import Callable, Iterable
 
 logger = logging.getLogger(__name__)
@@ -40,13 +42,32 @@ R0_ABSENT_REASON = ("R0 (el exit code de un wrapper) no existe en una fase de so
 _cache: dict[str, str | None] = {}
 
 
+#: Prefijo de una "herramienta" que es un módulo de Python y no un programa: en
+#: Windows R1 y R5 se miran con psutil, sin subproceso.
+MODULE_PREFIX = "python:"
+
+
 def which(command: str) -> str | None:
     """Ruta absoluta de `command` en PATH, o None. Sin subprocesos.
 
     Sin subproceso a propósito: esto lo consulta /v1/capabilities, que el backend
     llama en cada ensamblado de prompt. Un `which(1)` por escalón por turno son
     seis forks para contestar algo que es un stat.
+
+    `python:<módulo>` resuelve a la ruta del módulo si está instalado en este
+    venv: es la misma pregunta ("¿está lo que necesito?") para lo que no es un
+    binario.
     """
+    if command.startswith(MODULE_PREFIX):
+        if command in _cache:
+            return _cache[command]
+        try:
+            spec = importlib.util.find_spec(command[len(MODULE_PREFIX):])
+        except (ImportError, ValueError):
+            spec = None
+        found = spec.origin if spec and spec.origin else None
+        _cache[command] = found
+        return found
     if os.sep in command:
         return command if _executable(command) else None
 
@@ -104,17 +125,51 @@ def pin(resolve: Resolver | None) -> None:
     _resolver = resolve or which
 
 
-# Qué herramienta necesita cada escalón para poder muestrear. Vacío = ninguna:
-# R2 (mtime) y R3 (cola de un log) son syscalls, no programas, así que dependen
-# de que la ruta sea legible y de nada más.
-TOOLS: dict[str, tuple[str, ...]] = {
-    "R1": ("pgrep",),
-    "R2": (),
-    "R3": (),
-    "R4": ("nvidia-smi",),
-    "R5": ("ss",),
-    "R6": ("systemctl",),
+# ── La plataforma ─────────────────────────────────────────────────────────────
+# Cada escalón mira lo mismo en todas partes, pero con la herramienta de cada
+# sistema: en Linux `pgrep`/`ss`, en macOS `pgrep`/`lsof` (BSD; `ss` no existe),
+# en Windows psutil (no hay pgrep ni ss, y `tasklist`/`netstat` cambian de idioma
+# con el locale). systemd es de Linux por naturaleza: R6 no se ofrece fuera.
+# Fijable desde los tests igual que el resolutor, y por la misma razón: la suite
+# tiene que poder probar el camino de Windows desde Linux.
+_platform: str | None = None
+
+
+def platform() -> str:
+    """'linux' | 'darwin' | 'win32' — la de la máquina, o la fijada por un test."""
+    if _platform:
+        return _platform
+    if sys.platform.startswith("linux"):
+        return "linux"
+    if sys.platform == "darwin":
+        return "darwin"
+    if sys.platform in ("win32", "cygwin"):
+        return "win32"
+    return "linux"   # BSDs y demás: la escalera POSIX es la que más se parece
+
+
+def pin_platform(name: str | None) -> None:
+    """Fija la plataforma; None vuelve a la real. SOLO tests."""
+    global _platform
+    _platform = name
+
+
+# Qué herramienta necesita cada escalón para poder muestrear, por plataforma.
+# Vacío = ninguna: R2 (mtime) y R3 (cola de un log) son syscalls, no programas,
+# así que dependen de que la ruta sea legible y de nada más.
+PLATFORM_TOOLS: dict[str, dict[str, tuple[str, ...]]] = {
+    "linux": {"R1": ("pgrep",), "R2": (), "R3": (), "R4": ("nvidia-smi",), "R5": ("ss",), "R6": ("systemctl",)},
+    "darwin": {"R1": ("pgrep",), "R2": (), "R3": (), "R4": ("nvidia-smi",), "R5": ("lsof",), "R6": ("systemctl",)},
+    "win32": {"R1": ("python:psutil",), "R2": (), "R3": (), "R4": ("nvidia-smi",), "R5": ("python:psutil",), "R6": ("systemctl",)},
 }
+#: La tabla de Linux, con el nombre de siempre (la documentación y los tests la citan).
+TOOLS: dict[str, tuple[str, ...]] = PLATFORM_TOOLS["linux"]
+
+
+def tools_for(rung_id: str) -> tuple[str, ...]:
+    """Las herramientas del escalón en ESTA plataforma."""
+    return PLATFORM_TOOLS[platform()].get(rung_id, ())
+
 
 # Cómo se llama en castellano lo que falta. El operador que escucha "no puedo
 # vigilar el puerto" quiere saber qué instalar.
@@ -122,14 +177,16 @@ _TOOL_REASON = {
     "pgrep": "falta pgrep (paquete procps-ng)",
     "nvidia-smi": "falta nvidia-smi (driver NVIDIA)",
     "ss": "falta ss (paquete iproute2)",
-    "systemctl": "falta systemctl (systemd)",
+    "lsof": "falta lsof",
+    "systemctl": "falta systemctl (systemd; solo existe en Linux)",
+    "python:psutil": "falta psutil en el venv del sidecar (pip install psutil)",
 }
 
 
 def missing(rung_id: str, resolve: Resolver | None = None) -> tuple[str, ...]:
     """Las herramientas del escalón que no están en esta máquina."""
     lookup = resolve or resolver()
-    return tuple(tool for tool in TOOLS.get(rung_id, ()) if not lookup(tool))
+    return tuple(tool for tool in tools_for(rung_id) if not lookup(tool))
 
 
 def tool_reason(rung_id: str, resolve: Resolver | None = None) -> str | None:

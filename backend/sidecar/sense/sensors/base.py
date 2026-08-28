@@ -55,6 +55,7 @@ import asyncio
 import errno
 import logging
 import os
+import sys
 import stat
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -341,7 +342,7 @@ def open_watched(raw_path: Any, *, allow_directory: bool = False,
             # Un FIFO, un socket o un device no son lo que nadie quiso vigilar, y
             # leerlos tiene efectos (un FIFO consume lo que otro escribió).
             raise SensorFault(NOT_A_FILE)
-        _verify_opened(fd, field_name)
+        _verify_opened(fd, field_name, resolved, info)
         yield Watched(fd, info)
     finally:
         os.close(fd)
@@ -371,7 +372,9 @@ def _classify_now(raw_path: Any, field_name: str) -> str:
 
 def _open_nofollow(resolved: str) -> int:
     """Abre sin seguir el último componente y sin poder colgarse."""
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    # O_NOFOLLOW y O_NONBLOCK no existen en Windows (donde crear un symlink ya pide privilegio);
+    # ahí se abre sin ellos y la verificación de abajo sigue comparando inode y dispositivo.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         return os.open(resolved, flags)
     except FileNotFoundError as exc:
@@ -394,16 +397,42 @@ def _open_nofollow(resolved: str) -> int:
         raise SensorError(f"no se pudo leer: {exc.__class__.__name__}") from exc
 
 
-def _verify_opened(fd: int, field_name: str) -> None:
+def _opened_name(fd: int, resolved: str, info: os.stat_result) -> str:
+    """El nombre de lo que se abrió, por la vía que tenga cada sistema.
+
+    Linux: /proc/self/fd/N, que lo dice el kernel. macOS: F_GETPATH, que también.
+    Windows (y lo demás): no hay forma de preguntarle al kernel el nombre de un
+    descriptor, así que se compara el archivo abierto con el que se clasificó
+    (dispositivo e inode): si son el mismo, el nombre clasificado ES el nombre;
+    si no, alguien cambió la ruta entre la clasificación y el open y se falla
+    cerrado. Un symlink en Windows pide privilegio para crearse, así que la
+    carrera que esto cierra en POSIX es, allí, mucho más cara de montar.
+    """
+    if sys.platform.startswith("linux"):
+        return os.readlink(f"/proc/self/fd/{fd}")
+    if sys.platform == "darwin":
+        import fcntl  # noqa: PLC0415 — solo en macOS
+        raw = fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024)
+        return raw.split(b"\0", 1)[0].decode("utf-8", "surrogateescape")
+    expected = os.stat(resolved)
+    if (expected.st_dev, expected.st_ino) != (info.st_dev, info.st_ino):
+        raise OSError("opened file is not the classified one")
+    return resolved
+
+
+def _verify_opened(fd: int, field_name: str, resolved: str | None = None,
+                   info: os.stat_result | None = None) -> None:
     """Clasifica lo que se abrió DE VERDAD, que es lo único que se va a leer.
 
-    El nombre sale del kernel (/proc/self/fd/N), no de lo que se pidió abrir, así
-    que un directorio del medio cambiado entre `classify()` y `open()` aparece
-    acá con su nombre real.
+    El nombre sale del kernel (o de comparar inodes donde el kernel no lo da), no
+    de lo que se pidió abrir, así que un directorio del medio cambiado entre
+    `classify()` y `open()` aparece acá con su nombre real.
     """
     try:
-        actual = os.readlink(f"/proc/self/fd/{fd}")
-    except OSError as exc:
+        if info is None:
+            info = os.fstat(fd)
+        actual = _opened_name(fd, resolved or "", info)
+    except (OSError, AttributeError, ImportError) as exc:
         raise SensorFault(UNVERIFIABLE) from exc
     if actual.endswith(_DELETED):
         # Sin sacar el sufijo, las reglas por basename (`.env`, `id_rsa`) dejan de

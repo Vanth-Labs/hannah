@@ -259,3 +259,17 @@ La costura es `sensors.allow_test_sensors()`, en proceso y **sin variable de
 entorno**: una perilla de entorno la puede tener puesta el shell que arrancó el
 sidecar, y entonces el catálogo depende de cómo se lanzó. La abre `conftest.py`
 para toda la suite y la cierra al salir de cada test.
+
+## Per platform
+
+| Rung | Linux | macOS | Windows |
+|---|---|---|---|
+| R1 process | `pgrep -f` | `pgrep -f` | psutil (`process_iter`, cmdline regex) |
+| R2 file mtime, R3 log tail | syscalls | syscalls | syscalls (no `O_NOFOLLOW`; the opened file is checked by device+inode) |
+| R4 GPU | `nvidia-smi` | not available | `nvidia-smi` if the driver is installed |
+| R5 port | `ss` | `lsof -t` (PIDs only) | psutil (`net_connections`) |
+| R6 systemd unit | `systemctl`/`journalctl` | not available (no systemd) | not available |
+
+`capability.platform()` decides once; tests pin it with `capability.pin_platform()`. The venv
+is plain on macOS/Windows; Linux uses `--system-site-packages` for the `gi`/`dbus` rungs that
+come later.

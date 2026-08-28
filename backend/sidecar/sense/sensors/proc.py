@@ -1,11 +1,12 @@
 # sidecar/sense/sensors/proc.py
-"""R1 — el proceso sigue vivo (`pgrep -f`).
+"""R1 — el proceso sigue vivo (`pgrep -f`; en Windows, psutil).
 
 El escalón más barato que existe y el primero que hay que probar: un milisegundo
 y una respuesta que no admite interpretación. Sus dos modos de falsear están en
 la tabla del plan §6 y valen la pena decirlos en voz alta al armar: el PID se
 puede reusar, y un wrapper vivo alrededor de un hijo muerto se ve sano.
 """
+import asyncio
 import re
 from typing import Any, Mapping
 
@@ -29,9 +30,10 @@ class ProcSensor(Sensor):
     rung = "R1"
     confidence = DETERMINISTIC
 
-    def __init__(self, pattern: str, pgrep: str) -> None:
+    def __init__(self, pattern: str, pgrep: str | None) -> None:
         self._pattern = pattern
-        self._pgrep = pgrep
+        self._pgrep = pgrep          # None = Windows: se mira con psutil, sin subproceso
+        self._regex = re.compile(pattern)
 
     @classmethod
     def parse(cls, spec: Mapping[str, Any]) -> "ProcSensor":
@@ -52,12 +54,37 @@ class ProcSensor(Sensor):
         except re.error as exc:
             raise SpecError(f"pattern no es una expresión regular válida: {exc.msg}") from exc
         try:
+            if capability.platform() == "win32":
+                capability.require("python:psutil", "vigilar un proceso (R1)")
+                return cls(pattern, None)
             pgrep = capability.require("pgrep", "vigilar un proceso (R1)")
         except LookupError as exc:
             raise SpecError(str(exc)) from exc
         return cls(pattern, pgrep)
 
+    def _count_psutil(self) -> int:
+        """Windows: cuántos procesos tienen el patrón en su línea de comando.
+        Misma semántica que `pgrep -f` (busca en el cmdline entero, no solo en el
+        nombre); un proceso ajeno cuyo cmdline no se puede leer no cuenta y no
+        rompe la muestra."""
+        import psutil  # noqa: PLC0415 — solo en Windows, y solo si está
+        count = 0
+        for process in psutil.process_iter(["name", "cmdline"]):
+            try:
+                cmdline = " ".join(process.info.get("cmdline") or []) or (process.info.get("name") or "")
+            except (psutil.Error, OSError):
+                continue
+            if self._regex.search(cmdline):
+                count += 1
+        return count
+
     async def sample(self) -> Sample:
+        if self._pgrep is None:
+            try:
+                count = await asyncio.to_thread(self._count_psutil)
+            except Exception as exc:  # noqa: BLE001 — psutil roto es un sensor roto, no un trip
+                raise SensorFault(f"psutil falló: {exc.__class__.__name__}") from exc
+            return Sample(healthy=count > 0, detail={"alive": count > 0, "count": count})
         # `--` para que un patrón que arranca con guión sea un patrón y no una
         # opción de pgrep. Con argv no hay inyección posible, pero sí hay
         # confusión de opciones, que es la otra mitad del mismo problema.
