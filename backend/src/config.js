@@ -113,6 +113,11 @@ a real result back, do NOT claim you did it — just run the command.`,
     apiKey: process.env.ELEVENLABS_API_KEY || '', // usado solo por el proveedor elevenlabs
     model: process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2',
   },
+  // Where Hannah thinks — chosen on first run in the window ('' = not yet). See pipeline/brain.js.
+  brain: {
+    mode: ['local', 'cloud'].includes(process.env.BRAIN_MODE) ? process.env.BRAIN_MODE : '',
+  },
+
   vision: {
     // 'yolo' -> sidecar YOLO (etiquetas de objetos) · 'vlm' -> modelo de visión
     // local (Ollama moondream/llava) que DESCRIBE y entiende la escena.
