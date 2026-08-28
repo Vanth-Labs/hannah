@@ -19,6 +19,11 @@ corriendo y los dos terminaban con el sensor leyendo un `.env`:
       O_NOFOLLOW no mira. Re-clasificar sola no lo tapa; lo tapa clasificar lo
       que se abrió DE VERDAD.
 
+Y las dos piezas de `open_watched()` que hacen falta para que eso sea verdad y
+que se podían borrar sin que nada se pusiera rojo: el `O_NOFOLLOW`, que es lo
+único que cuida el ÚLTIMO componente, y el `' (deleted)'` que hay que sacarle al
+nombre que devuelve /proc antes de clasificarlo.
+
 En el agente el mismo hueco dura milisegundos (clasifica justo antes de leer);
 acá el sidecar convierte la carrera en una lectura programada y repetida.
 
@@ -243,3 +248,93 @@ def test_lo_que_viaja_del_fallo_no_lleva_la_ruta(tmp_path):
     dicho = str(fallo.value)
     assert dicho == base.PATH_TURNED_DENIED
     assert str(tmp_path) not in dicho and ".env" not in dicho
+
+
+# ── Las dos piezas de open_watched() que nada afirmaba ───────────────────────
+# El docstring de `open_watched()` dice que son TRES cosas y no una, y los tests
+# de arriba solo cubrían la primera (re-clasificar) y la tercera (verificar el
+# descriptor) cuando lo abierto queda DENEGADO. Faltaban las dos que se pueden
+# borrar sin que nada se ponga rojo, y las dos están nombradas en el código como
+# lo que sostiene la garantía.
+def test_o_nofollow_hace_fallar_el_open_del_ultimo_componente(tmp_path):
+    """El flag, solo, en su forma más chica.
+
+    Sin O_NOFOLLOW esto abre el destino y no levanta nada. Es la única defensa
+    del ÚLTIMO componente: verificar el descriptor después no lo tapa cuando el
+    symlink apunta a un archivo permitido (ver el test de abajo).
+    """
+    real = tmp_path / "train-2026.log"
+    real.write_text("epoch 1\n", encoding="utf-8")
+    link = tmp_path / "live.log"
+    link.symlink_to(real)
+
+    with pytest.raises(sensors.SensorError):
+        base._open_nofollow(str(link))
+
+
+def test_perder_la_carrera_contra_el_ultimo_componente_no_lee_otro_archivo(tmp_path, monkeypatch):
+    """La carrera que O_NOFOLLOW tapa y la verificación NO.
+
+    El caso (c) de arriba cambia un directorio del MEDIO por uno DENEGADO, así que
+    lo agarra `_verify_opened`. Acá el último componente pasa a ser un symlink a
+    un archivo PERMITIDO: el descriptor se verifica limpio, la clasificación dice
+    que sí, y sin el flag el sensor lee un archivo que nadie le pidió mirar y se
+    queda pegado con lo que encontró adentro.
+    """
+    otro = tmp_path / "otro.log"                 # permitido, y con el patrón adentro
+    otro.write_text("epoch 1\nTraceback\n", encoding="utf-8")
+    log = tmp_path / "live.log"
+    log.write_text("epoch 1\n", encoding="utf-8")
+
+    sensor = sensors.build({"kind": "logmatch", "path": str(log), "pattern": "Traceback"})
+    run(sensor.sample())                         # primera muestra: ancla el offset en el final
+
+    perdida = []
+    clasificar = paths.classify
+
+    def clasificar_y_perder_la_carrera(value, cwd=None):
+        verdict = clasificar(value, cwd)
+        if not perdida:
+            perdida.append(True)
+            log.unlink()
+            log.symlink_to(otro)                 # el último componente, ya clasificado
+        return verdict
+
+    monkeypatch.setattr(paths, "classify", clasificar_y_perder_la_carrera)
+    with pytest.raises(sensors.SensorError):
+        run(sensor.sample())
+    assert perdida, "el sensor no clasificó en la muestra: la ventana ni se abrió"
+
+    # Y no leyó nada del otro archivo: `matched` es pegajoso, así que si lo
+    # hubiera leído el watch dispararía para siempre por una línea que no vio.
+    log.unlink()
+    log.write_text("epoch 2\n", encoding="utf-8")
+    sample = run(sensor.sample())
+    assert sample.detail["matched"] is False and sample.healthy is True
+
+
+def test_el_sufijo_deleted_se_saca_antes_de_clasificar_lo_abierto(tmp_path):
+    """Un unlink bien puesto saltea la verificación entera si no se saca.
+
+    El kernel le pega " (deleted)" al nombre de /proc/self/fd/N cuando el inodo se
+    desenlazó después del open. Las reglas por basename están ancladas (`^\\.env$`),
+    así que con el sufijo pegado NINGUNA matchea y `_verify_opened` da por bueno un
+    descriptor abierto sobre un `.env`. Acá el fd, el unlink y el /proc son de
+    verdad: no hay nada simulado que pueda mentir a favor.
+    """
+    secreto = tmp_path / ".env"
+    secreto.write_text("OPENAI_API_KEY=sk-de-verdad\n", encoding="utf-8")
+    fd = os.open(secreto, os.O_RDONLY)
+    try:
+        secreto.unlink()
+        nombre = os.readlink(f"/proc/self/fd/{fd}")
+        assert nombre.endswith(base._DELETED)
+        # La premisa, dicha en voz alta: sin sacar el sufijo la tabla lo aprueba.
+        assert paths.classify(nombre, "/").sensitive is False
+        assert paths.classify(nombre[: -len(base._DELETED)], "/").sensitive is True
+
+        with pytest.raises(sensors.SensorFault) as fallo:
+            base._verify_opened(fd, "path")
+        assert str(fallo.value) == base.PATH_TURNED_DENIED
+    finally:
+        os.close(fd)

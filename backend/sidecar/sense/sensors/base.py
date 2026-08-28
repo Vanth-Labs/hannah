@@ -323,6 +323,13 @@ def open_watched(raw_path: Any, *, allow_directory: bool = False,
         mismo inodo un segundo nombre inocente. Es un agujero del modelo de
         políticas del agente entero, no de este archivo, y se cierra donde se
         decidió que la política fuera por ruta.
+      * un bind mount tampoco, y es la MISMA clase que el hardlink: `mount --bind
+        ~/.ssh/id_rsa /home/yo/train.log` le da al archivo denegado un nombre
+        permitido, y /proc confirma ese nombre porque es el que tiene. Hoy no es
+        alcanzable sin privilegios (CAP_SYS_ADMIN, o un user namespace propio),
+        así que no cambia el modelo de amenazas de esta fase; está escrito por lo
+        mismo que los otros: esta lista existe para que nadie vuelva a concluir
+        que no queda nada.
       * hace falta /proc. Sin él no hay con qué saber qué se abrió, y entonces el
         sensor falla CERRADO, que es la dirección segura.
     """
