@@ -38,7 +38,9 @@ const transcribeLocal = async (audioBuffer, mimeType, timer) => {
         const response = await axios.post(
             `${config.asr.sidecarUrl}/asr`,
             form,
-            { headers: form.getHeaders(), timeout: 10000 }
+            // 10 s era poco: Whisper en CPU tarda 5 a 9 s por frase en un portatil, y un timeout
+            // convierte una espera en un turno perdido. El tiempo de respuesta no manda; la respuesta si.
+            { headers: form.getHeaders(), timeout: config.asr.timeoutMs }
         );
 
         const durationMs = timer.stop();

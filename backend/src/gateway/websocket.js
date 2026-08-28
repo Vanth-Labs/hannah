@@ -57,6 +57,23 @@ export const initWebSocketGateway = (httpServer) => {
         // Barge-in: un AbortController por turno en curso. INTERRUPT lo aborta para
         // que Hannah deje de generar/hablar al instante cuando el usuario retoma.
         let currentTurn = null;
+        let voiceTurnRunning = false;
+        let pendingVoice = null;
+        const runVoiceTurn = async (buffer) => {
+            voiceTurnRunning = true;
+            currentTurn = new AbortController();
+            agentBridge.setTurnActive(sessionId, true);
+            try {
+                await processVoiceTurn(sessionId, buffer, safeSend, currentTurn.signal);
+            } finally {
+                agentBridge.setTurnActive(sessionId, false);
+                voiceTurnRunning = false;
+                if (pendingVoice) {
+                    const next = pendingVoice; pendingVoice = null;
+                    runVoiceTurn(next).catch((e) => logger.error('turno en espera falló', { message: e.message }));
+                }
+            }
+        };
         const abortCurrentTurn = () => {
             if (currentTurn) { currentTurn.abort(); currentTurn = null; }
             agentBridge.abortNarration(sessionId);   // la narración de las manos también calla; la tarea sigue
@@ -186,11 +203,17 @@ export const initWebSocketGateway = (httpServer) => {
                         }
                         const completeAudioBuffer = Buffer.concat(audioChunks);
                         audioChunks = [];
-                        currentTurn = new AbortController();
-                        agentBridge.setTurnActive(sessionId, true);
-                        try {
-                            await processVoiceTurn(sessionId, completeAudioBuffer, safeSend, currentTurn.signal);
-                        } finally { agentBridge.setTurnActive(sessionId, false); }
+                        // Un turno a la vez por conexion. Los mensajes del socket llegan en paralelo, y
+                        // con Whisper en CPU (5 a 9 s por frase) dos frases seguidas se transcribian a la
+                        // vez, se pisaban y acababan en timeout. Si hay un turno en curso, la frase nueva
+                        // espera y se procesa al terminar (la ultima manda: las intermedias se descartan,
+                        // el usuario ya siguio hablando).
+                        if (voiceTurnRunning) {
+                            pendingVoice = completeAudioBuffer;
+                            logger.info('turno en curso: la frase nueva espera su turno', { sessionId });
+                            break;
+                        }
+                        await runVoiceTurn(completeAudioBuffer);
                         break;
                     }
 

@@ -25,6 +25,8 @@ export const config = {
   logLevel: process.env.LOG_LEVEL || 'info',
   asr: {
     provider: process.env.ASR_PROVIDER || 'cloud',
+    // Tope del sidecar local. En CPU (macOS/Windows sin NVIDIA) una frase puede tardar 5 a 9 s.
+    timeoutMs: parseInt(process.env.ASR_TIMEOUT_MS || '60000', 10),
     model: process.env.WHISPER_MODEL || 'whisper-1',
     apiKey: process.env.OPENAI_API_KEY,
     language: process.env.ASR_LANGUAGE || '', // '' = auto-detect
