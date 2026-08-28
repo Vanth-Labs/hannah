@@ -349,8 +349,21 @@ export function WatchesView({ watches, connected, health, onDisarm, now }) {
         const s = Math.max(0, Math.round((now - ts) / 1000));
         return s < 90 ? `hace ${s}s` : `hace ${Math.round(s / 60)} min`;
     };
+    // DOS EJES, no uno. «No hay nada vigilado» solo se puede afirmar sabiendo las dos cosas: que
+    // este HUD está attacheado (el socket es el único camino de la lista) Y que el backend pudo
+    // preguntarle al sidecar. Lo segundo lo dice GET /api/v1/health en `watches.error`
+    // ('sense_unavailable' cuando :8007 está caído o apagado), y esta vista lo tiraba: con el
+    // sidecar caído y dos vigilancias guardadas al otro lado, la pantalla escribía «Nada vigilado
+    // ahora mismo» sabiendo únicamente que no había podido preguntar. Un error y un vacío son
+    // cosas distintas, y esta sección existe por esa diferencia.
     const w = health?.watches;
-    const summary = w ? `${w.armed ?? 0} armadas · ${w.blind ?? 0} ciegas · ${w.suspended ?? 0} suspendidas` : '';
+    // `health === null` es «todavía no contestó»: ni afirma ni desmiente, no dice ninguna de las
+    // dos frases. `{}` es el catch del fetch de /health (backend no disponible), y eso sí se sabe.
+    const answered = health != null;
+    const canAsk = Boolean(w) && !w.error;
+    const cannotAsk = answered && !canAsk;
+    const summary = canAsk ? `${w.armed ?? 0} armadas · ${w.blind ?? 0} ciegas · ${w.suspended ?? 0} suspendidas`
+        : (cannotAsk ? 'sin respuesta' : '');
 
     const chip = { fontSize: '8px', padding: '1px 5px', borderRadius: '6px', marginLeft: '6px' };
     const delBtn = { flexShrink: 0, width: '26px', height: '26px', borderRadius: '7px', cursor: 'pointer',
@@ -377,7 +390,16 @@ export function WatchesView({ watches, connected, health, onDisarm, now }) {
                         : 'Sin conexión con el backend: no sé qué está vigilando ahora mismo.'}
                 </div>
             )}
-            {connected && !watches.length && (
+            {/* El otro eje: el socket está bien, pero el backend no pudo preguntarle a los ojos. */}
+            {connected && cannotAsk && (
+                <div style={{ ...S.hint, marginTop: '6px', color: '#f5c842' }}>
+                    {`Sin respuesta de los ojos (${w?.error || 'el backend no contestó'}): `}
+                    {watches.length
+                        ? 'esto es lo último que se supo, no lo que está pasando.'
+                        : 'no sé qué está vigilando ahora mismo.'}
+                </div>
+            )}
+            {connected && canAsk && !watches.length && (
                 <div style={{ ...S.hint, marginTop: '6px' }}>Nada vigilado ahora mismo.</div>
             )}
             {watches.map((row) => {
@@ -387,7 +409,15 @@ export function WatchesView({ watches, connected, health, onDisarm, now }) {
                         <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>
                                 <span style={{ color: look.color, marginRight: '5px' }}>{look.icon}</span>
-                                {row.label}
+                                {/* La etiqueta es texto libre que dictó una persona, y el backend
+                                    solo se la manda a la sesión que armó (senseBridge: armedMsg).
+                                    La fila igual se pinta: ocupa un cupo de SENSE_MAX_WATCHES y
+                                    explica por qué ella habló sola. Callarla entera sería mentir
+                                    por omisión hacia el otro lado. */}
+                                {row.mine === false && !row.label
+                                    ? <span title="La armó otra conversación: se ve la fila, no las palabras que dictó."
+                                        style={{ fontStyle: 'italic', color: 'rgba(255,255,255,0.45)' }}>vigilancia de otra sesión</span>
+                                    : row.label}
                                 <span style={{ ...chip, background: 'rgba(255,255,255,0.06)', color: look.color }}>{row.state}</span>
                                 {row.rung && <span style={{ ...chip, background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.45)' }}>{row.rung}</span>}
                             </div>
