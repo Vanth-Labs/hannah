@@ -206,6 +206,9 @@ export function useWebSocket() {
                 addLog('[visión] loop activo', 'vision');
                 break;
 
+            case 'brain_required':
+                useHannahStore.getState().markBrainRequired();
+                break;
             case 'error':
                 addLog(`[error] ${msg.message}`, 'error');
                 break;

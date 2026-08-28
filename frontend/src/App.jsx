@@ -2,11 +2,12 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Scene } from './components/Scene.jsx';
 import { HUD, isOverlay } from './components/HUD.jsx';
+import { Welcome } from './components/Welcome.jsx';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { useVision } from './hooks/useVision.js';
 import { useVoiceActivity } from './hooks/useVoiceActivity.js';
 import { useHannahStore } from './store/hannahStore.js';
-import { DESKTOP } from './lib/api.js';
+import { DESKTOP, apiFetch } from './lib/api.js';
 
 // ── Fondo: gradiente oscuro con sutil vignette ──────────────────────────────
 const BG = () => (
@@ -47,6 +48,9 @@ export default function App() {
     const visionActive = useHannahStore((s) => s.visionActive);
     const connected = useHannahStore((s) => s.connected);
     const handsFree = useHannahStore((s) => s.handsFree);
+    const brain = useHannahStore((s) => s.brain);
+    const setBrain = useHannahStore((s) => s.setBrain);
+    const brainReady = !!brain?.configured;
     const terminalOpen = useHannahStore((s) => s.terminalOpen);
     const setHandsFree = useHannahStore((s) => s.setHandsFree);
 
@@ -68,13 +72,19 @@ export default function App() {
     }, []);
 
     // En overlay, la cámara (visión) arranca sola: que Hannah te vea por defecto.
+    // Primer arranque: ¿dónde piensa? Hasta que el backend diga `configured`, la bienvenida
+    // tapa la escena y ni el VAD ni la cámara arrancan (no hay quién conteste ni quién mire).
+    useEffect(() => {
+        if (!connected) return;
+        apiFetch('/api/v1/brain').then((r) => r.json()).then(setBrain).catch(() => {});
+    }, [connected, setBrain]);
     const visionStarted = useRef(false);
     useEffect(() => {
-        if (isOverlay && connected && !visionStarted.current) {
+        if (isOverlay && connected && brainReady && !visionStarted.current && brain?.vision !== 'off') {
             visionStarted.current = true;
             startVision();
         }
-    }, [connected, startVision]);
+    }, [connected, brainReady, brain, startVision]);
 
     // Barge-in: cortar a Hannah y avisar al backend que aborte el turno en curso.
     const bargeIn = useCallback(() => {
@@ -89,7 +99,7 @@ export default function App() {
     // hicieron ANTES (hablar por encima de la pregunta no puede concederla). Mandarlo al final
     // del enunciado hacía que toda respuesta pareciera posterior a cualquier pregunta.
     useVoiceActivity({
-        enabled: handsFree,
+        enabled: handsFree && brainReady,
         onSpeechStart: () => sendCommand({ command: 'SPEECH_START' }),
         onInterrupt: bargeIn,
         onUtterance: (wavBuffer) => {
@@ -104,6 +114,7 @@ export default function App() {
     // ── Grabación de voz ────────────────────────────────────────────────────
     const handleRecord = useCallback(async (start) => {
         if (start) {
+            if (!brainReady) return;   // la bienvenida está en pantalla: primero elegir cerebro
             try {
                 stopPlayback();   // barge-in: si Hannah hablaba, callarla al tomar el mic
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -133,7 +144,7 @@ export default function App() {
             };
             setIsRecording(false);
         }
-    }, [sendCommand, sendAudio, stopPlayback]);
+    }, [sendCommand, sendAudio, stopPlayback, brainReady]);
 
     // ── Toggle visión ───────────────────────────────────────────────────────
     const handleToggleVision = useCallback(() => {
@@ -164,6 +175,9 @@ export default function App() {
             </div>
 
             <AvatarLoadingHint />
+
+            {/* Primer arranque: elegir cerebro. Encima de todo (HUD y panel incluidos). */}
+            {brain && !brain.configured && <Welcome />}
 
             {/* HUD */}
             <HUD
