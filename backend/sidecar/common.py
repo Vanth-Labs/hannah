@@ -25,11 +25,18 @@ def preload_cuda_libs() -> int:
     instaladas en el sistema; el venv de la raíz del workspace sí las trae. Se cargan con
     RTLD_GLOBAL ANTES de crear el modelo. Devuelve cuántas librerías cargó.
     """
-    nvidia_dir = Path(__file__).resolve().parents[2] / ".venv" / "lib"
+    # Donde puede haber un torch con CUDA: el venv raiz del workspace (EMAGE, solo en desarrollo)
+    # y el del modelo de gestos (hannah-motion-lab, lo crea el instalador; en un checkout de
+    # desarrollo se llama motion-model). Se usa el primero que tenga las librerias.
+    root = Path(__file__).resolve().parents[2]
+    candidates = [root / ".venv", root / "hannah-motion-lab" / ".venv", root / "motion-model" / ".venv"]
     libs = []
-    for pkg in _CUDA_PKGS:
-        libs += sorted(glob.glob(
-            str(nvidia_dir / "python3*" / "site-packages" / "nvidia" / pkg / "lib" / "*.so*")))
+    for venv in candidates:
+        for pkg in _CUDA_PKGS:
+            libs += sorted(glob.glob(
+                str(venv / "lib" / "python3*" / "site-packages" / "nvidia" / pkg / "lib" / "*.so*")))
+        if libs:
+            break
     loaded = 0
     for lib in libs:
         try:
