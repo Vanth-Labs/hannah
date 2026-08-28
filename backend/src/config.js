@@ -182,7 +182,9 @@ a real result back, do NOT claim you did it — just run the command.`,
   // El sidecar OBSERVA y jamás toca la máquina (regla R1): toda acción correctiva sigue siendo
   // una tarea del agente, con su carril único, su política de riesgo y su auditoría.
   sense: {
-    enabled: process.env.SENSE_ENABLED === 'true',
+    // Activo por defecto: en reposo no muestrea nada (solo cuando el usuario arma una vigilancia).
+    // SENSE_ENABLED=false es una escotilla interna, sin interruptor en el panel a proposito.
+    enabled: process.env.SENSE_ENABLED !== 'false',
     url: process.env.SENSE_SIDECAR_URL || 'http://127.0.0.1:8007',
     // Bearer compartido con :8007. Vacío DEL LADO DEL SIDECAR = toda ruta menos /health
     // responde 401: allá falla cerrado, al revés que la fachada del agente.

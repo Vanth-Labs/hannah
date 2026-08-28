@@ -30,7 +30,7 @@ npm run sidecar:tts         # Kokoro on :8002  ← required for her to speak
 npm run sidecar:asr         # faster-whisper on :8001 (if ASR_PROVIDER=local)
 npm run sidecar:vision      # YOLOv8 on :8003 — ONLY with VISION_PROVIDER=yolo (see below)
 npm run sidecar:motion      # EMAGE on :8004 (only if MOTION_PROVIDER=emage)
-npm run sidecar:sense       # the watches on :8007 (only if SENSE_ENABLED=true)
+npm run sidecar:sense       # the watches on :8007 (the launcher starts it with the rest)
 ```
 
 **Two of those you will probably never start**, because the defaults do not use them:
@@ -54,7 +54,7 @@ cd ../hannah-motion-lab && .venv/bin/python -m uvicorn serve.main:app --port 800
 | Backend (REST + WS) | 3001 | listens on **127.0.0.1** by default (`HOST`) |
 | ASR · TTS · Vision | 8001 · 8002 · 8003 | this repo's sidecars |
 | Motion | 8005 (`lab`) · 8004 (`emage`) | each provider with its own URL |
-| Sense (the watches) | 8007 | this repo's fifth sidecar, **off by default** (`SENSE_ENABLED`) |
+| Sense (the watches) | 8007 | this repo's fifth sidecar; on by default, idle until a watch is armed (`SENSE_ENABLED=false` is an internal escape hatch) |
 | Ollama | 11434 | LLM, VLM and embeddings |
 | Vite (frontend) | 5173 | proxies `/api` and `/ws` over to the backend |
 
@@ -381,12 +381,11 @@ backend does **not** read: `ASR_DEVICE`, `TTS_DEVICE`, `PANTOMATRIX_DIR`).
 
 ### The watches (`SENSE_*`)
 
-Everything ships **off**, and while `SENSE_ENABLED` is false the `[WATCH:]` vocabulary is not even
-assembled, so she cannot promise a watch nobody would arm.
+The watches are on by default and idle until one is armed: the sidecar samples nothing on its own. `SENSE_ENABLED=false` is an internal escape hatch (no panel switch on purpose); with it the `[WATCH:]` vocabulary is not even built, so she never offers what she cannot do.
 
 | Variable | Default | What for |
 |---|---|---|
-| `SENSE_ENABLED` | `false` | The master flag. `./hannah` starts `:8007` only when this is true |
+| `SENSE_ENABLED` | `true` | Internal escape hatch: `false` switches the watches off. Not exposed in the panel on purpose: idle, the sidecar samples nothing |
 | `SENSE_SIDECAR_URL` | `http://127.0.0.1:8007` | Where the sidecar is |
 | `HANNAH_SENSE_TOKEN` | *(empty)* | Bearer for `:8007`. **Empty closes the sidecar, it does not open it**: every route but `/health` answers 401. The launcher generates it into `.env` (0600) when missing |
 | `SENSE_MAX_WATCHES` | `2` | Two and not five: five at a 15 s period is twenty subprocess spawns a minute, forever, on a machine already running four sidecars |
