@@ -24,3 +24,11 @@ sse-starlette==3.4.8
 # una suite que nadie corre, y esta es la que prueba que la clasificación de
 # rutas todavía coincide con la del agente.
 pytest==9.1.1
+
+# El cliente HTTP que necesita fastapi.testclient.TestClient, que es con lo que
+# se prueba el prólogo de guardias de main.py (el 401 sin token, el 403 del
+# Origin, el 415, el tope del cuerpo) sin levantar el proceso ni abrir un puerto.
+# Es `httpx2` y NO `httpx`: starlette 1.6 importa httpx2 primero y avisa que con
+# httpx el testclient está deprecado, así que pinear el viejo es firmar una deuda
+# que ya está anunciada.
+httpx2==2.12.0

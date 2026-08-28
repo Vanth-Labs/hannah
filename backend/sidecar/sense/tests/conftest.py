@@ -13,6 +13,10 @@ de un test llega tarde.
 2. `HANNAH_AGENT_DENY_DIRS` se BORRA. Los casos golden del asset declaran cada
    uno el valor que quieren, y una variable heredada del shell (el launcher la
    exporta) cambiaría el veredicto de la mitad de la tabla sin que nadie lo vea.
+3. `HANNAH_SENSE_TOKEN` se FIJA, por las dos razones juntas: `config.TOKEN` se lee
+   al importar, y el valor que el launcher exporta en esta máquina haría que
+   `test_main.py` probara el guardia con un secreto real y distinto en cada
+   máquina. El caso del token vacío se prueba aparte, apagándolo a mano.
 """
 import os
 import sys
@@ -24,6 +28,7 @@ sys.path.insert(0, str(_SENSE))
 
 os.environ["HANNAH_SENSE_STATE_DIR"] = tempfile.mkdtemp(prefix="hannah-sense-tests-")
 os.environ.pop("HANNAH_AGENT_DENY_DIRS", None)
+os.environ["HANNAH_SENSE_TOKEN"] = "token-de-la-suite"
 
 import pytest  # noqa: E402
 

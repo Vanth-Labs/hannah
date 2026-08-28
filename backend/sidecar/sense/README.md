@@ -206,7 +206,7 @@ cd backend && npm run test:sense               # el atajo, desde donde se corre 
 
 ```bash
 cd backend/sidecar/sense                       # lo mismo, a mano
-.venv/bin/pip install -r requirements.txt      # trae pytest
+.venv/bin/pip install -r requirements.txt      # trae pytest y httpx2
 .venv/bin/python -m pytest tests -q
 ```
 
@@ -216,12 +216,14 @@ tiene script propio y está nombrada en `backend/README.md`: es la suite que pru
 que la clasificación de rutas de acá todavía coincide con la del agente, y una
 suite que nadie corre es una deriva que nadie ve.
 
-No hace falta ninguna variable: `tests/conftest.py` manda el estado a un temporal
-y **borra `HANNAH_AGENT_DENY_DIRS`** antes de importar nada, porque los casos
-golden declaran cada uno el valor que quieren y una variable heredada del shell
-cambiaría medio veredicto sin que se vea. Lo que sí hace falta es el repo del
-agente al lado (o `HANNAH_AGENT_FIXTURES`), porque la mitad de la suite compara
-contra su asset.
+No hace falta ninguna variable: `tests/conftest.py` manda el estado a un temporal,
+**borra `HANNAH_AGENT_DENY_DIRS`** y **fija `HANNAH_SENSE_TOKEN`** antes de
+importar nada. Las tres por el mismo motivo: los módulos leen el entorno al
+importarse, los casos golden declaran cada uno el valor de la denylist que
+quieren, y `test_main.py` prueba el guardia del token contra un valor conocido y
+no contra el secreto que el launcher exporta en esta máquina. Lo que sí hace
+falta es el repo del agente al lado (o `HANNAH_AGENT_FIXTURES`), porque la mitad
+de la suite compara contra su asset.
 
 ## Agregar un sensor
 
