@@ -85,6 +85,30 @@ Los eventos son siete y no hay otros: `watch.armed`, `watch.tripped`, `watch.bli
 Igual que la fachada, una conexión sin `Last-Event-ID` recibe el anillo entero: el
 backend deduplica por `seq`, que es por watch y arranca en 1.
 
+**Un cursor de otro arranque también recibe el anillo entero.** El `id:` del SSE
+es un cursor global que arranca en 0 cada vez que este proceso levanta, y el
+backend guarda su `lastId` por la vida de *su* proceso, que dura mucho más: un
+reinicio del sidecar solo (una actualización, un crash) deja al cliente pidiendo
+desde un número que acá todavía no existe. Eso es imposible dentro de un
+arranque, así que se trata como una conexión nueva y se avisa:
+
+```
+: sense.v1 connected cursor=4 boot=1f3c…       (sin Last-Event-ID)
+: sense.resume from=500 replayed=4 truncated=true boot=1f3c…
+```
+
+`truncated=true` no quiere decir "faltan eventos": quiere decir **esto no es la
+continuación de lo que pediste**. Antes ese caso contestaba `truncated=false` y
+no entregaba nada, con la conexión abierta y el backend diciendo `up`: ceguera
+silenciosa, que es justo lo que la fase existe para evitar. `boot` es la
+identidad del arranque del anillo, para que el cliente pueda tirar el cursor que
+tenía en vez de remandarlo en cada reconexión.
+
+Es el punto donde `facade/store.ts`, de donde está portado el algoritmo, deja de
+servir de referencia: la fachada corre **dentro** del proceso del agente y muere
+con su cliente, así que los dos cursores nacen juntos y uno adelantado no puede
+existir. Acá el sidecar reinicia solo y ese caso es el normal.
+
 ## Estado en disco
 
 `~/.local/share/hannah-sense/watches.json`, carpeta `0700` y archivo `0600`, escrito

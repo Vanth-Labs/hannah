@@ -219,8 +219,11 @@ async def events(request: Request):
 
     `Last-Event-ID` (o `?after=`) reanuda desde el anillo, igual que la fachada:
     un backend que reconecta en medio de una vigilancia perdería si no el trip
-    que estaba por narrar. Cuando el anillo ya tiró parte del hueco se dice con
-    un comentario `sense.resume` en vez de fingir que el replay fue completo.
+    que estaba por narrar. Cuando el replay no es la continuación exacta de lo
+    que se pidió se dice con un comentario `sense.resume` en vez de fingir que
+    fue completo, y el comentario lleva el `boot` del anillo: el sidecar reinicia
+    solo y su cursor vuelve a 0, así que un cursor de otro arranque es el caso
+    normal y no la excepción (ver `EventBus.since`).
     """
     header = request.headers.get("last-event-id") or request.query_params.get("after") or ""
     try:
@@ -232,7 +235,11 @@ async def events(request: Request):
     # ambos pasos no está ni en el replay ni en la cola y se pierde para siempre.
     queue = bus.subscribe()
     replay, truncated = bus.since(cursor)
-    watermark = replay[-1].cursor if replay else cursor
+    # La marca de agua sale del ANILLO y nunca del cursor del cliente: con
+    # `else cursor` un Last-Event-ID de un arranque anterior se leía como "esto
+    # ya se envió" y filtraba todos los eventos siguientes, con la conexión
+    # abierta y el backend diciendo `up`. Ver EventBus.watermark.
+    watermark = bus.watermark(replay)
 
     def frame(stored):
         return ServerSentEvent(data=json.dumps(stored.envelope, ensure_ascii=False),
@@ -243,9 +250,11 @@ async def events(request: Request):
             if cursor > 0:
                 yield ServerSentEvent(comment=(
                     f"sense.resume from={cursor} replayed={len(replay)} "
-                    f"truncated={'true' if truncated else 'false'}"))
+                    f"truncated={'true' if truncated else 'false'} "
+                    f"boot={bus.boot_id()}"))
             else:
-                yield ServerSentEvent(comment=f"sense.v1 connected cursor={bus.cursor()}")
+                yield ServerSentEvent(
+                    comment=f"sense.v1 connected cursor={bus.cursor()} boot={bus.boot_id()}")
             for stored in replay:
                 yield frame(stored)
             while True:

@@ -14,8 +14,9 @@ durante seis horas es exactamente lo que el plan rechazó.
 """
 import asyncio
 import logging
+import secrets
 import time
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Sequence
 
 from config import EVENT_BUFFER, VERSION
 
@@ -52,6 +53,12 @@ class EventBus:
         self._events: list[Stored] = []
         self._buffer_size = buffer_size
         self._cursor = 0
+        # Identidad de ESTE arranque del anillo. Un cursor solo quiere decir algo
+        # adentro del arranque que lo emitió: acá arranca en 0 cada vez que el
+        # proceso levanta, y el backend guarda su `lastId` por la vida de SU
+        # proceso, que es mucho más larga. Viaja en el comentario de la conexión
+        # para que el cliente pueda notar que cambió y tirar el cursor que tenía.
+        self._boot = secrets.token_hex(8)
         self._seq: dict[str, int] = {}
         self._subscribers: set[asyncio.Queue] = set()
 
@@ -93,18 +100,63 @@ class EventBus:
     def since(self, cursor: int) -> tuple[list[Stored], bool]:
         """Eventos posteriores a `cursor`, para el resume con Last-Event-ID.
 
-        `truncated` dice que el anillo ya había tirado parte de lo que el cliente
-        se perdió; el silencio sería la respuesta peligrosa (el backend cree que
-        replayeó todo y se come un trip).
+        `truncated` NO quiere decir "faltan eventos": quiere decir que lo que va
+        a salir por esta conexión no es la continuación exacta de lo que el
+        cliente pidió. El silencio sería la respuesta peligrosa (el backend cree
+        que replayeó todo y se come un trip).
+
+        Hay DOS formas de no poder continuar, y la segunda es la que faltaba:
+
+        * el anillo ya tiró parte del hueco (`cursor` por debajo del más viejo);
+        * el `cursor` viene ADELANTADO, o sea de otro arranque de este proceso.
+          Adentro de un arranque el cursor solo sube, así que pedir desde 500
+          cuando el más nuevo es 4 es imposible por construcción. Antes eso se
+          contestaba `truncated=false` y se filtraba todo: un resume limpio que
+          no entregaba NADA. El backend veía la conexión abierta, decía `up`, y
+          el contrato de ceguera no lo agarraba porque sí estaba en contacto.
+          Ahora un cursor imposible se trata como una conexión nueva (el anillo
+          entero, igual que sin Last-Event-ID) y se dice `truncated=true`.
+
+        Esto se apartó a propósito de `facade/store.ts:224`, de donde está
+        portado el resto. Allá la forma alcanza porque la fachada vive DENTRO del
+        proceso del agente y muere con su cliente: los dos cursores nacen
+        juntos, así que uno adelantado no existe. Acá el sidecar reinicia solo
+        (una actualización, un crash, `systemctl restart`) mientras el backend
+        sigue vivo con su `lastId` en la mano, y ese caso es el normal.
         """
+        if cursor > self._cursor:
+            # Imposible dentro de este arranque: el cliente trae el cursor de uno
+            # anterior. Se le da lo que hay, que es lo mismo que recibe un
+            # cliente sin Last-Event-ID; el `seq` por watch es lo que deduplica.
+            return list(self._events), True
         if not self._events:
             return [], False
         oldest = self._events[0].cursor
         truncated = cursor > 0 and cursor < oldest - 1
         return [event for event in self._events if event.cursor > cursor], truncated
 
+    def watermark(self, replay: Sequence[Stored]) -> int:
+        """El cursor más alto que YA salió por esta conexión.
+
+        Sale del anillo y JAMÁS del cursor que mandó el cliente. La ruta se
+        suscribe antes de calcular el replay, así que un evento publicado en el
+        medio queda en los dos lados y hace falta saber hasta dónde se envió;
+        pero tomar el cursor del cliente como "esto ya se envió" convierte un
+        Last-Event-ID viejo en un filtro que se come TODO lo que venga después,
+        para siempre, con la conexión abierta. Con el anillo vacío y un cursor de
+        500, el backend quedaba sordo hasta el evento 501.
+
+        Se llama pegado a `since()`: no hay await en el medio, así que las dos
+        miran el mismo anillo.
+        """
+        return replay[-1].cursor if replay else self._cursor
+
     def cursor(self) -> int:
         return self._cursor
+
+    def boot_id(self) -> str:
+        """Identidad de este arranque. Ver `_boot` y el docstring de `since()`."""
+        return self._boot
 
     def subscribe(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE)
