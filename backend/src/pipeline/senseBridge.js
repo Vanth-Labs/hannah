@@ -280,9 +280,9 @@ function pushState(w) { broadcast(stateMsg(w)); }
 // palabras del usuario, saneadas) y números: nunca una línea de log, una ruta ni un host. Esa
 // es la regla R3 aplicada al único lugar donde el contenido observado podría entrar a la voz.
 const EYES = {
-    tripped: ({ label, when }) => `"${label}" — the thing you were keeping an eye on for the user — `
+    tripped: ({ subject, when }) => `${subject} — the thing you were keeping an eye on for the user — `
         + `STOPPED, and you noticed at ${when}.`,
-    tripped_away: ({ label, when, ago }) => `while the user was away, "${label}" — the thing you were `
+    tripped_away: ({ subject, when, ago }) => `while the user was away, ${subject} — the thing you were `
         + `keeping an eye on — STOPPED at ${when}, ${ago}. Say FIRST that this happened while they `
         + 'were not here, then what it was and at what time.',
     // NO HAY FRASE PARA EL DISPARO HUÉRFANO, y su ausencia es la decisión. Había una: envolvía la
@@ -291,12 +291,12 @@ const EYES = {
     // y hedgear la atribución no impide que esas palabras entren igual en el oído de un tercero.
     // El plan §10 no deja lugar: "if that session is gone the trip is persisted, NOT spoken to a
     // stranger". Un disparo sin dueña vivo se guarda y se muestra; ver flushInbox.
-    blind: ({ label }) => `you LOST SIGHT of "${label}": right now you are NOT watching it and you do `
+    blind: ({ subject }) => `you LOST SIGHT of ${subject}: right now you are NOT watching it and you do `
         + 'not know whether it is still running. Say exactly that, and do not guess how it is going.',
-    recovered: ({ label }) => `you can see "${label}" again and you are watching it like before.`,
-    expired: ({ label }) => `the time you agreed to keep an eye on "${label}" is up, so you STOPPED `
+    recovered: ({ subject }) => `you can see ${subject} again and you are watching it like before.`,
+    expired: ({ subject }) => `the time you agreed to keep an eye on ${subject} is up, so you STOPPED `
         + 'watching it. Say it plainly, so the user does not keep believing someone is looking.',
-    faulted: ({ label }) => `the way you were watching "${label}" BROKE, so you are not watching it `
+    faulted: ({ subject }) => `the way you were watching ${subject} BROKE, so you are not watching it `
         + 'any more. Say it plainly, and do not promise to try again.',
 };
 
@@ -323,8 +323,25 @@ const EYES = {
  * DIJERA en voz alta — y en un reenvío, que se lo dijera a alguien que no lo escribió. Es una
  * fuga, no una ejecución, y se arregla igual.
  */
+/**
+ * De qué habla la frase. Con etiqueta cuando quien escucha es SU DUEÑA; sin ella, un sustantivo.
+ *
+ * Es la misma decisión que EYES ya tomó para el disparo huérfano, aplicada al otro grupo de
+ * frases. Las de estado (blind/recovered/expired/faulted) no van atadas: pasan por
+ * currentListener(), que cae en cualquier sesión conectada cuando la dueña no puede oír, y eso es
+ * deliberado —callar que nadie está mirando es la peor falla que tiene esto—. Pero QUIÉN debe
+ * enterarse y CON QUÉ PALABRAS son dos preguntas distintas, y currentListener solo contestaba la
+ * primera: en vivo, una sesión que no armó nada escuchó y dijo en voz alta la frase de otra,
+ * con su etiqueta entera, mientras el MISMO sobre le blanqueaba esas palabras en la pantalla
+ * (armedMsg, `mine:false`). La etiqueta es texto libre que dictó una persona; el hecho de que
+ * nadie está mirando no lo es. Se dice el hecho, no las palabras ajenas.
+ */
+const subjectFor = ({ label, owned }) => (owned === false || !label
+    ? 'something you were keeping an eye on'
+    : `"${watchLabel(label)}"`);
+
 function eyesPrompt(kind, vars) {
-    return `[YOUR EYES] ${EYES[kind]({ ...vars, label: watchLabel(vars.label) })} Tell the user this in ONE short `
+    return `[YOUR EYES] ${EYES[kind]({ ...vars, subject: subjectFor(vars) })} Tell the user this in ONE short `
         + 'sentence, in your own words, staying in character. Do NOT invent details, numbers or causes: the '
         + 'line above is the only thing you know. You only WATCH: you did not fix or restart anything, and you cannot.';
 }
@@ -510,13 +527,15 @@ export async function onEvent(env) {
 
         case 'watch.expired':
             w.state = 'expired';
-            eyes(currentListener(w.sessionId), w.watchId, 'expired', { label: w.label });
+            eyes(currentListener(w.sessionId), w.watchId, 'expired',
+                { label: w.label, owned: currentListener(w.sessionId) === w.sessionId });
             break;
 
         case 'watch.faulted':
             w.state = 'faulted';
             logger.error('sensor de vigilancia roto', { watchId: w.watchId, error: clean(d.error, 120) });
-            eyes(currentListener(w.sessionId), w.watchId, 'faulted', { label: w.label });
+            eyes(currentListener(w.sessionId), w.watchId, 'faulted',
+                { label: w.label, owned: currentListener(w.sessionId) === w.sessionId });
             break;
 
         case 'watch.disarmed':
@@ -601,8 +620,10 @@ function tryDeliver(trip, kind) {
     trip.inFlight = true;
     toSession(trip.sessionId, { type: 'watch_tripped', watchId: trip.watchId, label: trip.label,
         at: trip.at, confidence: trip.confidence });
+    // `owned: true` sin condición: esta función no puede nombrar a otro destinatario que la
+    // dueña, así que si llega hasta acá quien escucha es quien lo dictó.
     eyes(trip.sessionId, trip.watchId, kind,
-        { label: trip.label, when: clockOf(trip.at), ago: agoOf(trip.at) },
+        { label: trip.label, owned: true, when: clockOf(trip.at), ago: agoOf(trip.at) },
         { onSaid: () => outOfInbox(trip), onLost: () => failedDelivery(trip) });
 }
 
@@ -768,7 +789,8 @@ function sayBlind(w) {
     const listener = currentListener(w.sessionId);
     if (!listener) return;
     w.blindSpoken = true;
-    eyes(listener, w.watchId, 'blind', { label: w.label }, { onLost: () => { w.blindSpoken = false; } });
+    eyes(listener, w.watchId, 'blind', { label: w.label, owned: listener === w.sessionId },
+        { onLost: () => { w.blindSpoken = false; } });
 }
 
 /**
@@ -803,7 +825,8 @@ function goVisible(w) {
     if (w.state !== 'armed') return;
     if (!w.blindSpoken) return;
     w.blindSpoken = false;
-    eyes(currentListener(w.sessionId), w.watchId, 'recovered', { label: w.label });
+    const listener = currentListener(w.sessionId);
+    eyes(listener, w.watchId, 'recovered', { label: w.label, owned: listener === w.sessionId });
 }
 
 // ── Contacto con el sidecar ────────────────────────────────────────────────────────────

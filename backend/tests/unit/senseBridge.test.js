@@ -421,6 +421,43 @@ describe('ACEPTACIÓN — matar el sidecar a mitad de una vigilancia', () => {
         expect(narrated[0].sessionId).toBe(s2);
     });
 
+    // QUIÉN se entera y CON QUÉ PALABRAS son dos preguntas distintas, y hasta acá solo se
+    // contestaba la primera: currentListener cae en cualquier sesión conectada cuando la dueña no
+    // puede oír (bien: callar que nadie mira es la peor falla de esto), pero la frase se llevaba
+    // la etiqueta entera. Medido en vivo: una sesión que no armó nada dijo en voz alta el texto
+    // que dictó otra, mientras el MISMO sobre se lo blanqueaba en la pantalla (mine:false).
+    test('la ceguera se le dice a un tercero SIN las palabras de la dueña', async () => {
+        config.sense.blindMs = 40;
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'el entrenamiento de la tesis de Marta');
+        detach(s1);
+        hooks.onStatus('down');
+        await new Promise((r) => setTimeout(r, 120));
+        await bridge._settle();
+
+        const s2 = open();
+        attach(s2);
+        await bridge._settle();
+        const dicho = narrated.filter((n) => /LOST SIGHT/.test(n.prompt));
+        expect(dicho).toHaveLength(1);
+        expect(dicho[0].sessionId).toBe(s2);
+        // El hecho sí, las palabras no.
+        expect(dicho[0].prompt).toContain('something you were keeping an eye on');
+        expect(dicho[0].prompt).not.toMatch(/Marta|tesis|entrenamiento/i);
+    });
+
+    test('a su dueña, en cambio, se la nombra: si no, no sabe de cuál le hablan', async () => {
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'el entrenamiento de la tesis');
+        await emit('w_1', 2, 'watch.blind', { label: 'el entrenamiento de la tesis', sinceMs: 1, reason: 'x' });
+        await bridge._settle();
+        const dicho = narrated.filter((n) => /LOST SIGHT/.test(n.prompt));
+        expect(dicho.at(-1).sessionId).toBe(s1);
+        expect(dicho.at(-1).prompt).toContain('el entrenamiento de la tesis');
+    });
+
     test('el sidecar que se apaga ordenado (watch.disarmed shutdown) también se dice', async () => {
         const s1 = open();
         attach(s1);

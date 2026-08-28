@@ -48,7 +48,7 @@ const getLlmClient = () => {
 
 // System prompt = persona + memoria (resumen + recall vectorial) + protocolo.
 // Exportado como helper puro para tests (qué entra al prompt y cuándo); el resto del módulo no cambia.
-export async function buildSystemPrompt(history, withActions, noActions = false) {
+export async function buildSystemPrompt(history, withActions, noActions = false, sessionId = null) {
     const summary = memoryStore.getSummary();
     const recalled = await recallContext(history);
     let memorySection = '';
@@ -74,7 +74,7 @@ export async function buildSystemPrompt(history, withActions, noActions = false)
     // y un escalón que esta máquina no tiene no se nombra. El [WATCH STATUS], en cambio, va
     // siempre — como handsStatus() —, porque preguntar "¿cómo va?" es narración, no acción.
     const watch = !noActions && config.sense.enabled ? await watchProtocolSection() : '';
-    return `${config.llm.persona}${memorySection}\n\n${protocol}${skillsSection}${hands}${watch}${handsStatus()}${await watchStatus()}`;
+    return `${config.llm.persona}${memorySection}\n\n${protocol}${skillsSection}${hands}${watch}${handsStatus()}${await watchStatus(sessionId)}`;
 }
 
 /**
@@ -91,7 +91,7 @@ export const generateDialogueStream = async (history, onToken, onComplete, signa
         // apagadas: hay que ver la respuesta entera para poder descartar la prosa que rodea a
         // un [TASK:] (ver keepOnlyTask) antes de que una sola sílaba llegue al TTS.
         const handsOn = !ctx.noActions && config.agent.enabled && agentHealthy();
-        const systemPrompt = await buildSystemPrompt(history, useActions, !!ctx.noActions);
+        const systemPrompt = await buildSystemPrompt(history, useActions, !!ctx.noActions, ctx.sessionId);
         const messages = [
             { role: 'system', content: systemPrompt },
             ...history.map((turn) => ({
@@ -361,10 +361,22 @@ export function watchLabel(raw) {
  * Los tres campos de máquina se validan contra su enum; el cuarto, la ETIQUETA, es el único
  * texto libre que queda, y por eso es el que hay que sanear acá y no confiar en quien lo escribió
  * (el sidecar puede estar suplantado, y la ruta REST acepta la etiqueta que le manden).
+ *
+ * SOLO LAS DE ESTA SESIÓN. La lista del sidecar es del PROCESO, así que sin filtrar acá el
+ * system prompt de CADA turno de CADA sesión llevaba la etiqueta de todas: medido en vivo, una
+ * sesión que no armó nada preguntó "¿cómo va mi día?" y su prompt llevaba la frase que dictó
+ * otra. Sanear no es lo mismo que no mostrar: watchLabel() (680c1c6) deja pasar hasta ocho
+ * palabras del usuario, que es justo lo que hace reconocible una vigilancia y lo que la vuelve
+ * privada. Es la misma regla por destinatario que ya rige la pantalla (armedMsg) y la voz
+ * (subjectFor en senseBridge), aplicada al tercer canal.
+ *
+ * Sin `sessionId` no se emite NADA: el único llamador de producción lo tiene, así que la
+ * ausencia significa un contexto que no sabemos de quién es, y ahí callar es lo correcto.
  */
-export async function watchStatus() {
+export async function watchStatus(sessionId = null) {
+    if (!sessionId) return '';
     const { watches } = await senseClient.watchRows();
-    const live = watches.filter((w) => WATCH_LIVE.has(w?.state));
+    const live = watches.filter((w) => WATCH_LIVE.has(w?.state) && w?.sessionId === sessionId);
     if (!live.length) return '';
     return '\n\n[WATCH STATUS] ' + live.slice(0, 5).map((w) =>
         `"${watchLabel(w.label)}": ${asEnum(w.state, WATCH_STATES)}, watching ${asEnum(w.sensorKind, kindEnum())}`
