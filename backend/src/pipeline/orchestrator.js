@@ -426,8 +426,22 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
             // Guardar la respuesta final real en el historial oficial de la sesión. Si la
             // respuesta era solo un [TASK:] (keepOnlyTask), se guarda como frase legible: el
             // historial no debe enseñarle al modelo a repetir tags, y la memoria la resume mejor.
+            // Lo MISMO con [WATCH:], y por dos razones, no una: el historial es lo que el modelo
+            // lee para decidir qué escribir, y además cada turno guardado va a memory.db y al
+            // índice de embeddings — o sea que el tag crudo dejaba la RUTA vigilada escrita para
+            // siempre en la base que la política del agente marca como sensible, justo lo que el
+            // plan §9 pide evitar cuando declara efímera la narración de las vigilancias.
+            // Dos diferencias con el de las manos, las dos a propósito: el tag va al FINAL de una
+            // respuesta hablada (no es la respuesta entera, así que no se ancla), y el argumento
+            // NO se conserva — el de [TASK:] es la descripción que escribió el modelo, el de
+            // [WATCH:] es la ruta. Qué se está mirando ya está dicho con las palabras del usuario
+            // en el turno de al lado.
             const spokenOrDelegated = String(finalLlmResult.text || '')
-                .replace(/^\s*[[(*]\s*TASK:\s*([^\])*\n]+?)\s*[\])*]\s*$/i, '(I handed this to my hands: $1)');
+                .replace(/^\s*[[(*]\s*TASK:\s*([^\])*\n]+?)\s*[\])*]\s*$/i, '(I handed this to my hands: $1)')
+                // Cierre OPCIONAL, igual que en el stripeo de la voz: un tag truncado por
+                // max_tokens ("[WATCH: log |") tampoco puede quedar escrito en la base.
+                .replace(/[[(*]\s*WATCH\s*:[^\])*\n]*[\])*]?/gi, '(I am keeping an eye on this for the user.)')
+                .trim();
             conversationManager.addTurn(sessionId, 'assistant', spokenOrDelegated, { ephemeral: !!opts.ephemeral });
             conversationManager.updateSessionMetadata(sessionId, { emotion: finalLlmResult.emotion });
 

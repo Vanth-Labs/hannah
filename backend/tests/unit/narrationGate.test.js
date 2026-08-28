@@ -13,6 +13,16 @@ import { Readable } from 'node:stream';
 
 process.env.MOTION_ENABLED = 'false';   // sin sidecar de motion: acá se mide qué se ejecuta
 
+// El embedding de un turno es fire-and-forget dentro de addTurn y llama al proveedor de verdad:
+// se mockea para poder AFIRMAR qué texto se embebió (el índice vectorial es la otra base donde
+// quedaba escrita la ruta vigilada), y no solo suponerlo. Va antes que los imports reales: el
+// grafo de módulos se carga con el primer await import de abajo.
+let embedded = [];
+jest.unstable_mockModule('../../src/state/embeddings.js', () => ({
+    embed: async (text) => { embedded.push(text); return new Float32Array([0.1, 0.2]); },
+    cosine: () => 0,
+}));
+
 // Los módulos ESM son inmutables (jest.spyOn no los parchea), así que se mockean con
 // unstable_mockModule ANTES de importar el orquestador. Cada mock parte del namespace REAL y
 // solo pisa lo que sale del proceso (modelo, TTS, ventana, agente): un mock escrito a mano deja
@@ -51,6 +61,8 @@ jest.unstable_mockModule('../../src/pipeline/tools.js', () => ({ ...realTools, a
 
 const { processTextTurn } = await import('../../src/pipeline/orchestrator.js');
 const { conversationManager } = await import('../../src/state/conversationManager.js');
+const { memoryStore } = await import('../../src/state/memoryStore.js');
+const { config } = await import('../../src/config.js');
 const { logger } = await import('../../src/utils/logger.js');
 
 // El modelo delega Y mueve la ventana en la misma respuesta, con prosa alrededor para que
@@ -65,13 +77,17 @@ const turn = async (opts) => {
 };
 const spoken = () => sent.filter((m) => m.type === 'audio_chunk').map((m) => m.text).join(' ');
 
+const originalRecall = config.memory.recallEnabled;
 beforeEach(() => {
     ({ sessionId } = conversationManager.createSession());
-    sent = []; script = HOSTILE;
+    sent = []; script = HOSTILE; embedded = [];
     dispatch.mockClear(); moveWindow.mockClear(); armWatch.mockClear();
     warn = jest.spyOn(logger, 'warn').mockImplementation(() => logger);
 });
-afterEach(() => { warn.mockRestore(); conversationManager.deleteSession(sessionId); });
+afterEach(() => {
+    warn.mockRestore(); conversationManager.deleteSession(sessionId);
+    config.memory.recallEnabled = originalRecall;
+});
 
 describe('turno de narración (noActions): los tags se stripean pero NO se ejecutan', () => {
     test('no despacha la tarea, no mueve la ventana y no arma la vigilancia', async () => {
@@ -114,5 +130,47 @@ describe('turno normal: la MISMA salida sí actúa (el gate no es una tubería r
     test('el TTS tampoco los oye acá: ejecutar y hablar son cosas distintas', async () => {
         await turn({});
         expect(spoken()).not.toMatch(/TASK|MOVE|WATCH/i);
+    });
+});
+
+// Lo que se EJECUTA es la mitad de arriba; esto es lo que queda ESCRITO. Un turno guardado va a
+// tres lugares a la vez: la ventana de contexto que el modelo relee, memory.db y el índice de
+// embeddings — y las dos bases están en data/, que la política del agente marca como sensible.
+// El hermano de este arreglo ya existía para [TASK:] y decía por qué en su comentario; [WATCH:]
+// caía por el costado con su ARGUMENTO adentro, que en un watch de archivo o de log es una ruta.
+describe('lo que queda escrito de un [WATCH:]: la frase, nunca el tag ni la ruta', () => {
+    test('ni en la ventana de contexto, ni en memory.db, ni en el índice vectorial', async () => {
+        config.memory.recallEnabled = true;
+        const before = memoryStore.recentTurns(200).length;
+        script = 'listo, miro el log del entrenamiento. [WATCH: log | /home/webiwabou/train.log | 5]';
+        await turn({});
+        await new Promise((r) => setTimeout(r, 20));   // el embedding es fire-and-forget
+
+        // La vigilancia SÍ se armó: lo que cambia es lo que se recuerda, no lo que se hace.
+        expect(armWatch).toHaveBeenCalledTimes(1);
+
+        const stored = conversationManager.getSession(sessionId).turns.at(-1).content;
+        expect(stored).toContain('listo, miro el log del entrenamiento.');
+        expect(stored).not.toMatch(/WATCH\s*:/i);
+        expect(stored).not.toMatch(/train\.log/);
+
+        const rows = memoryStore.recentTurns(200).slice(before);
+        expect(rows.some((r) => r.content === stored)).toBe(true);
+        expect(JSON.stringify(rows)).not.toMatch(/WATCH\s*:|train\.log/i);
+        expect(embedded.join(' | ')).not.toMatch(/WATCH\s*:|train\.log/i);
+    });
+
+    test('un tag truncado por max_tokens tampoco se guarda a medias', async () => {
+        script = 'listo, lo miro. [WATCH: log | /home/webiwabou/train.log';
+        await turn({});
+        const stored = conversationManager.getSession(sessionId).turns.at(-1).content;
+        expect(stored).not.toMatch(/WATCH\s*:|train\.log/i);
+    });
+
+    test('el de las manos sigue guardándose como antes (no se rompió al extenderlo)', async () => {
+        script = '[TASK: list the files in Documents]';
+        await turn({});
+        expect(conversationManager.getSession(sessionId).turns.at(-1).content)
+            .toBe('(I handed this to my hands: list the files in Documents)');
     });
 });
