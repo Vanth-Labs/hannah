@@ -24,7 +24,12 @@ from .base import DETERMINISTIC, Sample, Sensor, SensorError, SensorFault, SpecE
 
 # Nombre de unidad de systemd: lo que systemd.unit(5) acepta, más el sufijo.
 # Se valida al armar para que un nombre raro sea un 400 y no una llamada rara.
-_UNIT = re.compile(r"^[A-Za-z0-9:_.\\@-]{1,200}"
+#
+# El primer carácter NO puede ser `-`: systemd tampoco lo acepta, y acá el guión
+# inicial es lo que convierte una unidad en una OPCIÓN de systemctl. Es la mitad
+# que se ve en el 400, con una razón que se puede decir en voz alta; la otra
+# mitad es el `--` de sample(), que la hace imposible aunque este regex cambie.
+_UNIT = re.compile(r"^[A-Za-z0-9:_.\\@][A-Za-z0-9:_.\\@-]{0,199}"
                    r"\.(service|socket|timer|target|mount|path|slice|scope|device|swap)$")
 
 # Estados que cuentan como "la unidad está haciendo lo suyo". `activating` está
@@ -58,8 +63,16 @@ class UnitSensor(Sensor):
         return cls(unit.strip(), systemctl)
 
     async def sample(self) -> Sample:
-        done = await run_argv([self._systemctl, "show", self._unit,
-                               "--property=LoadState", "--property=ActiveState"])
+        # El `--`, igual que el de proc.py y por el mismo motivo: con argv no hay
+        # inyección posible, pero sí confusión de opciones. Sin él,
+        # `--version.service` llegaba como opción, systemctl contestaba
+        # "unrecognized option", cada sample fallaba, el streak nunca se movía y
+        # después de SENSE_BLIND_MS Hannah decía que perdió de vista algo que
+        # nunca existió. Con el `--` la unidad es un nombre: systemd contesta
+        # not-found y el watch termina como `faulted`, que es la verdad.
+        done = await run_argv([self._systemctl, "show",
+                               "--property=LoadState", "--property=ActiveState",
+                               "--", self._unit])
         if done.code != 0:
             raise SensorError(f"systemctl terminó en {done.code}")
         fields = dict(

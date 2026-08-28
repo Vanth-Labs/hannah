@@ -338,6 +338,34 @@ def test_unit_valida_el_nombre():
             sensors.build({"kind": "unit", "unit": malo})
 
 
+def test_unit_no_arma_con_un_nombre_que_empieza_con_guion():
+    """`--version.service` no es una unidad: es una opción de systemctl.
+
+    Armaba con 201 y después fallaba en cada sample con "unrecognized option".
+    Eso es un sample fallado, no una muestra no sana: el streak no se mueve, no
+    hay trip nunca, y pasado SENSE_BLIND_MS Hannah dice que perdió de vista algo
+    que jamás existió. Un nombre que no es un nombre tiene que ser un 400 al
+    armar, que es donde el usuario puede escuchar la razón.
+    """
+    capability.pin(lambda command: TODAS.get(command))
+    for opcion in ("--version.service", "-h.service", "--user.service"):
+        with pytest.raises(sensors.SpecError):
+            sensors.build({"kind": "unit", "unit": opcion})
+
+
+def test_unit_pone_el_fin_de_opciones_antes_de_la_unidad(argv_spy):
+    """La otra mitad, estructural: aunque el regex se afloje, la unidad viaja
+    después del `--` y systemctl no la puede leer como opción. Es lo mismo que
+    hace proc.py con su patrón."""
+    calls, result = argv_spy
+    sensor = sensors.build({"kind": "unit", "unit": "docker.service"})
+    result["out"] = b"LoadState=loaded\nActiveState=active\n"
+    run(sensor.sample())
+    argv, _ = calls[0]
+    assert argv[-2:] == ("--", "docker.service")
+    assert "--" not in argv[:-2], "un solo fin de opciones, y al final"
+
+
 # ── Las rutas, en el camino de armado ────────────────────────────────────────
 @pytest.mark.parametrize("ruta", ["~/.ssh/id_rsa", "~/Projects/demo/.env",
                                   "/srv/app/.env.production", "/proc/self/environ"])
