@@ -201,10 +201,20 @@ la carpeta del layout instalado); el launcher se lo pasa al agente por
 ## Los tests
 
 ```bash
-cd backend/sidecar/sense
+cd backend && npm run test:sense               # el atajo, desde donde se corre todo lo demás
+```
+
+```bash
+cd backend/sidecar/sense                       # lo mismo, a mano
 .venv/bin/pip install -r requirements.txt      # trae pytest
 .venv/bin/python -m pytest tests -q
 ```
+
+`npm test` (jest) **no** la corre: este venv se crea a mano y puede no existir, y
+encadenarla ahí convertiría "falta el venv" en una suite roja del backend. Por eso
+tiene script propio y está nombrada en `backend/README.md`: es la suite que prueba
+que la clasificación de rutas de acá todavía coincide con la del agente, y una
+suite que nadie corre es una deriva que nadie ve.
 
 No hace falta ninguna variable: `tests/conftest.py` manda el estado a un temporal
 y **borra `HANNAH_AGENT_DENY_DIRS`** antes de importar nada, porque los casos

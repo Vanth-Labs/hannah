@@ -552,8 +552,16 @@ must never take the server down: `await` and `.catch` on everything fired in the
 
 ```bash
 npm test              # jest in ESM mode
+npm run test:sense    # pytest over sidecar/sense, in ITS OWN venv
 npm run lint          # eslint over src and tests
 ```
+
+**`npm test` does not run `test:sense`, on purpose.** The sense suite lives in
+`sidecar/sense/.venv`, which is created by hand and may not exist; chaining it
+into `npm test` would turn "the venv isn't built" into a red backend suite. But
+it is not optional either: it is the suite that proves the sidecar's path
+classification still agrees with the agent's `policy/paths.ts`, golden case by
+golden case, and a suite nobody runs is a drift nobody sees. Run both.
 
 `tests/setup.js` **isolates the tests from your real data** (`MEMORY_DB_PATH=':memory:'`,
 `MEMORY_RECALL=false`). Without that, the suite wrote into the real memory and called Ollama —
