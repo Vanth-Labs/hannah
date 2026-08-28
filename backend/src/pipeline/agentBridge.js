@@ -107,14 +107,29 @@ const narrationQueue = new Map();   // sessionId -> { chain: Promise, pending: [
  * El motor de la cola, compartido por las manos y por los ojos (senseBridge). `id` es la clave
  * de colapso — la tarea, o la vigilancia —: solo se descartan narrables VIEJOS del MISMO id.
  * `opts` se mezcla con lo que recibe processTextTurn (hoy: `ephemeral` para las vigilancias).
+ *
+ * DEVUELVE EL ACUSE DE ESTE narrable: `{ spoken, reason }`, no la cadena. La diferencia importa
+ * por dos razones distintas, y las dos hacían perder frases:
+ *  - `q.chain` resuelve cuando la cola AVANZÓ, no cuando se habló. processTextTurn atrapa sus
+ *    propios errores, así que con el modelo caído la cadena resolvía igual y quien narraba algo
+ *    que no puede volver a pedir (un disparo de vigilancia) lo daba por entregado y lo tiraba.
+ *  - con la regla de colapso, el paso N de la cadena no procesa necesariamente el narrable N —el
+ *    colapsado no llega a procesarse nunca—, así que devolver la cadena le contestaba a un
+ *    llamador con el resultado de otro. Cada narrable trae su propia promesa y la resuelve él.
  */
 function enqueue(sessionId, s, { id, mustKeep, prompt, opts }) {
     const q = narrationQueue.get(sessionId) || { chain: Promise.resolve(), pending: [] };
     narrationQueue.set(sessionId, q);
     // colapsar: si ya hay narrables esperando de este id y este no es una pregunta, el nuevo
-    // reemplaza a los viejos (lo último que pasó es lo que importa)
-    if (!mustKeep) q.pending = q.pending.filter((p) => p.id !== id || p.mustKeep);
-    q.pending.push({ id, mustKeep, prompt, opts });
+    // reemplaza a los viejos (lo último que pasó es lo que importa). Un colapsado NO se dijo, y
+    // eso hay que contestárselo a quien lo encoló en vez de dejarle la promesa colgada.
+    if (!mustKeep) {
+        for (const p of q.pending) if (p.id === id && !p.mustKeep) p.settle({ spoken: false, reason: 'collapsed' });
+        q.pending = q.pending.filter((p) => p.id !== id || p.mustKeep);
+    }
+    let settle;
+    const acked = new Promise((resolve) => { settle = resolve; });
+    q.pending.push({ id, mustKeep, prompt, opts, settle });
     q.chain = q.chain.then(async () => {
         const item = q.pending.shift();
         if (!item) return;
@@ -123,14 +138,19 @@ function enqueue(sessionId, s, { id, mustKeep, prompt, opts }) {
         const ctl = new AbortController();
         s.narrating = ctl;   // barge-in (SPEECH_START/INTERRUPT) aborta ESTA narración, no la tarea
         try {
-            await narrate(sessionId, item.prompt, s.send, { noActions: true, signal: ctl.signal, ...item.opts });
+            const r = await narrate(sessionId, item.prompt, s.send, { noActions: true, signal: ctl.signal, ...item.opts });
+            // `spoken` lo pone processTextTurn cuando una oración salió de verdad por el socket.
+            // Ausente = no hay acuse, y sin acuse se asume SILENCIO: el lado seguro de equivocarse
+            // es repetir una frase, no perderla.
+            item.settle({ spoken: !!r?.spoken, reason: r?.error || (r ? 'silent' : 'no_ack') });
         } catch (e) {
             logger.error('agent narration failed', { message: e.message });
+            item.settle({ spoken: false, reason: e.message });
         } finally {
             if (s.narrating === ctl) s.narrating = null;
         }
     });
-    return q.chain;
+    return acked;
 }
 
 async function speak(task, event) {
@@ -150,8 +170,10 @@ async function speak(task, event) {
  * La diferencia con speak() es deliberada y es el punto entero: acá NO hay fallback a
  * [...sessions.values()].at(-1). Un disparo de vigilancia se le cuenta a la sesión que la armó o
  * a nadie — leerle lo que pasó en el entrenamiento de otro a quien justo abrió el HUD es una
- * fuga. Devuelve la promesa de la cadena, o null si esa sesión no está conectada, y el que llama
- * decide qué hacer con el silencio (senseBridge lo guarda en el buzón).
+ * fuga. Devuelve la promesa del ACUSE (`{ spoken, reason }`), o null si esa sesión no está
+ * conectada, y el que llama decide qué hacer con el silencio (senseBridge lo guarda en el buzón).
+ * `spoken:false` no es un detalle: es la respuesta a "¿se dijo?", y es lo único que separa
+ * "entregado" de "perdido para siempre" cuando el modelo no contesta.
  */
 export function narrateTo(sessionId, prompt, { id = 'other', mustKeep = true, ephemeral = false } = {}) {
     if (!narrate || !sessionId) return null;

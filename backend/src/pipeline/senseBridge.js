@@ -21,6 +21,10 @@
 //     "Puede oírlo" son DOS preguntas, y las dos hacen falta (ver canSpeakTo): el socket abierto
 //     Y la conversación viva. Y "ya no vuelve más" tiene una definición exacta, no una heurística:
 //     que conversationManager ya no conozca ese sessionId (ver flushInbox).
+//     Y hay una TERCERA pregunta, que es la que faltaba: ¿se DIJO? Poder hablarle a una sesión no
+//     es haberle hablado. processTextTurn atrapa sus propios errores, así que un 401 del
+//     proveedor, Ollama apagado o un TTS caído la dejan resolver como si todo hubiera salido
+//     bien. Por eso nada sale del buzón sin un ACUSE positivo (ver deliverTrip y eyes).
 //  2. LA NARRACIÓN ES EFÍMERA (plan §9): no deja fila en memory.db ni embedding. Ocho horas de
 //     vigilancia desalojarían la conversación real de la ventana de 10 turnos y grabarían para
 //     siempre lo observado en una base que la propia política del agente marca como sensible.
@@ -65,6 +69,13 @@ const FORGET_MS = 5 * 60 * 1000;
 // la vuelta del usuario en veinte frases seguidas. Se tira lo VIEJO: el último disparo es el
 // que describe el estado actual.
 const INBOX_MAX = 10;
+// Cuántas veces se intenta DECIR un disparo guardado antes de rendirse en voz alta. Existe
+// porque desde ahora el disparo NO sale del buzón hasta que se acusa que se dijo: contra un
+// proveedor caído (un 401, Ollama apagado) reintentar sin techo es gastar una llamada al modelo
+// por disparo y por attach, para siempre, y ninguna de esas puede salir bien. Es un techo de
+// fallos SEGUIDOS: un acuse positivo prueba que la voz volvió y le devuelve el crédito entero a
+// todo lo que quede guardado (ver outOfInbox).
+const TRIP_MAX_ATTEMPTS = 3;
 
 // ── El buzón durable ───────────────────────────────────────────────────────────────────
 // Mismo idioma que api/auth.js con el ui-token: ruta override por entorno (los tests no tocan
@@ -78,7 +89,14 @@ const INBOX_MAX = 10;
 // backend, y el dueño del dato es quien conoce al destinatario. Si algún día el buzón se muda a
 // :8007, esto se borra entero y se reemplaza por dos rutas nuevas.
 export const INBOX_FILE = process.env.HANNAH_WATCH_INBOX_FILE || path.join(DATA_DIR, 'watch-inbox.json');
-let inbox = [];   // [{ watchId, label, sessionId, at, confidence, fires }]
+let inbox = [];   // [{ watchId, label, sessionId, at, confidence, fires, attempts }] (+ inFlight, en RAM)
+
+// Lo que se ESCRIBE de una fila del buzón. `inFlight` (hay una narración de esta fila en vuelo)
+// queda deliberadamente afuera: es cierto solo mientras este proceso viva, y persistirlo haría
+// que un disparo sobreviviente a un crash naciera marcado como "ya se está entregando" y no se
+// entregara nunca. `attempts` sí se guarda: es lo que acota el reintento entre reinicios.
+const persistable = ({ watchId, label, sessionId, at, confidence, fires, attempts }) =>
+    ({ watchId, label, sessionId, at, confidence, fires, attempts: attempts || 0 });
 
 function loadInbox() {
     try {
@@ -90,7 +108,7 @@ function loadInbox() {
 function saveInbox() {
     try {
         fs.mkdirSync(path.dirname(INBOX_FILE), { recursive: true, mode: 0o700 });
-        fs.writeFileSync(INBOX_FILE, JSON.stringify({ v: 'sense.v1', trips: inbox }, null, 2), { mode: 0o600 });
+        fs.writeFileSync(INBOX_FILE, JSON.stringify({ v: 'sense.v1', trips: inbox.map(persistable) }, null, 2), { mode: 0o600 });
         try { fs.chmodSync(INBOX_FILE, 0o600); } catch { /* fs sin permisos POSIX */ }
     } catch (e) {
         logger.error('No se pudo persistir el buzón de vigilancias', { message: e.message });
@@ -236,25 +254,43 @@ function eyesPrompt(kind, vars) {
 
 /**
  * Narra por la voz de la persona, ATADA a `sessionId` y en serie con las demás vigilancias.
- * `onLost` corre si la sesión se desconectó entre que esto se encoló y le tocó el turno: la
- * narración NO se le pasa a otra sesión, se la reporta al que llamó (que la guarda en el buzón).
+ *
+ * Contesta la única pregunta que importa: ¿SE DIJO? `onSaid` corre si y solo si una oración
+ * salió de verdad por el socket con su audio; `onLost` en cualquier otro caso — la sesión se
+ * desconectó entre que esto se encoló y le tocó el turno, el modelo no contestó, el TTS se cayó,
+ * el usuario interrumpió. La narración NO se le pasa a otra sesión: el fracaso se le reporta a
+ * quien llamó, que es el que sabe si eso se puede volver a pedir o hay que guardarlo.
+ *
+ * ANTES ACÁ SE ESPERABA LA CADENA Y SE DABA POR DICHO. Ese era el agujero: processTextTurn
+ * atrapa sus propios errores y los manda al socket como {type:'error'}, así que con el proveedor
+ * devolviendo 401 la promesa resolvía, conversationManager seguía conociendo la sesión, y el
+ * disparo se consumía sin que nadie hubiera oído una palabra. "Resolvió" no es "habló".
  */
-function eyes(sessionId, watchId, kind, vars, onLost) {
+function eyes(sessionId, watchId, kind, vars, { onLost, onSaid } = {}) {
     narrationChain = narrationChain.then(async () => {
-        // ephemeral: se dice y no se recuerda (plan §9). mustKeep: una vigilancia habla poquísimo;
-        // si llegó a la cola es porque pasó algo, y colapsarlo sería perderlo.
-        const chain = narrateTo(sessionId, eyesPrompt(kind, vars), { id: watchId, mustKeep: true, ephemeral: true });
-        if (!chain) { onLost?.(); return; }
-        await chain;
-        // La sesión puede morir MIENTRAS esto espera su turno: la cola de agentBridge aguanta hasta
-        // 20 s a que termine el turno en curso, y todavía más si hay otra narración adelante. Ese
-        // fracaso no se ve desde acá — processTextTurn atrapa "La sesión no existe o ha expirado" y
-        // lo manda al socket como {type:'error'}, o sea que `chain` resuelve igual —, así que
-        // preguntar de nuevo es la única forma de saber que no se dijo nada. Si la sesión se borró
-        // justo DESPUÉS de hablar, esto lo devuelve al buzón y se cuenta una segunda vez: repetirlo
-        // es el lado bueno de equivocarse, perderlo no.
-        if (!conversationManager.hasSession(sessionId)) onLost?.();
-    }).catch((e) => logger.error('narración de vigilancia falló', { message: e.message }));
+        let settled = false;
+        const lost = (why) => {
+            if (settled) return;
+            settled = true;
+            logger.warn('no se pudo DECIR algo de una vigilancia', { watchId, kind, reason: why });
+            onLost?.();
+        };
+        try {
+            // ephemeral: se dice y no se recuerda (plan §9). mustKeep: una vigilancia habla
+            // poquísimo; si llegó a la cola es porque pasó algo, y colapsarlo sería perderlo.
+            const acked = narrateTo(sessionId, eyesPrompt(kind, vars), { id: watchId, mustKeep: true, ephemeral: true });
+            if (!acked) { lost('not_attached'); return false; }
+            const r = await acked;
+            if (!r?.spoken) { lost(r?.reason || 'no_ack'); return false; }
+            settled = true;
+            onSaid?.();
+            return true;
+        } catch (e) {
+            logger.error('narración de vigilancia falló', { message: e.message });
+            lost(e.message);
+            return false;
+        }
+    });
     return narrationChain;
 }
 
@@ -371,26 +407,98 @@ export async function onEvent(env) {
     if (terminal(w.state)) setTimeout(() => watches.delete(w.watchId), FORGET_MS);
 }
 
-/** La regla de entrega, en un solo lugar: la sesión que armó, o el buzón. Nunca una tercera. */
+/**
+ * La regla de entrega, en un solo lugar: la sesión que armó, o el buzón. Nunca una tercera.
+ *
+ * PRIMERO EN DISCO, DESPUÉS EN LA BOCA. El disparo se escribe en el buzón apenas llega — también
+ * cuando la dueña está conectada y escuchando — y sale de ahí SOLO con un acuse positivo de que
+ * se dijo. El orden no es cosmético: entre los dos pasos se puede morir el proceso, y hay que
+ * elegir a qué falla exponerse, porque siempre hay una.
+ *   - Sacarlo ANTES de hablar expone a PERDERLO. Es el bug que esto arregla, reproducido en vivo:
+ *     flushInbox lo sacaba, escribía {"trips": []}, narrateTo fallaba en el modelo (401 real del
+ *     proveedor) y el disparo no quedaba ni en el archivo ni en el aire. Se acabó para siempre.
+ *   - Sacarlo DESPUÉS expone a REPETIRLO: si el backend se cae entre la frase y la escritura del
+ *     archivo, el disparo se vuelve a contar en el próximo attach.
+ * SE ELIGE REPETIR. Una frase dicha dos veces se corrige sola en la conversación siguiente; una
+ * que no se dijo no deja rastro en ningún lado, y evitar exactamente eso es para lo que existe
+ * este hito.
+ */
 function deliverTrip(w, trip) {
-    if (!canSpeakTo(w.sessionId)) return toInbox(w, trip);
-    toSession(w.sessionId, { type: 'watch_tripped', watchId: w.watchId, label: w.label,
-        at: trip.at, confidence: trip.confidence });
-    eyes(w.sessionId, w.watchId, 'tripped', { label: w.label, when: clockOf(trip.at) },
-        () => toInbox(w, trip));
+    const item = toInbox(w, trip);
+    if (canSpeakTo(w.sessionId)) tryDeliver(item, w.sessionId, 'tripped');
 }
 
 /**
  * Al buzón, CON su dueño. Sin el sessionId adentro no se puede decidir después con qué palabras se
  * cuenta, que es la única diferencia honesta entre "esto pasó mientras no estabas" y "esto lo armó
  * una conversación que ya se terminó".
+ *
+ * Devuelve LA FILA guardada, no una copia: sacarla del buzón es un acuse de recibo y hace falta
+ * la identidad exacta, porque entre que se encola la narración y se acusa pueden haber entrado
+ * otros disparos de la misma vigilancia.
  */
 function toInbox(w, trip) {
-    inbox.push({ watchId: w.watchId, label: w.label, sessionId: w.sessionId || null,
-        at: trip.at, confidence: trip.confidence, fires: trip.fires });
-    while (inbox.length > INBOX_MAX) inbox.shift();
+    const item = { watchId: w.watchId, label: w.label, sessionId: w.sessionId || null,
+        at: trip.at, confidence: trip.confidence, fires: trip.fires, attempts: 0 };
+    inbox.push(item);
+    // Se tira lo VIEJO, y se GRITA al tirarlo: es la única puerta por la que un disparo puede
+    // desaparecer sin haberse contado, así que no puede irse en un info entre otros mil.
+    while (inbox.length > INBOX_MAX) {
+        const dropped = inbox.shift();
+        logger.error('buzón lleno: se DESCARTA el disparo más viejo sin haberlo dicho nunca',
+            { watchId: dropped.watchId, at: dropped.at, attempts: dropped.attempts || 0 });
+    }
     saveInbox();
-    logger.info('disparo al buzón: la sesión que armó no puede oírlo', { watchId: w.watchId, pending: inbox.length });
+    logger.info('disparo al buzón', { watchId: w.watchId, pending: inbox.length });
+    return item;
+}
+
+/**
+ * Intenta DECIR una fila del buzón. Se marca en vuelo para que dos flush simultáneos (dos
+ * pestañas que se conectan a la vez) no la narren dos veces, y solo sale del buzón con el acuse.
+ * `inFlight` no se persiste: si el proceso muere en vuelo, la fila tiene que volver a estar
+ * disponible al arrancar, no marcada como "ya se está entregando".
+ */
+function tryDeliver(trip, sessionId, kind) {
+    trip.inFlight = true;
+    // La etiqueta, otra vez, solo para su dueña: en un reenvío el que escucha puede no ser quien
+    // la dictó. Una fila del panel se lee sin la frase que aclara de quién era la vigilancia, y
+    // se queda en pantalla mucho después de que esa frase terminó.
+    toSession(sessionId, { type: 'watch_tripped', watchId: trip.watchId,
+        label: owns(trip, sessionId) ? trip.label : null,
+        at: trip.at, confidence: trip.confidence });
+    eyes(sessionId, trip.watchId, kind,
+        { label: trip.label, when: clockOf(trip.at), ago: agoOf(trip.at) },
+        { onSaid: () => outOfInbox(trip), onLost: () => failedDelivery(trip) });
+}
+
+/** Se dijo: recién ahora deja de estar pendiente. */
+function outOfInbox(trip) {
+    const i = inbox.indexOf(trip);
+    if (i !== -1) inbox.splice(i, 1);
+    // Un acuse positivo prueba que la voz FUNCIONA en este instante, así que los intentos que el
+    // resto del buzón gastó contra un modelo caído no pueden condenarlo: el techo cuenta fallos
+    // seguidos, no fallos de toda la vida.
+    for (const t of inbox) t.attempts = 0;
+    saveInbox();
+}
+
+/**
+ * No se dijo. Vuelve a estar disponible y se le cuenta el intento. Al llegar al techo se RINDE
+ * EN VOZ ALTA — que acá no puede ser literal, porque la voz es justo lo que está roto: se grita
+ * por el log y se le manda al HUD el disparo, que es el único canal que no depende del modelo.
+ * La fila NO se borra: sigue en el archivo y sigue contando en pendingTrips().
+ */
+function failedDelivery(trip) {
+    trip.inFlight = false;
+    trip.attempts = (trip.attempts || 0) + 1;
+    saveInbox();
+    if (trip.attempts < TRIP_MAX_ATTEMPTS) return;
+    if (trip.attempts > TRIP_MAX_ATTEMPTS) return;                 // ya se gritó una vez
+    logger.error('NO se pudo decir un disparo despues de varios intentos: queda guardado y sin contar',
+        { watchId: trip.watchId, at: trip.at, attempts: trip.attempts });
+    broadcast({ type: 'watch_tripped', watchId: trip.watchId, label: trip.label,
+        at: trip.at, confidence: trip.confidence });
 }
 
 /**
@@ -410,20 +518,19 @@ function toInbox(w, trip) {
  */
 function flushInbox(arrived = null) {
     if (!inbox.length) return;
-    // Se VACÍA antes de narrar (y se persiste): si dos pestañas se conectan a la vez, el disparo se
-    // cuenta una sola vez. Lo que no se pudo entregar vuelve, así que "una sola vez" nunca degrada
-    // a "ninguna".
-    const pending = inbox.splice(0, inbox.length);
-    const held = [];
-    for (const trip of pending) {
-        if (canSpeakTo(trip.sessionId)) { replay(trip.sessionId, trip, 'tripped_away'); continue; }
-        if (conversationManager.hasSession(trip.sessionId)) { held.push(trip); continue; }
+    // NO SE VACÍA LA LISTA. Antes se hacía un splice de todo ANTES de narrar, y ese era el bug:
+    // el archivo quedaba en {"trips": []} y lo que fallara después no estaba en ningún lado.
+    // Lo que impide que dos pestañas conectándose a la vez cuenten el mismo disparo dos veces es
+    // `inFlight`, que marca la fila SIN sacarla del buzón. Se recorre una copia porque las
+    // entregas modifican la lista mientras se itera.
+    for (const trip of [...inbox]) {
+        if (trip.inFlight) continue;
+        if ((trip.attempts || 0) >= TRIP_MAX_ATTEMPTS) continue;   // se rindió y ya se gritó: no se insiste
+        if (canSpeakTo(trip.sessionId)) { tryDeliver(trip, trip.sessionId, 'tripped_away'); continue; }
+        if (conversationManager.hasSession(trip.sessionId)) continue;   // viva: el disparo sigue siendo SUYO
         const listener = currentListener(arrived);
-        if (listener) replay(listener, trip, 'tripped_orphan');
-        else held.push(trip);
+        if (listener) tryDeliver(trip, listener, 'tripped_orphan');
     }
-    inbox.push(...held);
-    saveInbox();
 }
 
 /**
@@ -449,7 +556,7 @@ function sayBlind(w) {
     const listener = currentListener(w.sessionId);
     if (!listener) return;
     w.blindSpoken = true;
-    eyes(listener, w.watchId, 'blind', { label: w.label }, () => { w.blindSpoken = false; });
+    eyes(listener, w.watchId, 'blind', { label: w.label }, { onLost: () => { w.blindSpoken = false; } });
 }
 
 function goBlind(w) {
@@ -547,20 +654,6 @@ export function attachSession(sessionId, send) {
     flushInbox(sessionId);
     // Una ceguera que sigue siendo verdad se dice ahora: no es historia, es el estado actual.
     for (const w of watches.values()) if (w.state === 'blind') sayBlind(w);
-}
-
-/** `kind` es 'tripped_away' si se lo entrega a su dueña y 'tripped_orphan' si no (ver flushInbox). */
-function replay(sessionId, trip, kind) {
-    // La etiqueta, otra vez, solo para su dueña: en el reenvío huérfano el que escucha NO es quien
-    // la dictó. La VOZ sí la dice ahí, pero envuelta en la frase que aclara que la armó otra
-    // conversación (EYES.tripped_orphan); una fila del panel se lee sin esa frase y se queda en
-    // pantalla mucho después de que la frase terminó.
-    toSession(sessionId, { type: 'watch_tripped', watchId: trip.watchId,
-        label: owns(trip, sessionId) ? trip.label : null,
-        at: trip.at, confidence: trip.confidence });
-    eyes(sessionId, trip.watchId, kind,
-        { label: clean(trip.label, 80), when: clockOf(trip.at), ago: agoOf(trip.at) },
-        () => { inbox.push(trip); saveInbox(); });
 }
 
 export function detachSession(sessionId) {

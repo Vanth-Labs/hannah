@@ -56,6 +56,8 @@ const bridge = await import('../../src/pipeline/senseBridge.js');
 let narrated;      // [{ sessionId, prompt, opts }]
 let sentTo;        // sessionId -> [payload]
 let narrateImpl;   // un test puede reemplazar el espía (para matar la sesión a mitad de narración)
+let llmDown;       // el modelo no contesta: el espía resuelve sin haber hablado (401 del proveedor)
+let narrateCalls;  // cuántas veces se INTENTÓ narrar (hable o no): el techo del reintento se mide acá
 const opened = []; // sesiones creadas por el test, para limpiarlas al final
 
 /** Una sesión de verdad, como la que crea POST /api/v1/session antes de abrir el socket. */
@@ -87,20 +89,35 @@ const arm = async (watchId, sessionId, label = 'the training') => {
 };
 
 const trips = () => JSON.parse(fs.readFileSync(process.env.HANNAH_WATCH_INBOX_FILE, 'utf8')).trips;
+/** Igual, pero tolera que el archivo no exista todavía: se usa para mirar el disco A MITAD de una entrega. */
+const diskTrips = () => { try { return trips(); } catch { return []; } };
 
 const originalBlindMs = config.sense.blindMs;
 beforeEach(async () => {
-    narrated = []; sentTo = {}; rows = []; deleted.length = 0; narrateImpl = null;
+    narrated = []; sentTo = {}; rows = []; deleted.length = 0; narrateImpl = null; llmDown = false; narrateCalls = 0;
     config.sense.blindMs = originalBlindMs;
     try { fs.unlinkSync(process.env.HANNAH_WATCH_INBOX_FILE); } catch { /* no existía */ }
     agentBridge._reset(); bridge._reset();
-    // El espía imita a processTextTurn en lo único que importa acá: si la sesión no existe o
-    // expiró NO habla — atrapa el error y se lo manda al socket como {type:'error'}. Sin esto el
-    // espía "narra" contra sesiones muertas y el test no puede ver el silencio real.
+    // EL ESPÍA TIENE QUE PODER FALLAR COMO FALLA EL DE VERDAD, o esconde justo el bug que se está
+    // arreglando. processTextTurn (a) no lanza nunca: atrapa sus propios errores y los manda al
+    // socket como {type:'error'}, y (b) devuelve el ACUSE `{spoken}`, que es lo único que separa
+    // "se dijo" de "resolvió". Un espía que devolviera undefined al hablar bien probaría un
+    // contrato que el código real no cumple. Los dos caminos de fallo del original están acá: la
+    // sesión que no existe, y el modelo que no contesta (llmDown).
     await agentBridge.init({ narrate: async (sessionId, prompt, send, opts) => {
+        narrateCalls++;
         if (narrateImpl) return narrateImpl(sessionId, prompt, send, opts);
-        if (!conversationManager.getSession(sessionId)) { send({ type: 'error', message: 'La sesión no existe o ha expirado' }); return; }
+        if (!conversationManager.getSession(sessionId)) {
+            send({ type: 'error', message: 'La sesión no existe o ha expirado' });
+            return { spoken: false, error: 'La sesión no existe o ha expirado' };
+        }
+        if (llmDown) {
+            // Un 401 del proveedor: generateDialogueStream lo atrapa, llama onComplete({error}),
+            // no sale ni una oración por el socket y processTextTurn RESUELVE igual.
+            return { spoken: false, error: 'llm_failed' };
+        }
         narrated.push({ sessionId, prompt, opts });
+        return { spoken: true, error: null };
     } });
     await bridge.init();
 });
@@ -450,6 +467,102 @@ describe('lo que dice y lo que no', () => {
         await emit('w_1', 2, 'watch.tripped', { label: 'the training', at, fires: 1 });
         await emit('w_1', 2, 'watch.tripped', { label: 'the training', at, fires: 1 });
         expect(narrated).toHaveLength(1);
+    });
+});
+
+describe('EL ACUSE DE RECIBO: nada sale del buzón hasta que se sabe que se DIJO', () => {
+    test('el modelo no contesta: el disparo NO se da por entregado y sigue en el buzón, en disco', async () => {
+        // El blocker, reproducido: con la dueña conectada y escuchando, narrateTo llega hasta
+        // processTextTurn, el proveedor devuelve 401, generateDialogueStream lo atrapa y llama
+        // onComplete({error}), no sale ni una oración por el socket y la promesa RESUELVE. La
+        // sesión sigue existiendo, así que la única comprobación que había ("¿todavía existe?")
+        // decía que sí. El disparo se consumía sin que nadie oyera una palabra.
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'the training');
+        llmDown = true;
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+
+        expect(narrateCalls).toBe(1);                     // se intentó
+        expect(narrated).toHaveLength(0);                 // y no se dijo nada
+        expect(bridge.pendingTrips()).toBe(1);            // por eso NO se consumió
+        expect(trips()[0]).toMatchObject({ watchId: 'w_1', sessionId: s1, attempts: 1 });
+
+        // Y cuando el modelo vuelve, se cuenta: la vuelta del usuario (un attach) es el momento
+        // en que cambia quién puede oír, y ahora también en el que se reintenta.
+        llmDown = false;
+        attach(s1);
+        await bridge._settle();
+        expect(narrated).toHaveLength(1);
+        expect(narrated[0].sessionId).toBe(s1);
+        expect(bridge.pendingTrips()).toBe(0);
+        expect(trips()).toHaveLength(0);
+    });
+
+    test('lo mismo desde el buzón: un reenvío que no se dice no vacía el archivo', async () => {
+        // La forma exacta con la que se perdió en vivo: el disparo estaba guardado, el dueño
+        // volvió, flushInbox lo sacó de la lista ANTES de narrar y escribió {"trips": []}.
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'the training');
+        detach(s1);
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now() - 60000, fires: 1 });
+        expect(bridge.pendingTrips()).toBe(1);
+
+        llmDown = true;
+        attach(s1);
+        await bridge._settle();
+        expect(narrated).toHaveLength(0);
+        expect(bridge.pendingTrips()).toBe(1);
+        expect(trips()).toHaveLength(1);                  // el archivo NUNCA quedó vacío
+    });
+
+    test('mientras se lo está diciendo sigue escrito en disco: un crash ahí lo repite, no lo pierde', async () => {
+        // La ventana entre "hablar" y "borrar" existe siempre; lo que se elige es a qué lado
+        // caerse. Acá se comprueba el lado elegido: durante la narración el disparo TODAVÍA está
+        // en el archivo, así que un backend que muera en ese instante lo vuelve a contar.
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'the training');
+        let onDisk = null;
+        narrateImpl = async () => { onDisk = diskTrips(); return { spoken: true, error: null }; };
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+
+        expect(onDisk).toHaveLength(1);
+        expect(onDisk[0].watchId).toBe('w_1');
+        expect(bridge.pendingTrips()).toBe(0);            // y al acusarse, recién ahí se va
+        expect(trips()).toHaveLength(0);
+    });
+
+    test('no se reintenta para siempre contra un modelo caído: se rinde, y se rinde fuerte', async () => {
+        // Sin techo, cada attach gastaría una llamada al modelo por disparo guardado, para
+        // siempre, y ninguna puede salir bien. Al rendirse el disparo NO se borra: sigue en el
+        // archivo, sigue contando como pendiente y se le manda al HUD, que es el único canal que
+        // no depende del modelo (por eso "en voz alta" acá no puede ser literal).
+        const s1 = open();
+        attach(s1);
+        await arm('w_1', s1, 'the training');
+        llmDown = true;
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+        for (let i = 0; i < 5; i++) { attach(s1); await bridge._settle(); }
+
+        expect(narrateCalls).toBe(3);                     // TRIP_MAX_ATTEMPTS, no seis
+        expect(bridge.pendingTrips()).toBe(1);            // pero no se perdió
+        expect(trips()[0].attempts).toBe(3);
+        expect(sentTo[s1].filter((m) => m.type === 'watch_tripped')).toHaveLength(4);   // 3 intentos + el grito
+
+        // Y el crédito vuelve cuando la voz vuelve: un acuse positivo de OTRO disparo prueba que
+        // el modelo contesta, así que lo guardado deja de estar condenado por los fallos viejos.
+        llmDown = false;
+        await arm('w_2', s1, 'the render');
+        await emit('w_2', 2, 'watch.tripped', { label: 'the render', at: Date.now(), fires: 1 });
+        expect(trips()[0].attempts).toBe(0);
+        attach(s1);
+        await bridge._settle();
+        expect(bridge.pendingTrips()).toBe(0);
     });
 });
 

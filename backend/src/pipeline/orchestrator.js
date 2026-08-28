@@ -67,8 +67,13 @@ const userMovedRecently = (sessionId) => Date.now() - (recentUserMove.get(sessio
 // en la respuesta no es una orden del usuario: es una inyección o un error del modelo. Se
 // gatea la EJECUCIÓN, nunca el stripping: la etiqueta tiene que desaparecer del texto igual,
 // porque si no el TTS lee "[TASK: ...]" en voz alta.
+//
+// DEVUELVE EL ACUSE: `true` solo si esta oración SALIÓ de verdad por el socket con su audio.
+// Es el único hecho comprobable de "se dijo" que existe en esta capa, y quien narra un disparo
+// de vigilancia no puede consumirlo sin él (ver processTextTurn -> narrateTo -> senseBridge):
+// un barge-in, un TTS caído o un fragmento que se quedó sin texto son silencio, no entrega.
 const processAndSendSegment = async (rawText, sendCallback, sessionId = '', signal, noActions = false) => {
-    if (signal?.aborted) return;
+    if (signal?.aborted) return false;
     // Un drop silencioso esconde por igual un intento de inyección y una torpeza del modelo.
     const refuseAction = (tag, arg) => logger.warn('acción ignorada en turno de narración', {
         sessionId, tag, arg: String(arg || '').slice(0, 120),
@@ -184,15 +189,15 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
         .replace(/\s+/g, ' ')
         .trim();
     // Si tras limpiar no queda texto real, ignorar el fragmento
-    if (text.length < 2) return;
+    if (text.length < 2) return false;
 
     try {
         const ttsResult = await synthesizeSpeechStream(text, signal);
-        if (ttsResult.error) return;
+        if (ttsResult.error) return false;
 
         const lipsyncResult = generateVisemesFromText(text);
         const audioBuffer = await collectStream(ttsResult.audioStream);
-        if (signal?.aborted) return;   // no enviar audio de un turno ya interrumpido
+        if (signal?.aborted) return false;   // no enviar audio de un turno ya interrumpido
 
         const message = {
             type: 'audio_chunk',
@@ -240,10 +245,12 @@ const processAndSendSegment = async (rawText, sendCallback, sessionId = '', sign
             }
         }
 
-        if (signal?.aborted) return;
+        if (signal?.aborted) return false;
         sendCallback(message);
+        return true;
     } catch (err) {
         logger.error('Error procesando segmento del orquestador', { message: err.message });
+        return false;
     }
 };
 
@@ -331,6 +338,11 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment, 
  * @param {string} sessionId - ID de la sesión activa
  * @param {string} systemPromptAlert - El reporte contextual listo para procesar por el LLM
  * @param {Function} onStreamSegment - Callback de envío al WebSocket
+ * @returns {Promise<{spoken: boolean, error: ?string}>} EL ACUSE DE RECIBO. Esta función NO
+ * propaga sus errores (los atrapa y los manda al socket como {type:'error'}), así que resolver
+ * no quiere decir que haya hablado: quien narra algo que no puede volver a pedir —un disparo de
+ * vigilancia— tiene que mirar `spoken` y no la promesa. Sin esto, con el modelo caído la frase
+ * se perdía en silencio y el disparo se daba por entregado.
  */
 export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegment, opts = {}) => {
     try {
@@ -350,12 +362,13 @@ export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegm
         // 3. LLM: Disparar directo la tubería cognitiva evadiendo el hardware del micrófono
         // opts.noActions: la inyección solo RELATA (narración de las manos); opts.signal: abortable.
         // opts.ephemeral: se habla y NO se guarda (narración de una vigilancia; ver addTurn).
-        await executeLlmPipeline(sessionId, temporalTurns, onStreamSegment, opts.signal,
+        return await executeLlmPipeline(sessionId, temporalTurns, onStreamSegment, opts.signal,
             { noActions: !!opts.noActions, ephemeral: !!opts.ephemeral });
 
     } catch (error) {
         logger.error('Fallo crítico en el Orquestador (Texto/YOLO)', { message: error.message });
         onStreamSegment({ type: 'error', message: error.message });
+        return { spoken: false, error: error.message };
     }
 };
 
@@ -384,20 +397,27 @@ export const processUserTextTurn = async (sessionId, text, onStreamSegment, sign
  * Sub-proceso reutilizable para aislar y ejecutar el cerebro del LLM junto con TTS y LipSync.
  * Los segmentos se encadenan en una promesa secuencial: las oraciones llegan al cliente
  * en el orden hablado y turn_complete se emite solo cuando el último audio ya salió.
+ *
+ * Devuelve `{ spoken, error }`: `spoken` es true solo si al menos una oración salió por el
+ * socket con su audio. NO alcanza con que esto resuelva sin tirar — un 401 del proveedor, el
+ * modelo apagado o un timeout terminan en `onComplete({error})` y esta función vuelve igual de
+ * tranquila. Ese silencio prolijo es lo que hacía desaparecer un disparo de vigilancia entero.
  */
 const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal, opts = {}) => {
     let sentenceBuffer = '';
     let segmentChain = Promise.resolve();
+    let spoken = false;
+    let error = null;
     gestureUsed.delete(sessionId);   // un gesto deliberado como mucho por turno
     logger.info('Despertando cerebro LLM...', { model: config.llm.model });
 
     const enqueueSegment = (text) => {
         // Barge-in: si el turno fue abortado, no sintetizar/enviar más oraciones.
-        segmentChain = segmentChain.then(() => {
+        segmentChain = segmentChain.then(async () => {
             if (signal?.aborted) return;
             // opts.noActions viaja hasta acá: el gate del prompt (llm.js) solo deja de OFRECER
             // los tags; si el modelo los emite igual, quien no los ejecuta es el segmento.
-            return processAndSendSegment(text, onStreamSegment, sessionId, signal, !!opts.noActions);
+            if (await processAndSendSegment(text, onStreamSegment, sessionId, signal, !!opts.noActions)) spoken = true;
         });
     };
 
@@ -417,6 +437,7 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
         (finalLlmResult) => {
             // Si el usuario interrumpió, cortar en seco: no guardar respuesta parcial
             // ni emitir turn_complete.
+            if (finalLlmResult.error) error = finalLlmResult.error;
             if (signal?.aborted || finalLlmResult.error) return;
 
             if (sentenceBuffer.trim().length > 0) {
@@ -463,4 +484,5 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
 
     // No devolver el control hasta que todos los segmentos pendientes hayan salido
     await segmentChain;
+    return { spoken, error: error || (signal?.aborted ? 'aborted' : null) };
 };
