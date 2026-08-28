@@ -410,7 +410,14 @@ describe('ACEPTACIÓN — matar el sidecar a mitad de una vigilancia', () => {
         await arm('w_1', s1);
         await emit('w_1', 2, 'watch.disarmed', { label: 'the training', reason: 'shutdown' });
         expect(narrated.at(-1).prompt).toMatch(/LOST SIGHT/);
-        expect(sentTo[s1].find((m) => m.type === 'watch_disarmed')).toMatchObject({ watchId: 'w_1', reason: 'shutdown' });
+        // Y NO se le dice al HUD que la vigilancia terminó, porque no terminó: el sidecar persiste
+        // ANTES de anunciar su apagado (scheduler.shutdown), así que la fila sobrevive allá y
+        // vuelve `suspended`. Darla por terminada acá la borraba del panel, la sacaba del
+        // reintento de la ceguera (que solo miraba `blind`) y la mandaba al olvido de FORGET_MS
+        // con el sidecar todavía teniéndola. Lo que corresponde es la pastilla de suspendida.
+        expect(sentTo[s1].find((m) => m.type === 'watch_disarmed')).toBeUndefined();
+        expect(sentTo[s1].filter((m) => m.type === 'watch_state').at(-1)).toMatchObject({ watchId: 'w_1', state: 'suspended' });
+        expect(bridge.snapshot().find((w) => w.watchId === 'w_1').state).toBe('suspended');
     });
 });
 

@@ -175,6 +175,8 @@ const attach = (sessionId) => {
     agentBridge.attachSession(sessionId, send);
     bridge.attachSession(sessionId, send);
 };
+/** Se cierra la pestaña. La conversación sigue viva y puede volver con el MISMO sessionId. */
+const detach = (sessionId) => { agentBridge.detachSession(sessionId); bridge.detachSession(sessionId); };
 const hud = (sessionId) => sent[sessionId] || [];
 
 /**
@@ -185,6 +187,23 @@ const hud = (sessionId) => sent[sessionId] || [];
  * cubrir. Lo que se afirma es TODO lo que se dijo, y cuánto.
  */
 const dicho = (re) => narrated.filter((n) => re.test(n.prompt));
+
+/**
+ * Una vigilancia que este proceso ADOPTA en vez de verla armarse: la fila ya está en el sidecar
+ * cuando el backend arranca (armada por REST, o sobreviviente de un reinicio del backend). Es el
+ * caso que ningún test cubría y que el mapa interno del cliente no podía ver, porque por el
+ * stream nunca pasó un `watch.armed` suyo.
+ */
+const adoptar = async (watchId, sessionId, label = 'the training') => {
+    await bridge.shutdown(); bridge._reset();
+    sense.persist(watchId, sessionId, label);
+    await bridge.init();
+    await until('la vigilancia adoptada se conoce', () => bridge.snapshot().some((w) => w.watchId === watchId));
+    // Y el stream TIENE que estar conectado antes de matar al sidecar: el `boot` del arranque
+    // viejo se aprende en el comentario de bienvenida, y sin haberlo visto no hay con qué
+    // comparar el del arranque nuevo.
+    await until('el stream se conecta', () => bridge.isHealthy());
+};
 
 /** Espera a que algo pase, o falla diciendo qué esperaba. Nada de sleeps a ojo. */
 async function until(what, check, timeoutMs = 12000) {
@@ -319,3 +338,133 @@ describe('el sidecar reinicia por debajo de una suscripción viva', () => {
     });
 });
 
+describe('el reinicio con el HUD cerrado, que es el caso de las 3am', () => {
+    jest.setTimeout(30000);
+
+    test('nadie conectado en el momento del reinicio: se le cuenta cuando vuelve', async () => {
+        // EL CASO TITULAR DEL PLAN §10 ("Trip at 3am"), y el que ningún test cubría: los cuatro
+        // de arriba tienen una sesión attacheada cuando el sidecar se muere. Cerrar la pestaña NO
+        // es irse: la conversación sigue viva media hora y vuelve con el MISMO sessionId, así que
+        // la persona que armó tiene que enterarse al volver. Sin esto, lo único que veía era una
+        // pastilla de suspendida y ni una palabra.
+        const s = open();
+        attach(s);
+        await until('el stream se conecta', () => bridge.isHealthy());
+        sense.arm('w_1', s, 'the training');
+        await until('la vigilancia se conoce', () => bridge.snapshot().some((w) => w.watchId === 'w_1'));
+
+        detach(s);
+        await sense.restart();
+        await until('el puente ve la fila del arranque nuevo',
+            () => bridge.snapshot().find((w) => w.watchId === 'w_1')?.state === 'suspended');
+        expect(narrated).toHaveLength(0);            // no había a quién decírselo: no se pierde, espera
+
+        attach(s);                                   // vuelve la MISMA conversación
+        await until('se lo cuenta al volver', () => narrated.length > 0);
+        expect(narrated[0].sessionId).toBe(s);
+        expect(narrated[0].prompt).toMatch(/LOST SIGHT/);
+        expect(narrated[0].prompt).toContain('the training');
+        await new Promise((r) => setTimeout(r, 200));
+        expect(narrated).toHaveLength(1);            // una vez, no una por cada attach
+    });
+
+    test('y no se lo repite en cada attach siguiente', async () => {
+        const s = open();
+        attach(s);
+        await until('el stream se conecta', () => bridge.isHealthy());
+        sense.arm('w_1', s, 'the training');
+        await until('la vigilancia se conoce', () => bridge.snapshot().some((w) => w.watchId === 'w_1'));
+
+        detach(s);
+        await sense.restart();
+        attach(s);
+        await until('se lo cuenta al volver', () => narrated.length > 0);
+        detach(s);
+        attach(s);                                   // un F5 del HUD no es un hecho nuevo
+        await new Promise((r) => setTimeout(r, 200));
+        expect(narrated).toHaveLength(1);
+    });
+});
+
+describe('después del reinicio, el sidecar y la fila del backend tienen que seguir hablándose', () => {
+    jest.setTimeout(30000);
+
+    test('lo que pase DESPUÉS del reinicio le llega al HUD: el `seq` del arranque nuevo no se descarta', async () => {
+        // Reproducido en vivo: armar, matar el sidecar, levantarlo, y DELETE de la vigilancia en
+        // el sidecar, que contesta {"disarmed":true}. Ningún `watch_disarmed` llegaba al HUD. El
+        // `_seq` de allá vuelve a 1 en cada arranque (KNOWN-GAPS #23) y acá se descarta todo
+        // evento con `seq <= w.seq`, así que el primer evento del arranque nuevo se tiraba en
+        // silencio: la fila se quedaba suspendida para siempre, sin estado terminal, FORGET_MS no
+        // corría nunca y la fila con su etiqueta vivía lo que viviera el proceso.
+        const s = open();
+        attach(s);
+        await until('el stream se conecta', () => bridge.isHealthy());
+        sense.arm('w_1', s, 'the training');
+        await until('la vigilancia se conoce', () => bridge.snapshot().some((w) => w.watchId === 'w_1'));
+
+        await sense.restart();
+        await until('se dice que dejó de mirar', () => narrated.length > 0);
+        await until('el puente ve la fila del arranque nuevo',
+            () => bridge.snapshot().find((w) => w.watchId === 'w_1')?.state === 'suspended');
+
+        // El DELETE: el sidecar la termina y lo anuncia con el `seq` 1 de ESTE arranque. Se mira
+        // solo lo que llega DESPUÉS de este punto: lo de antes es del reinicio y no prueba nada.
+        const desde = hud(s).length;
+        sense.rows = [];
+        sense.emit('w_1', 'watch.disarmed', { label: 'the training', reason: 'user' });
+
+        await until('el HUD se entera de que terminó',
+            () => hud(s).slice(desde).some((m) => m.type === 'watch_disarmed' && m.watchId === 'w_1'));
+        expect(bridge.snapshot().find((w) => w.watchId === 'w_1').state).toBe('disarmed');
+    });
+
+    test('una vigilancia ADOPTADA también deja de mirarse cuando el sidecar reinicia', async () => {
+        // La que nunca pasó por el stream: el backend la encontró ya armada al arrancar. El
+        // reinicio del sidecar la mata igual que a cualquier otra (asunción A4), pero la cuenta
+        // la llevaba el cliente SSE, que solo conoce lo que vio armarse, así que de estas no se
+        // decía absolutamente nada y la persona seguía creyendo que la miraban.
+        const s = open();
+        await adoptar('w_1', s, 'the training');
+        attach(s);
+        expect(narrated).toHaveLength(0);
+
+        await sense.restart();
+
+        await until('se dice que dejó de mirar', () => narrated.length > 0);
+        expect(narrated[0].sessionId).toBe(s);
+        expect(narrated[0].prompt).toMatch(/LOST SIGHT/);
+        expect(narrated[0].prompt).toContain('the training');
+        await until('el puente ve la fila del arranque nuevo',
+            () => bridge.snapshot().find((w) => w.watchId === 'w_1')?.state === 'suspended');
+        await new Promise((r) => setTimeout(r, 200));
+        expect(narrated).toHaveLength(1);
+        expect(dicho(/can see/)).toHaveLength(0);
+    });
+
+    test('la fila que el sidecar ya no tiene se termina: no queda de zombi hablando para siempre', async () => {
+        // El efecto de segundo orden, visto en vivo: filas de una caída anterior que ya no
+        // existían en ningún lado narraban "dejé de mirar" cada vez que alguien abría el HUD,
+        // mientras la que sí existía callaba. Una fila sin estado terminal no la borra nadie:
+        // FORGET_MS solo corre sobre las que terminan.
+        const s = open();
+        await adoptar('w_1', s, 'the training');
+        attach(s);
+
+        await sense.restart({ keep: [] });            // el sidecar vuelve sin ella: no la persistió
+
+        await until('se dice que dejó de mirar', () => narrated.length > 0);
+        await until('el HUD se entera de que terminó',
+            () => hud(s).some((m) => m.type === 'watch_disarmed' && m.watchId === 'w_1'));
+        expect(bridge.snapshot().find((w) => w.watchId === 'w_1').state).toBe('disarmed');
+
+        // Se dijo UNA vez que dejó de mirarla, y el HUD que vuelve ya no la ve: es lo que
+        // distingue una fila terminada de una zombi.
+        expect(dicho(/LOST SIGHT/)).toHaveLength(1);
+        detach(s);
+        const desde = hud(s).length;
+        attach(s);
+        await new Promise((r) => setTimeout(r, 200));
+        expect(narrated).toHaveLength(1);
+        expect(hud(s).slice(desde).some((m) => m.watchId === 'w_1')).toBe(false);
+    });
+});

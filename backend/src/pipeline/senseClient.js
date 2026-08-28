@@ -4,9 +4,10 @@
 // escalón de la escalera — eso es del puente (senseBridge.js) y del prompt (llm.js).
 //
 // Casi todo acá es transporte y nada más. La excepción está marcada y es una sola: la
-// suscripción SSE mira el `boot=` del sidecar y, cuando cambia, dice en el vocabulario del
-// contrato que lo que estaba armado ya no mira. Es el único lugar del backend por donde ese
-// hecho pasa, porque el proceso que reinició no puede contarlo (ver `restarted()`).
+// suscripción SSE mira el `boot=` del sidecar y, cuando cambia, AVISA que el sidecar reinició.
+// Es el único lugar del backend por donde ese hecho puede pasar, porque el proceso que reinició
+// no puede contarlo. Avisa y no interpreta: qué significa un reinicio para cada vigilancia lo
+// decide el puente, que es el que tiene las filas (ver `noteBoot` y `senseBridge.afterReboot`).
 //
 // Contrato verificado contra backend/sidecar/sense/main.py:
 //   - GET /health abierto; TODA otra ruta exige el bearer. Ojo con la diferencia: con el token
@@ -129,42 +130,30 @@ export function invalidate() { cache.survey = null; cache.rows = null; }
 
 // ── SSE ───────────────────────────────────────────────────────────────────────────────
 
-// Los tipos con los que un watch SALE del conjunto vivo. `watch.expired` y `watch.faulted`
-// siempre vienen seguidos de un `watch.disarmed`, pero se listan igual: si el anillo truncó el
-// replay puede llegar uno solo, y de los dos lados la conclusión es la misma (ya no se mira).
-const TERMINAL_TYPES = new Set(['watch.disarmed', 'watch.expired', 'watch.faulted']);
-
 /**
  * Se suscribe a GET /v1/events y llama onEvent(envelope) por cada evento. Reconecta solo,
  * con el mismo backoff que agentClient.subscribe, reanudando desde el último `id` visto
- * (Last-Event-ID). onStatus('up'|'down') marca las transiciones para que el puente pueda
- * contar el tiempo sin contacto (contrato de ceguera, M5.1.4).
+ * (Last-Event-ID). onStatus('up'|'down'|'restarted') marca las transiciones para que el puente
+ * pueda contar el tiempo sin contacto (contrato de ceguera, M5.1.4).
  * Devuelve { close() }.
  *
  * Y UNA COSA MÁS, que no es transporte y está acá igual: DETECTA QUE EL SIDECAR REINICIÓ y lo
- * dice en el vocabulario del contrato. Ver `restarted()`.
+ * anuncia con un tercer valor, onStatus('restarted'). Ver `noteBoot`.
  */
 export function subscribe(onEvent, onStatus = () => {}) {
     let closed = false;
     let lastId = null;
     let attempt = 0;
     let ctl = null;
-    // El arranque del sidecar del que venimos leyendo, y los watches que ese arranque anunció
-    // armados, con el último `seq` que se entregó de cada uno. Las dos cosas son de ESTA
-    // suscripción (una por proceso) y mueren con ella.
+    // El arranque del sidecar del que venimos leyendo. Es de ESTA suscripción (una por proceso)
+    // y muere con ella: sin conexión previa no hay con qué comparar, y eso es correcto — un
+    // backend que arranca después del sidecar no vivió ningún reinicio.
     let boot = null;
-    const watching = new Map();
-
-    /** Lo que se entregó, para saber después qué se creía armado y con qué `seq` iba. */
-    const track = (env) => {
-        if (env.type === 'watch.armed') { watching.set(env.watchId, env.seq); return; }
-        if (!watching.has(env.watchId)) return;
-        if (TERMINAL_TYPES.has(env.type)) watching.delete(env.watchId);
-        else watching.set(env.watchId, Math.max(watching.get(env.watchId), env.seq));
-    };
 
     /**
-     * El sidecar reinició (`boot` distinto en el comentario de conexión) y hay que DECIRLO.
+     * `boot=` viaja en el comentario de bienvenida (`sense.v1 connected` o `sense.resume`) desde
+     * 1a231ff. Es lo único del stream que distingue "se cayó la conexión" de "se cayó el proceso",
+     * que para la persona son cosas opuestas: en la primera sus vigilancias siguen mirando.
      *
      * Sin esto, un `systemctl restart` de un segundo deja a la persona creyendo que la miran:
      * `scheduler.shutdown()` publica `watch.disarmed {reason:"shutdown"}` durante el lifespan de
@@ -177,27 +166,16 @@ export function subscribe(onEvent, onStatus = () => {}) {
      *
      * NO hace falta preguntar la lista para saber que ya nadie mira: la asunción A4 dice que lo
      * persistido vuelve `suspended` y JAMÁS armado, así que un `boot` distinto ya es la prueba de
-     * que ningún watch de antes está muestreando. (Si algún día algo volviera armado solo, esto
-     * tendría que consultar GET /v1/watches en vez de confiar en A4.)
+     * que ningún watch de antes está muestreando.
      *
-     * El `seq` sigue la cuenta NUESTRA (+1 sobre el último entregado) y no la del sidecar: allá
-     * `_seq` vuelve a 1 en cada arranque (KNOWN-GAPS #23), y el puente descarta todo evento con
-     * `seq <= w.seq`, así que un 1 recién nacido se perdería en silencio igual que el original.
-     */
-    const restarted = () => {
-        for (const [watchId, seq] of watching) {
-            // Sin `label`: el texto lo escribió el usuario y este archivo no lo tiene. El puente
-            // lo saca de la fila del sidecar (getOrAdopt), que es de donde salió la primera vez.
-            onEvent({ v: 'sense.v1', watchId, seq: seq + 1, ts: Date.now(),
-                type: 'watch.disarmed', data: { reason: 'shutdown' } });
-        }
-        watching.clear();
-    };
-
-    /**
-     * `boot=` viaja en el comentario de bienvenida (`sense.v1 connected` o `sense.resume`) desde
-     * 1a231ff. Es lo único del stream que distingue "se cayó la conexión" de "se cayó el proceso",
-     * que para la persona son cosas opuestas: en la primera sus vigilancias siguen mirando.
+     * ESTO AVISA Y NO INTERPRETA. Antes fabricaba acá un `watch.disarmed {reason:'shutdown'}` por
+     * cada watch que hubiera visto armarse en esta suscripción, y esa lista era una copia peor de
+     * la que el puente ya tiene: no incluía las vigilancias adoptadas al arrancar el backend (que
+     * un reinicio del sidecar mata igual), no tenía la etiqueta, y para esquivar el dedupe del
+     * puente tenía que inventar un `seq` —lo que dejaba el contador local por delante del sidecar,
+     * cuyo `_seq` vuelve a 1 en cada arranque (KNOWN-GAPS #23), y hacía que el primer evento del
+     * arranque nuevo se descartara en silencio. El puente resetea ese contador y decide qué
+     * significa un reinicio para cada fila, en un solo lugar (senseBridge.afterReboot).
      */
     const noteBoot = (comment) => {
         const found = /(?:^|\s)boot=([0-9a-f]+)/.exec(comment);
@@ -208,7 +186,7 @@ export function subscribe(onEvent, onStatus = () => {}) {
         boot = found[1];
         // El cursor era de un arranque que ya no existe (el anillo nace vacío y vuelve a 0).
         lastId = null;
-        restarted();
+        onStatus('restarted');
     };
 
     const loop = async () => {
@@ -227,7 +205,6 @@ export function subscribe(onEvent, onStatus = () => {}) {
                     let env;
                     try { env = JSON.parse(data); } catch { return; }   // nunca tumbar el stream por un evento raro
                     if (!env || env.v !== 'sense.v1') return;
-                    track(env);
                     onEvent(env);
                 }, noteBoot);
                 const reader = res.body.getReader();

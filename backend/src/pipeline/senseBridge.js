@@ -32,7 +32,10 @@
 //     hay que DECIRLO. Una vigilancia que cree que está mirando y no está es la peor falla que
 //     tiene esta feature, y el caso que ningún evento puede avisar es justo el peor: si el
 //     sidecar se muere no manda `watch.blind`, no manda nada. Por eso el reloj de la ceguera
-//     también corre acá, sobre el stream caído, y no solo allá sobre las muestras.
+//     también corre acá, sobre el stream caído, y no solo allá sobre las muestras. Y por eso un
+//     REINICIO del sidecar —que es más rápido que ese reloj— tiene su propio camino: qué
+//     significa cada estado de una fila después de un `boot` distinto está escrito en la tabla
+//     de estados de más abajo, que es la ambigüedad que hacía falta cerrar.
 import path from 'node:path';
 import fs from 'node:fs';
 import { config } from '../config.js';
@@ -59,6 +62,11 @@ let eventChain = Promise.resolve();
 // los mismos parlantes; y su regla de colapso solo descarta lo viejo del MISMO id, así que dos
 // disparos distintos narran los dos (plan §10, "dos vigilancias disparan a la vez").
 let narrationChain = Promise.resolve();
+// Las reconciliaciones también van de a UNA, y por el mismo motivo que los eventos: hay tres
+// entradas (el stream que vuelve, un HUD que se conecta, el sidecar que reinició), todas escriben
+// las mismas filas del otro lado de un await, y cuando se pisaban era el orden de dos requests
+// HTTP el que decidía si la persona oía la verdad o justo lo contrario.
+let reconcileChain = Promise.resolve();
 // Baja de conversationManager.onDelete: hay que enterarse de que una sesión dueña se terminó,
 // porque desde ese momento sus disparos guardados ya no son de nadie (ver onOwnerGone).
 let forgetHook = null;
@@ -142,6 +150,8 @@ const now = () => Date.now();
  */
 const TERMINAL = new Set(['expired', 'disarmed', 'faulted']);
 const terminal = (state) => TERMINAL.has(state);
+const DARK = new Set(['blind', 'suspended']);
+const dark = (w) => DARK.has(w.state);
 
 /** Hora del reloj (HH:MM local) del instante REAL del hecho, no del momento en que se cuenta. */
 const clockOf = (ms) => new Date(ms).toTimeString().slice(0, 5);
@@ -151,6 +161,13 @@ function agoOf(ms) {
     const mins = Math.max(1, Math.round((now() - ms) / 60000));
     if (mins < 60) return `${mins} min ago`;
     return `${Math.floor(mins / 60)} h ${String(mins % 60).padStart(2, '0')} min ago`;
+}
+
+function queueReconcile(fn) {
+    reconcileChain = reconcileChain
+        .then(fn)
+        .catch((e) => logger.error('reconciliar vigilancias falló', { message: e.message }));
+    return reconcileChain;
 }
 
 function toSession(sessionId, payload) {
@@ -406,7 +423,7 @@ export async function onEvent(env) {
             // `reason` del sidecar es vocabulario fijo y va al log, no a la voz: lo que el usuario
             // necesita saber es que nadie está mirando, no por qué falló el stat.
             logger.warn('vigilancia ciega', { watchId: w.watchId, sinceMs: d.sinceMs, reason: d.reason });
-            goBlind(w);
+            goDark(w, 'blind');
             break;
 
         case 'watch.recovered':
@@ -427,15 +444,17 @@ export async function onEvent(env) {
             break;
 
         case 'watch.disarmed':
+            // 'shutdown' NO ES UN DESARME, y tratarlo como uno era media falla. El sidecar publica
+            // esto DESPUÉS de persistir (scheduler.shutdown persiste y recién ahí anuncia), así que
+            // la vigilancia sobrevive allá y vuelve `suspended`. Marcarla terminal acá la mandaba
+            // al olvido de FORGET_MS, le mentía al HUD sobre una fila que el sidecar todavía tiene
+            // y —lo peor— la sacaba del reintento de la ceguera, que solo miraba `blind`: sin nadie
+            // escuchando en ese instante, la frase no se decía NUNCA. Es oscuridad, no final.
+            if ((d.reason || 'user') === 'shutdown') { goDark(w, 'suspended'); break; }
             w.state = 'disarmed'; w.disarmReason = d.reason || 'user';
             broadcast({ type: 'watch_disarmed', watchId: w.watchId, reason: w.disarmReason });
             // Quién habla y quién no: 'user' lo pidió el usuario y ya lo sabe; 'expired' y
-            // 'faulted' ya hablaron en su propio evento; 'shutdown' es que el sidecar se va, o
-            // sea CEGUERA, y esa hay que decirla — además marca blindSpoken, así que el reloj de
-            // ceguera del stream caído no la va a repetir dentro de dos minutos.
-            // `shutdown` NO toca el estado (la fila ya es terminal y el sidecar la va a devolver
-            // `suspended` al arrancar): solo dice la frase, que es la misma verdad.
-            if (w.disarmReason === 'shutdown') sayBlind(w);
+            // 'faulted' ya hablaron en su propio evento.
             break;
 
         default:
@@ -614,6 +633,19 @@ function onOwnerGone(sessionId) {
 }
 
 /**
+ * La fila se TERMINÓ: se le dice al HUD una vez y se olvida a los FORGET_MS. Vive acá porque hay
+ * tres caminos que terminan una fila (el evento del sidecar, la lista que la da por terminada, y
+ * la que después de un reinicio ya no está en ninguna lista) y el que no avisaba dejaba la fila
+ * —con su etiqueta— dibujada en el panel para lo que le quede de vida al proceso.
+ */
+function terminate(w, state, reason) {
+    if (terminal(w.state)) return;
+    w.state = state; w.disarmReason = reason;
+    broadcast({ type: 'watch_disarmed', watchId: w.watchId, reason });
+    setTimeout(() => watches.delete(w.watchId), FORGET_MS);
+}
+
+/**
  * Decir que se quedó ciega, UNA vez por episodio. Si no hay a quién decírselo NO se marca como
  * dicha, y la próxima sesión que se conecte se entera (attachSession lo reintenta): una ceguera
  * no es historia, es el estado actual, y sigue siendo verdad cuando el usuario vuelve.
@@ -626,8 +658,16 @@ function sayBlind(w) {
     eyes(listener, w.watchId, 'blind', { label: w.label }, { onLost: () => { w.blindSpoken = false; } });
 }
 
-function goBlind(w) {
-    if (w.state !== 'blind') { w.state = 'blind'; pushState(w); }
+/**
+ * A OSCURAS: nadie la está muestreando. `state` dice CUÁL de las dos oscuridades (ver la tabla de
+ * estados): `blind` cuando lo dedujimos del silencio, `suspended` cuando el que se fue es el
+ * sidecar. La frase es la misma para las dos porque para la persona el hecho es el mismo, y por
+ * eso hay una sola puerta: una segunda función que dijera lo mismo con otro flag sería otra
+ * oportunidad de que un estado nuevo se olvide de hablar.
+ */
+function goDark(w, state) {
+    if (terminal(w.state)) return;
+    if (w.state !== state) { w.state = state; pushState(w); }
     sayBlind(w);
 }
 
@@ -661,17 +701,24 @@ function goVisible(w) {
  * mira, que es la falla que este hito existe para evitar.
  */
 function onStreamStatus(status) {
+    // El sidecar REINICIÓ (`boot` distinto). No es un estado del stream sino un hecho sobre el
+    // proceso de allá, y llega por acá porque es el mismo canal y así el orden con `up` y `down`
+    // está garantizado. Qué significa para cada fila lo decide afterReboot, en un solo lugar.
+    if (status === 'restarted') { queueReconcile(afterReboot); return; }
     if (status === 'up') {
         healthy = true;
         if (blindTimer) { clearTimeout(blindTimer); blindTimer = null; }
-        reconcile().catch((e) => logger.error('reconciliar vigilancias falló', { message: e.message }));
+        queueReconcile(() => reconcile());
         return;
     }
     healthy = false;
     if (blindTimer) return;                            // ya hay un reloj corriendo: no se reinicia por cada reintento
     blindTimer = setTimeout(() => {
         blindTimer = null;
-        for (const w of watches.values()) if (!terminal(w.state) && w.state !== 'blind') goBlind(w);
+        // Lo que ya está a oscuras se queda como está: `suspended` y `blind` significan lo mismo
+        // para la persona y la frase ya se dijo (o la reintenta el próximo attach). Repintarlo
+        // solo cambiaría el motivo en la pastilla por uno que sabemos menos preciso.
+        for (const w of watches.values()) if (!dark(w)) goDark(w, 'blind');
     }, config.sense.blindMs);
 }
 
@@ -686,22 +733,70 @@ function onStreamStatus(status) {
  * no nombraba ninguna, con el sidecar mirando del otro lado. Se llama al recuperar el stream y
  * cuando un HUD se conecta.
  */
-async function reconcile() {
+async function reconcile(prunable = null) {
     const r = await client.listWatches();
     if (r?.error) return;
+    const seen = new Set();
     for (const row of r.watches || []) {
+        seen.add(row.watchId);
         let w = watches.get(row.watchId);
         // Terminal y desconocida: no hay nada que dibujar ni nada que narrar. Se ignora en vez de
         // adoptarse para que la lista del HUD no se llene de filas muertas de otro arranque.
         if (!w && terminal(row.state)) continue;
         if (!w) { w = adopt(row); broadcastEach((sid) => armedMsg(w, sid)); }
+        // Ya se dio por terminada acá: la lista NO la revive. El sidecar conserva sus filas un
+        // rato después del final y una reconciliación tardía volvería a pintar como viva una fila
+        // que ya se cerró en el HUD. Terminal es terminal hasta que FORGET_MS la olvide.
+        if (terminal(w.state)) continue;
+        // Terminal y CONOCIDA: allá se terminó y acá seguía viva, así que el evento que lo contaba
+        // no llegó (se lo comió el dedupe, o se perdió con un reinicio del backend). No se narra
+        // —quien tenía que hablar es el evento, e inventarlo tarde sería contar dos veces lo mismo
+        // en el caso normal— pero el HUD tiene que enterarse del final igual.
+        if (terminal(row.state)) { terminate(w, row.state, w.disarmReason || row.state); continue; }
         w.state = row.state || w.state;
         w.lastSampleAt = row.lastSampleAt ?? w.lastSampleAt;
         w.samplesOk = row.samplesOk ?? w.samplesOk;
         w.fires = row.fires ?? w.fires;
-        if (w.state !== 'blind') goVisible(w);
+        goVisible(w);                                  // solo si volvió ARMADA de verdad: ver goVisible
         pushState(w);
     }
+    // LA PODA solo mira lo que se le pasa, y solo se le pasa después de un reinicio del sidecar.
+    // En una reconciliación normal una fila puede faltar de la lista por una carrera —se armó por
+    // evento mientras este request viajaba— y borrarla sería matar una vigilancia viva. Después de
+    // un reinicio no hay tal carrera: la lista es la del arranque nuevo y estos ids son de antes.
+    for (const watchId of prunable || []) {
+        if (seen.has(watchId)) continue;
+        const w = watches.get(watchId);
+        if (w) terminate(w, 'disarmed', 'gone');
+    }
+}
+
+/**
+ * EL SIDECAR REINICIÓ, y esta es la única reconciliación que habla. Hace tres cosas que son la
+ * misma cosa, porque las tres salen de la asunción A4 (un reinicio no re-arma nada, así que TODA
+ * fila que este proceso creía viva dejó de muestrearse, se sepa o no qué tiene el sidecar):
+ *
+ *  1. LO DICE, una vez por fila y con la frase de la ceguera, que es la misma verdad. Antes de
+ *     preguntar nada: si el sidecar no contesta, la persona se entera igual. Y si no hay a quién
+ *     decírselo no se marca dicha, así que la dice el próximo attach — ese es el caso de las 3am
+ *     con el HUD cerrado, que es el titular del plan §10 y el que no estaba cubierto.
+ *  2. REINICIA EL `seq` DEL DEDUPE. Allá `_seq` vuelve a 1 en cada arranque (KNOWN-GAPS #23) y
+ *     acá se descarta todo evento con `seq <= w.seq`: sin este reset, el PRIMER evento del
+ *     arranque nuevo —el `watch.disarmed` de un DELETE, por ejemplo— se tira en silencio, la fila
+ *     se queda suspendida para siempre sin estado terminal, FORGET_MS no corre nunca, y la fila
+ *     con su etiqueta vive lo que viva el proceso.
+ *  3. RECONCILIA CONTRA LA LISTA DEL ARRANQUE NUEVO, Y PODA: lo que este proceso creía vivo y el
+ *     sidecar ya no tiene, no existe en ningún lado. Sin esto quedaban filas zombis a oscuras que
+ *     narraban "la perdí" de vigilancias que no existían, mientras la que sí existía callaba.
+ */
+async function afterReboot() {
+    const known = [...watches.values()].filter((w) => !terminal(w.state));
+    senseClient.invalidate();          // la foto cacheada de las filas es de un proceso que ya no existe
+    for (const w of known) {
+        w.seq = 0;
+        goDark(w, 'suspended');
+    }
+    await reconcile(new Set(known.map((w) => w.watchId)));
 }
 
 // ── Sesiones ───────────────────────────────────────────────────────────────────────────
@@ -727,11 +822,15 @@ export function attachSession(sessionId, send) {
     // esto es una ida y vuelta HTTP y el HUD tiene que pintar algo ya. Un HUD que se conecta es el
     // único momento en que alguien PREGUNTA por la lista, así que es el momento de asegurarse de
     // que la lista es la del sidecar y no la que recordamos.
-    reconcile().catch((e) => logger.error('reconciliar vigilancias al conectar falló', { message: e.message }));
+    queueReconcile(() => reconcile());
     // "Esto pasó mientras no estabas": llegó un humano, así que cambió quién puede oír el buzón.
     flushInbox();
-    // Una ceguera que sigue siendo verdad se dice ahora: no es historia, es el estado actual.
-    for (const w of watches.values()) if (w.state === 'blind') sayBlind(w);
+    // Una oscuridad que sigue siendo verdad se dice AHORA: no es historia, es el estado actual.
+    // `suspended` cuenta igual que `blind` (ver la tabla de estados) y esa era la mitad que
+    // faltaba: el sidecar reiniciaba con el HUD cerrado, no había a quién decírselo, la fila
+    // quedaba suspendida y al volver la persona no oía NADA — solo veía una pastilla. Preguntar
+    // por un estado en vez de por el hecho es lo que dejó el caso de las 3am sin cubrir.
+    for (const w of watches.values()) if (dark(w)) sayBlind(w);
 }
 
 export function detachSession(sessionId) {
@@ -799,7 +898,10 @@ export async function init(deps = {}) {
     // acá —arranca en la línea de arriba del backend en el launcher, así que pasa— esta lista
     // vuelve a pedirse al recuperar el stream y cuando un HUD se conecta (ver reconcile).
     const r = await client.listWatches();
-    for (const row of (r?.watches || [])) adopt(row);
+    // Terminales no: la lista del sidecar conserva un rato lo que ya se murió, y adoptarlo acá
+    // nacería una fila que nadie va a terminar nunca (FORGET_MS solo corre sobre las que terminan
+    // estando vivas). Mismo criterio que reconcile.
+    for (const row of (r?.watches || [])) if (!terminal(row.state)) adopt(row);
     if (r?.error) logger.warn('sense: sidecar NO alcanzable al arrancar', { error: r.error });
     sub = client.subscribe(
         (env) => { eventChain = eventChain.then(() => onEvent(env)).catch((e) => logger.error('evento de vigilancia falló', { message: e.message })); },
@@ -816,9 +918,11 @@ export async function shutdown() {
 // Solo para tests: estado limpio entre casos.
 export function _reset() {
     watches.clear(); sessions.clear(); inbox = [];
-    eventChain = Promise.resolve(); narrationChain = Promise.resolve();
+    eventChain = Promise.resolve(); narrationChain = Promise.resolve(); reconcileChain = Promise.resolve();
     client = senseClient; healthy = false;
     if (blindTimer) { clearTimeout(blindTimer); blindTimer = null; }
     sub?.close(); sub = null;
 }
-export const _settle = () => eventChain.then(() => narrationChain).then(() => {});
+// El orden es el de las dependencias: un evento puede encolar una reconciliación, y una
+// reconciliación puede encolar una narración. Cada eslabón se LEE cuando le toca, no antes.
+export const _settle = () => eventChain.then(() => reconcileChain).then(() => narrationChain).then(() => {});
