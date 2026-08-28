@@ -6,7 +6,7 @@ import { useWebSocket } from './hooks/useWebSocket.js';
 import { useVision } from './hooks/useVision.js';
 import { useVoiceActivity } from './hooks/useVoiceActivity.js';
 import { useHannahStore } from './store/hannahStore.js';
-import { DESKTOP } from './lib/api.js';
+import { DESKTOP, apiFetch } from './lib/api.js';
 
 // ── Fondo: gradiente oscuro con sutil vignette ──────────────────────────────
 const BG = () => (
@@ -72,7 +72,11 @@ export default function App() {
     useEffect(() => {
         if (isOverlay && connected && !visionStarted.current) {
             visionStarted.current = true;
-            startVision();
+            // Sin modelo de visión en el backend (VISION_PROVIDER=off, instalación sin Ollama) la
+            // cámara no se enciende: no hay quién mire los frames.
+            apiFetch('/api/v1/health').then((r) => r.json())
+                .then((h) => { if (h?.services?.vision !== 'off') startVision(); })
+                .catch(() => startVision());
         }
     }, [connected, startVision]);
 
