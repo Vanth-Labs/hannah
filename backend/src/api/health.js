@@ -11,6 +11,7 @@ export const getHealth = (req, res) => {
       asr: config.asr.provider,
       llm: config.llm.provider,
       tts: config.tts.provider,
+      vision: config.vision.provider,   // 'off' -> el overlay no enciende la cámara
     },
     sidecars: {
       asr: config.asr.sidecarUrl,

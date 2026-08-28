@@ -116,7 +116,8 @@ a real result back, do NOT claim you did it — just run the command.`,
   vision: {
     // 'yolo' -> sidecar YOLO (etiquetas de objetos) · 'vlm' -> modelo de visión
     // local (Ollama moondream/llava) que DESCRIBE y entiende la escena.
-    provider: process.env.VISION_PROVIDER || 'vlm',
+    // 'off' -> sin visión (instalación sin Ollama/moondream): la cámara no se enciende y [LOOK] lo dice.
+    provider: ['vlm', 'yolo', 'off'].includes(process.env.VISION_PROVIDER) ? process.env.VISION_PROVIDER : 'vlm',
     sidecarUrl: process.env.VISION_SIDECAR_URL || 'http://127.0.0.1:8003',
     vlmModel: process.env.VLM_MODEL || 'moondream',
     vlmBaseUrl: process.env.VLM_BASE_URL || 'http://localhost:11434/v1', // Ollama OpenAI-compat
