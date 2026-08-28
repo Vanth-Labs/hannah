@@ -1,5 +1,8 @@
 // tests/unit/senseRestart.test.js
-// EL SIDECAR REINICIA Y LA PERSONA TIENE QUE ENTERARSE.
+// UN PROCESO SE MUERE Y VUELVE, Y LOS DOS LADOS TIENEN QUE SEGUIR DICIENDO LA VERDAD. Son dos
+// reinicios distintos y este archivo cubre los dos, porque comparten cable: el del SIDECAR (la
+// persona tiene que enterarse de que ya nadie mira) y el del BACKEND (lo que ya se dijo no puede
+// volver a decirse).
 //
 // La falla que este archivo existe para atrapar es la peor que tiene la feature entera, y es
 // silenciosa: `systemctl restart hannah-sense` tarda un segundo, o sea muchísimo menos que
@@ -21,6 +24,7 @@
 // `boot`). Lo que se afirma es de comportamiento: después del reinicio, ALGO SE DICE. No que se
 // haya llamado tal función.
 import { jest } from '@jest/globals';
+import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -51,10 +55,14 @@ const bridge = await import('../../src/pipeline/senseBridge.js');
  */
 class FakeSense {
     constructor() {
-        this.boot = 'b007000000000000';
+        // Identidad ÚNICA por arranque, como el sidecar de verdad (events.py la saca de
+        // `secrets.token_hex(8)`). Con un `boot` fijo, el cursor que un caso dejó escrito en el
+        // buzón ubicaba eventos de OTRO sidecar falso y el puente los tomaba por ya atendidos.
+        this.boot = randomBytes(8).toString('hex');
         this.reboots = 0;
         this.cursor = 0;
         this.seq = new Map();
+        this.ring = [];
         this.rows = [];
         this.streams = new Set();
         this.sockets = new Set();
@@ -78,11 +86,22 @@ class FakeSense {
         if (url.pathname === '/v1/events') {
             this.connects++;
             res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
-            const from = Number(req.headers['last-event-id'] || 0);
+            const from = Number(req.headers['last-event-id'] || 0) || 0;
+            // EL REPLAY DEL ANILLO, que es lo que este falso NO hacía y por eso no podía fallar
+            // como falla la máquina. Portado de `EventBus.since()` (sidecar/sense/events.py) y
+            // verificado contra el sidecar corriendo: SIN Last-Event-ID devuelve EL ANILLO
+            // ENTERO —no distingue "soy nuevo" de "replayame desde el principio"—, con un cursor
+            // de este arranque devuelve lo posterior, y con uno imposible (de otro arranque
+            // suyo) vuelve a devolverlo entero. Sin esto, el archivo probaba un cable que el
+            // sidecar de verdad no habla.
+            const ahead = from > this.cursor;
+            const replay = ahead ? this.ring.slice() : this.ring.filter((e) => e.cursor > from);
+            const truncated = ahead || (from > 0 && this.ring.length > 0 && from < this.ring[0].cursor - 1);
             // Mismo texto que main.py, incluido el `boot=` de 1a231ff.
             res.write(from > 0
-                ? `: sense.resume from=${from} replayed=0 truncated=true boot=${this.boot}\n\n`
+                ? `: sense.resume from=${from} replayed=${replay.length} truncated=${truncated ? 'true' : 'false'} boot=${this.boot}\n\n`
                 : `: sense.v1 connected cursor=${this.cursor} boot=${this.boot}\n\n`);
+            for (const stored of replay) res.write(`id: ${stored.cursor}\ndata: ${JSON.stringify(stored.envelope)}\n\n`);
             this.streams.add(res);
             req.on('close', () => this.streams.delete(res));
             return;
@@ -125,6 +144,8 @@ class FakeSense {
         this.seq.set(watchId, seq);
         this.cursor += 1;
         const envelope = { v: 'sense.v1', watchId, seq, ts: Date.now(), type, data };
+        // Al anillo Y a los conectados: el anillo es lo que ve el que se suscribe DESPUÉS.
+        this.ring.push({ cursor: this.cursor, envelope });
         for (const res of this.streams) res.write(`id: ${this.cursor}\ndata: ${JSON.stringify(envelope)}\n\n`);
     }
 
@@ -150,9 +171,11 @@ class FakeSense {
      * que allá ya no está en ningún lado.
      */
     async revive({ keep = null } = {}) {
-        this.boot = `b00700000000${String(++this.reboots).padStart(4, '0')}`;
+        this.boot = randomBytes(8).toString('hex');
+        this.reboots++;
         this.cursor = 0;
         this.seq = new Map();
+        this.ring = [];                               // el anillo vive en RAM: se muere con el proceso
         if (keep) this.rows = this.rows.filter((r) => keep.includes(r.watchId));
         for (const row of this.rows) { row.state = 'suspended'; row.lastSampleAt = null; }
         await this.start(this.port);
@@ -178,6 +201,8 @@ const attach = (sessionId) => {
 /** Se cierra la pestaña. La conversación sigue viva y puede volver con el MISMO sessionId. */
 const detach = (sessionId) => { agentBridge.detachSession(sessionId); bridge.detachSession(sessionId); };
 const hud = (sessionId) => sent[sessionId] || [];
+/** El buzón EN DISCO, que es lo único que sobrevive a un reinicio del backend. */
+const diskTrips = () => { try { return JSON.parse(fs.readFileSync(process.env.HANNAH_WATCH_INBOX_FILE, 'utf8')).trips; } catch { return []; } };
 
 /**
  * NO HAY FILTRO SOBRE `narrated`, y es a propósito. Acá había uno que se quedaba solo con las
@@ -205,6 +230,35 @@ const adoptar = async (watchId, sessionId, label = 'the training') => {
     await until('el stream se conecta', () => bridge.isHealthy());
 };
 
+/**
+ * EL BACKEND se muere y vuelve, con el sidecar intacto del otro lado. Es la mitad simétrica de
+ * `sense.restart()`: acá el proceso que pierde la memoria es este, y lo único que sobrevive es lo
+ * que quedó escrito en el buzón. Se vuelve a attachear porque `_reset()` se lleva el mapa de
+ * sesiones, igual que un arranque de verdad.
+ */
+const rebootBackend = async (sessionId) => {
+    const conexiones = sense.connects;
+    await bridge.shutdown();
+    bridge._reset();
+    await bridge.init();
+    if (sessionId) attach(sessionId);
+    await until('el backend nuevo se suscribe', () => sense.connects > conexiones);
+    await ringDone();
+};
+
+/**
+ * Barrera: espera a que TODO el replay del anillo haya pasado por el puente. Un evento vivo
+ * emitido después del replay viaja por el mismo socket, así que cuando se ve su efecto lo
+ * anterior ya se procesó. `watch.armed` es el evento inerte: no narra ni toca el buzón.
+ */
+let probes = 0;
+const ringDone = async () => {
+    const id = `w_probe_${++probes}`;
+    sense.emit(id, 'watch.armed', { label: 'probe', rung: 'R2', sensorKind: 'file', tier: 'observe' });
+    await until('el anillo terminó de pasar', () => bridge.snapshot().some((w) => w.watchId === id));
+    await bridge._settle();
+};
+
 /** Espera a que algo pase, o falla diciendo qué esperaba. Nada de sleeps a ojo. */
 async function until(what, check, timeoutMs = 12000) {
     const deadline = Date.now() + timeoutMs;
@@ -220,6 +274,9 @@ const originalEnabled = config.sense.enabled;
 
 beforeEach(async () => {
     narrated = []; sent = {};
+    // El buzón es de UN backend y cada caso arranca uno nuevo: sin esto, los disparos y el cursor
+    // que dejó escritos el caso anterior siguen en disco (mismo idioma que senseBridge.test.js).
+    try { fs.unlinkSync(process.env.HANNAH_WATCH_INBOX_FILE); } catch { /* no existía */ }
     sense = new FakeSense();
     await sense.start();
     config.sense.enabled = true;
@@ -466,5 +523,123 @@ describe('después del reinicio, el sidecar y la fila del backend tienen que seg
         await new Promise((r) => setTimeout(r, 200));
         expect(narrated).toHaveLength(1);
         expect(hud(s).slice(desde).some((m) => m.watchId === 'w_1')).toBe(false);
+    });
+});
+describe('el BACKEND reinicia por debajo de un sidecar vivo', () => {
+    jest.setTimeout(30000);
+
+    // LA OTRA MITAD DEL MISMO CABLE, y la que no estaba probada. `GET /v1/events` SIN
+    // Last-Event-ID replaya el anillo entero como si fuera lo que está pasando ahora
+    // (main.py -> `EventBus.since(0)`), y `senseClient.subscribe()` arranca con `lastId` en null
+    // en CADA arranque del backend. El dedupe por (watchId, seq) no lo tapa: `adopt()` y
+    // `getOrAdopt()` nacen con `seq` 0, así que el `seq` 1 de un evento viejo pasa igual — el
+    // docstring de `EventBus.since()` afirma justo lo contrario y es falso cruzando un reinicio
+    // del backend. Reproducido en vivo: el buzón fue de 3 a 7 en un reinicio y de 7 a 10 en el
+    // siguiente, gritando "buzón lleno" por fantasmas y dejando /api/v1/health en pending:10 con
+    // una sola vigilancia armada y cero disparos sin contar.
+
+    test('un disparo YA DICHO no vuelve a contarse cuando el backend arranca de nuevo', async () => {
+        const s = open();
+        attach(s);
+        await until('el stream se conecta', () => bridge.isHealthy());
+        sense.arm('w_1', s, 'the training');
+        await until('la vigilancia se conoce', () => bridge.snapshot().some((w) => w.watchId === 'w_1'));
+
+        sense.emit('w_1', 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+        await until('se lo dice', () => dicho(/STOPPED/).length === 1);
+        await until('y sale del buzón', () => bridge.pendingTrips() === 0);
+
+        await rebootBackend(s);
+
+        // El anillo del sidecar sigue teniendo ese disparo, pero para ESTE backend ya está dicho.
+        expect(dicho(/STOPPED/)).toHaveLength(1);
+        expect(bridge.pendingTrips()).toBe(0);
+        expect(diskTrips()).toHaveLength(0);
+    });
+
+    test('dos reinicios del backend no llenan el buzón de fantasmas: lo pendiente sigue siendo lo pendiente', async () => {
+        // El envenenamiento de LA alarma que importa. INBOX_MAX son 10 y el anillo 2000: con el
+        // anillo re-archivándose en cada arranque, "buzón lleno: se DESCARTA el disparo más viejo
+        // sin haberlo dicho nunca" —la única señal de que se perdió un disparo de verdad— se
+        // dispara sola, y el contador de /api/v1/health deja de querer decir nada.
+        const s = open();
+        attach(s);
+        await until('el stream se conecta', () => bridge.isHealthy());
+        sense.arm('w_1', s, 'the training');
+        await until('la vigilancia se conoce', () => bridge.snapshot().some((w) => w.watchId === 'w_1'));
+
+        detach(s);                                    // se cerró la pestaña: los disparos esperan
+        for (let i = 1; i <= 3; i++) sense.emit('w_1', 'watch.tripped', { label: 'the training', at: Date.now(), fires: i });
+        await until('los tres quedan guardados', () => bridge.pendingTrips() === 3);
+
+        await rebootBackend();
+        expect(bridge.pendingTrips()).toBe(3);
+        await rebootBackend();
+        expect(bridge.pendingTrips()).toBe(3);
+        expect(diskTrips().every((t) => t.watchId === 'w_1')).toBe(true);
+
+        // Y son los de verdad: vuelve la persona y oye TRES, no nueve.
+        attach(s);
+        await until('se los cuenta al volver', () => bridge.pendingTrips() === 0);
+        expect(dicho(/STOPPED/)).toHaveLength(3);
+    });
+
+    test('lo que disparó MIENTRAS el backend no estaba sí se cuenta: el anillo no se tira entero', async () => {
+        // La otra mitad, y la que impide arreglar lo de arriba a lo bruto (que el sidecar no
+        // replaye nada al que llega sin cursor, o que el backend descarte todo replay). Un disparo
+        // ocurrido con el backend caído SOLO existe en el anillo, y es exactamente el caso de las
+        // 3am que esta feature existe para cubrir.
+        const s = open();
+        attach(s);
+        await until('el stream se conecta', () => bridge.isHealthy());
+        sense.arm('w_1', s, 'the training');
+        await until('la vigilancia se conoce', () => bridge.snapshot().some((w) => w.watchId === 'w_1'));
+        sense.emit('w_1', 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+        await until('se lo dice', () => dicho(/STOPPED/).length === 1);
+        await until('y sale del buzón', () => bridge.pendingTrips() === 0);
+
+        await bridge.shutdown();
+        bridge._reset();
+        sense.emit('w_1', 'watch.tripped', { label: 'the training', at: Date.now(), fires: 2 });
+        const conexiones = sense.connects;
+        await bridge.init();
+        attach(s);
+        await until('el backend nuevo se suscribe', () => sense.connects > conexiones);
+
+        // `>=` y no `===`: las narraciones van en serie y con el bug se encadenan tres, así que
+        // un igual estricto podía no ver nunca el número exacto y fallar por la razón equivocada.
+        await until('se cuenta el que se perdió', () => dicho(/STOPPED/).length >= 2);
+        await ringDone();
+        expect(dicho(/STOPPED/)).toHaveLength(2);     // el segundo, y NO otra vez el primero
+        expect(bridge.pendingTrips()).toBe(0);
+    });
+
+    test('el cursor guardado vale solo dentro del arranque del sidecar que lo emitió', async () => {
+        // Los dos números se guardan juntos por esto: el cursor del sidecar vuelve a 0 en cada
+        // arranque suyo (events.py, `_boot`), así que un cursor 2 del arranque viejo y un cursor 2
+        // del nuevo no son el mismo evento. Comparar solo el número dejaría mudo el arranque
+        // entero del sidecar nuevo, que es peor que el bug que se está arreglando.
+        const s = open();
+        attach(s);
+        await until('el stream se conecta', () => bridge.isHealthy());
+        sense.arm('w_1', s, 'the training');
+        await until('la vigilancia se conoce', () => bridge.snapshot().some((w) => w.watchId === 'w_1'));
+        sense.emit('w_1', 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+        await until('se lo dice', () => dicho(/STOPPED/).length === 1);
+
+        await bridge.shutdown();
+        bridge._reset();
+        await sense.restart({ keep: [] });            // otro arranque: anillo vacío y cursor en 0
+        sense.arm('w_2', s, 'the render');            // armada por REST con el backend caído
+        sense.emit('w_2', 'watch.tripped', { label: 'the render', at: Date.now(), fires: 1 });
+
+        const conexiones = sense.connects;
+        await bridge.init();
+        attach(s);
+        await until('el backend nuevo se suscribe', () => sense.connects > conexiones);
+
+        await until('el disparo del arranque nuevo se cuenta', () => dicho(/the render/).length === 1);
+        expect(dicho(/STOPPED/)).toHaveLength(2);
+        expect(bridge.pendingTrips()).toBe(0);
     });
 });

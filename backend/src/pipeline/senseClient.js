@@ -131,11 +131,20 @@ export function invalidate() { cache.survey = null; cache.rows = null; }
 // ── SSE ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * Se suscribe a GET /v1/events y llama onEvent(envelope) por cada evento. Reconecta solo,
+ * Se suscribe a GET /v1/events y llama onEvent(envelope, wire) por cada evento. Reconecta solo,
  * con el mismo backoff que agentClient.subscribe, reanudando desde el último `id` visto
  * (Last-Event-ID). onStatus('up'|'down'|'restarted') marca las transiciones para que el puente
  * pueda contar el tiempo sin contacto (contrato de ceguera, M5.1.4).
  * Devuelve { close() }.
+ *
+ * `wire` es { boot, cursor }: DE QUÉ ARRANQUE DEL SIDECAR viene este evento y qué `id:` traía su
+ * frame. Los dos son transporte puro —salen del cable y este archivo ya los tenía en la mano para
+ * su propio resume— y suben porque son lo único que ubica un evento dentro del anillo de allá.
+ * Sin ellos el puente no puede distinguir un evento nuevo de uno que un arranque ANTERIOR de este
+ * mismo backend ya atendió, y `GET /v1/events` sin Last-Event-ID replaya el anillo entero como si
+ * fuera lo que está pasando ahora (main.py -> `EventBus.since(0)`, hasta 2000 entradas). Qué se
+ * hace con eso lo decide el puente, que es el único que sabe qué llegó a DECIRSE
+ * (senseBridge, `alreadyHandled`).
  *
  * Y UNA COSA MÁS, que no es transporte y está acá igual: DETECTA QUE EL SIDECAR REINICIÓ y lo
  * anuncia con un tercer valor, onStatus('restarted'). Ver `noteBoot`.
@@ -205,7 +214,11 @@ export function subscribe(onEvent, onStatus = () => {}) {
                     let env;
                     try { env = JSON.parse(data); } catch { return; }   // nunca tumbar el stream por un evento raro
                     if (!env || env.v !== 'sense.v1') return;
-                    onEvent(env);
+                    // `boot` ya está: el comentario de bienvenida sale ANTES que el primer frame
+                    // (main.py, `stream()`), así que todo evento se entrega junto con el arranque
+                    // al que pertenece su cursor. Si el sidecar es viejo y no manda `boot=`, viaja
+                    // en null y el puente no descarta nada: repetir es la falla elegida, perder no.
+                    onEvent(env, { boot, cursor: Number(id) || 0 });
                 }, noteBoot);
                 const reader = res.body.getReader();
                 const dec = new TextDecoder();

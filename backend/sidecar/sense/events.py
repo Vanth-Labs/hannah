@@ -117,6 +117,17 @@ class EventBus:
           Ahora un cursor imposible se trata como una conexión nueva (el anillo
           entero, igual que sin Last-Event-ID) y se dice `truncated=true`.
 
+        Y LO QUE ESTE ANILLO NO PUEDE HACER, dicho acá porque el docstring
+        afirmaba lo contrario: no deduplica. "Sin Last-Event-ID" no quiere decir
+        "soy nuevo", así que un suscriptor que llega sin cursor se lleva el
+        anillo entero como eventos vivos, incluido lo que un proceso anterior
+        suyo ya atendió. El `seq` por watch tampoco lo salva: sirve adentro de un
+        backend que vio armarse la vigilancia, y uno que acaba de arrancar adopta
+        las filas con `seq` 0. Quién sí puede contestar "esto ya lo atendí" es el
+        backend, que guarda el par (boot, cursor) y filtra con él
+        (senseBridge.js, `alreadyHandled`); acá no hay acuse de entrega y por eso
+        no puede decidirse desde este lado.
+
         Esto se apartó a propósito de `facade/store.ts:224`, de donde está
         portado el resto. Allá la forma alcanza porque la fachada vive DENTRO del
         proceso del agente y muere con su cliente: los dos cursores nacen
@@ -127,7 +138,9 @@ class EventBus:
         if cursor > self._cursor:
             # Imposible dentro de este arranque: el cliente trae el cursor de uno
             # anterior. Se le da lo que hay, que es lo mismo que recibe un
-            # cliente sin Last-Event-ID; el `seq` por watch es lo que deduplica.
+            # cliente sin Last-Event-ID. De más y no de menos, a propósito: lo
+            # repetido lo filtra el backend con su par (boot, cursor), y lo que
+            # no se entrega no lo recupera nadie.
             return list(self._events), True
         if not self._events:
             return [], False

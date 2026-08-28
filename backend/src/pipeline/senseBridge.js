@@ -100,6 +100,12 @@ const TRIP_MAX_ATTEMPTS = 3;
 export const INBOX_FILE = process.env.HANNAH_WATCH_INBOX_FILE || path.join(DATA_DIR, 'watch-inbox.json');
 let inbox = [];   // [{ watchId, label, sessionId, at, confidence, fires, attempts }] (+ inFlight, en RAM)
 
+// HASTA DÓNDE LLEGÓ ESTE BACKEND EN EL ANILLO DEL SIDECAR, y en qué arranque suyo. Se guarda en el
+// mismo archivo que el buzón porque es la misma clase de dato —el registro durable de lo que este
+// proceso ya atendió— y porque así una entrega y el cursor que la explica se escriben juntos.
+// Ver `alreadyHandled`.
+let stream = { boot: null, cursor: 0 };
+
 // Lo que se ESCRIBE de una fila del buzón. `inFlight` (hay una narración de esta fila en vuelo)
 // queda deliberadamente afuera: es cierto solo mientras este proceso viva, y persistirlo haría
 // que un disparo sobreviviente a un crash naciera marcado como "ya se está entregando" y no se
@@ -111,13 +117,16 @@ function loadInbox() {
     try {
         const raw = JSON.parse(fs.readFileSync(INBOX_FILE, 'utf8'));
         inbox = Array.isArray(raw?.trips) ? raw.trips : [];
-    } catch { inbox = []; }   // no existe, o quedó corrupto: se empieza vacío, nunca se rompe el arranque
+        stream = raw?.stream?.boot
+            ? { boot: String(raw.stream.boot), cursor: Number(raw.stream.cursor) || 0 }
+            : { boot: null, cursor: 0 };
+    } catch { inbox = []; stream = { boot: null, cursor: 0 }; }   // no existe, o quedó corrupto: se empieza vacío, nunca se rompe el arranque
 }
 
 function saveInbox() {
     try {
         fs.mkdirSync(path.dirname(INBOX_FILE), { recursive: true, mode: 0o700 });
-        fs.writeFileSync(INBOX_FILE, JSON.stringify({ v: 'sense.v1', trips: inbox.map(persistable) }, null, 2), { mode: 0o600 });
+        fs.writeFileSync(INBOX_FILE, JSON.stringify({ v: 'sense.v1', trips: inbox.map(persistable), stream }, null, 2), { mode: 0o600 });
         try { fs.chmodSync(INBOX_FILE, 0o600); } catch { /* fs sin permisos POSIX */ }
     } catch (e) {
         logger.error('No se pudo persistir el buzón de vigilancias', { message: e.message });
@@ -395,6 +404,60 @@ function adopt(row) {
     };
     watches.set(w.watchId, w);
     return w;
+}
+
+// ── EL CURSOR DEL ANILLO: qué de lo que llega ya se atendió ────────────────────────────
+/**
+ * CADA ARRANQUE DEL BACKEND RE-ARCHIVABA EL ANILLO ENTERO DEL SIDECAR, y esto lo cierra.
+ *
+ * El mecanismo, verificado contra el sidecar corriendo: `senseClient.subscribe()` empieza con
+ * `lastId` en null, así que el primer GET /v1/events de cada proceso sale SIN Last-Event-ID; y
+ * `EventBus.since(0)` no distingue "soy nuevo" de "replayame desde el principio", así que entrega
+ * las hasta 2000 entradas del anillo como eventos vivos. El dedupe por (watchId, seq) no puede
+ * taparlo porque `adopt()`/`getOrAdopt()` nacen con `seq` 0 — el docstring de `since()` afirma
+ * justo lo contrario, que el seq por watch es lo que deduplica, y eso es FALSO cruzando un
+ * reinicio del backend. Medido: disparos ya dichos en un arranque anterior resucitaban,
+ * vigilancias desarmadas hacía horas volvían a escribir su etiqueta cruda en disco, y con
+ * INBOX_MAX en 10 dos reinicios alcanzaban para desalojar todo lo que sí estaba pendiente
+ * gritando "buzón lleno" — LA alarma que tiene que significar que se perdió un disparo de verdad.
+ * /api/v1/health quedaba en pending:10 con una vigilancia armada y cero disparos sin contar, o
+ * sea que `hannah doctor` mentía también.
+ *
+ * POR QUÉ SE CIERRA ACÁ Y NO EN EL SIDECAR. La pregunta no es "¿esto es un replay?" sino "¿ESTE
+ * backend ya lo atendió?", y allá no hay con qué contestarla: el anillo es un buffer de resume,
+ * no una cola con acuse. Es la misma razón por la que el buzón vive acá y no en :8007 (ver
+ * INBOX_FILE): el dueño del dato de entrega es quien conoce al destinatario. Las otras dos
+ * salidas se miraron y se descartaron. Que el sidecar trate "sin Last-Event-ID" como "soy nuevo"
+ * y no replaye nada tira los disparos que ocurrieron mientras el backend no estaba, que son
+ * reales y son justo el caso de las 3am. Y marcar el replay en el cable no alcanza solo: un
+ * evento replayado que este backend nunca vio SÍ hay que atenderlo, así que haría falta este par
+ * guardado igual.
+ *
+ * TAMPOCO SE MANDA EL CURSOR GUARDADO COMO Last-Event-ID, a propósito. El sidecar filtraría con
+ * un número de otro arranque suyo: `since()` solo trata como imposible el cursor ADELANTADO, así
+ * que un cursor 30 viejo contra un anillo nuevo que ya va por 50 se come en silencio los primeros
+ * 30 eventos del arranque nuevo. Se prefiere que el sidecar entregue de más y filtrar acá: de más
+ * se arregla con este par, de menos no se entera nadie.
+ *
+ * El par se guarda JUNTO porque un cursor solo quiere decir algo adentro del arranque que lo
+ * emitió (events.py, `_boot`). Con otro `boot`, o sin `boot` en el cable, no se descarta nada.
+ */
+function alreadyHandled(wire) {
+    if (!wire?.boot || !(wire.cursor > 0)) return false;
+    return wire.boot === stream.boot && wire.cursor <= stream.cursor;
+}
+
+/**
+ * Se atendió: recién AHORA avanza el cursor, después de procesar y no antes. Es la misma elección
+ * que la del buzón (ver deliverTrip): si el proceso se muere en el medio, el evento se vuelve a
+ * ver al arrancar en vez de desaparecer. Repetir una frase se corrige solo en la conversación
+ * siguiente; una que no se dijo no deja rastro en ningún lado.
+ */
+function noteHandled(wire) {
+    if (!wire?.boot || !(wire.cursor > 0)) return;
+    if (wire.boot === stream.boot && wire.cursor <= stream.cursor) return;
+    stream = { boot: wire.boot, cursor: wire.cursor };
+    saveInbox();
 }
 
 export async function onEvent(env) {
@@ -891,6 +954,9 @@ export async function init(deps = {}) {
     if (!forgetHook) forgetHook = conversationManager.onDelete(onOwnerGone);
     loadInbox();
     if (inbox.length) logger.info('buzón de vigilancias con entregas pendientes', { pending: inbox.length });
+    // De dónde se retoma el anillo del sidecar: es lo que explica qué eventos se van a descartar
+    // por replay y cuáles no (ver alreadyHandled).
+    if (stream.boot) logger.info('vigilancias: el anillo del sidecar se retoma desde acá', { boot: stream.boot, cursor: stream.cursor });
     // Adoptar lo que el sidecar ya tenga (backend reiniciado con vigilancias armadas). Nunca se
     // re-arma nada desde acá (asunción A4: re-armar no es consentimiento) y NADIE las hereda: el
     // dueño es el que diga la fila, y si esa sesión murió con el proceso anterior lo que dispare
@@ -904,7 +970,17 @@ export async function init(deps = {}) {
     for (const row of (r?.watches || [])) if (!terminal(row.state)) adopt(row);
     if (r?.error) logger.warn('sense: sidecar NO alcanzable al arrancar', { error: r.error });
     sub = client.subscribe(
-        (env) => { eventChain = eventChain.then(() => onEvent(env)).catch((e) => logger.error('evento de vigilancia falló', { message: e.message })); },
+        (env, wire) => {
+            eventChain = eventChain
+                .then(async () => {
+                    // Lo que un arranque anterior de ESTE backend ya atendió se descarta acá,
+                    // antes de tocar ninguna fila: ver alreadyHandled.
+                    if (alreadyHandled(wire)) return;
+                    await onEvent(env);
+                    noteHandled(wire);
+                })
+                .catch((e) => logger.error('evento de vigilancia falló', { message: e.message }));
+        },
         onStreamStatus);
 }
 
@@ -917,7 +993,7 @@ export async function shutdown() {
 
 // Solo para tests: estado limpio entre casos.
 export function _reset() {
-    watches.clear(); sessions.clear(); inbox = [];
+    watches.clear(); sessions.clear(); inbox = []; stream = { boot: null, cursor: 0 };
     eventChain = Promise.resolve(); narrationChain = Promise.resolve(); reconcileChain = Promise.resolve();
     client = senseClient; healthy = false;
     if (blindTimer) { clearTimeout(blindTimer); blindTimer = null; }
