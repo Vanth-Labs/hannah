@@ -141,6 +141,19 @@ lectura que se saltea la denylist del agente entera, así que **toda ruta se
 clasifica antes de tocarla** y una ruta denegada es un `403` **al armar**, con la
 misma cadena que dice el agente cuando le piden leer ese mismo archivo.
 
+**Y se clasifica de nuevo en cada muestra**, porque una ruta es un *nombre*:
+entre el arme y la muestra número doscientos pasan horas, y en el medio un
+`live.log` se puede volver un symlink a un `.env` (que es, además, la forma que
+tiene una rotación de logs). El sensor guarda la ruta **cruda** y la abre por
+`open_watched()`, que hace tres cosas y no una: clasifica de nuevo, abre con
+`O_NOFOLLOW` (el último componente no se sigue) y `O_NONBLOCK` (un FIFO no
+cuelga el `open`), y después le pregunta al kernel **qué archivo abrió de
+verdad** y lo clasifica también — que es lo que tapa el cambio de un directorio
+del *medio*, que `O_NOFOLLOW` no mira. Lo que queda abierto (la ventana existe,
+pero adentro no se lee nada; un hardlink no se ve; hace falta `/proc`) está
+escrito en el docstring de `open_watched`, y ahí tiene que seguir: creer que no
+quedaba nada es como se llegó al agujero.
+
 La tabla **no se copia a mano**: `paths.py` lee el asset generado
 `agent/docs/fixtures/policy-paths.json`, que sale de
 `packages/agent/src/hannah/policy/paths.ts`. Lo que sí está duplicado es el

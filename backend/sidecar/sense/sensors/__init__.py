@@ -25,8 +25,10 @@ from .base import (  # noqa: F401  (superficie pública del módulo `sensors`)
     SensorFault,
     SpecError,
     SENSORS,
+    Watched,
     build,
     classify_path,
+    open_watched,
     register,
     run_argv,
 )

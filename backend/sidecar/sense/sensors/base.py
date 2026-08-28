@@ -25,7 +25,7 @@ Cómo agregar un sensor (así están hechos proc/file/logmatch/gpu/port/unit):
             done = await run_argv([self._pgrep, "-f", "--", self._pattern])
             return Sample(healthy=done.code == 0, detail={"alive": done.code == 0})
 
-Cuatro reglas que el scheduler da por sentadas y que no se pueden romper:
+Cinco reglas que el scheduler da por sentadas y que no se pueden romper:
 
 1. `parse()` valida TODO antes de que exista el watch. Si el spec nombra una
    ruta, la clasifica con `classify_path()` y deja que DeniedPath salga: el
@@ -44,11 +44,21 @@ Cuatro reglas que el scheduler da por sentadas y que no se pueden romper:
    sin stdin. No hay ningún lugar donde se arme un string de comando, así que no
    hay nada que inyectar; es una propiedad estructural, no una validación que se
    pueda olvidar de aplicar.
+5. Un sensor con ruta guarda la ruta CRUDA (la que escribió el usuario), NO la
+   resuelta que devolvió `classify_path()` al armar, y la abre por
+   `open_watched()`, que la clasifica de nuevo en cada muestra. Una ruta es un
+   NOMBRE, y entre el arme y la muestra número doscientos pasan horas: guardar la
+   resuelta no cierra la ventana, porque la resuelta también es un nombre que
+   `open()` va a seguir. Ver el docstring de `open_watched()`.
 """
 import asyncio
+import errno
 import logging
+import os
+import stat
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Mapping, NamedTuple, Sequence
+from typing import Any, ClassVar, Iterator, Mapping, NamedTuple, Sequence
 
 import paths
 
@@ -158,11 +168,16 @@ def build(spec: Any) -> Sensor:
 
 
 def classify_path(value: Any, field_name: str = "path") -> str:
-    """Clasifica una ruta ANTES de usarla y devuelve la RESUELTA.
+    """Clasifica una ruta y devuelve la RESUELTA que se clasificó.
 
-    Se devuelve la resuelta y no la cruda porque es la que se clasificó: abrir
-    después la cruda dejaría abierta la ventana entre las dos (un symlink que
-    cambia de destino entre el arme y el sample).
+    Esto contesta "¿esta ruta está denegada AHORA?" y nada más. NO cierra la
+    ventana hasta el `open()`, y decir que sí (como decía este docstring) es lo
+    que dejó pasar el symlink: la resuelta también es un nombre, y un nombre es
+    lo que `open()` sigue. Quien tiene que cerrar la ventana es `open_watched()`,
+    que llama a esto en cada muestra y además verifica lo que abrió.
+
+    Se usa en `parse()` para que una ruta denegada sea un 403 AL ARMAR, que es
+    donde el usuario puede escuchar la razón.
 
     Falla CERRADO si no hay tabla: sin la denylist del agente este proceso no
     tiene con qué decidir, y un `return value` provisorio sería un sensor de
@@ -188,6 +203,160 @@ def classify_path(value: Any, field_name: str = "path") -> str:
     if local:
         raise DeniedPath(local)
     return verdict.resolved
+
+
+# ── La ruta vigilada, en cada muestra ───────────────────────────────────────
+# Lo que se dice cuando la ruta dejó de ser observable. Vocabulario FIJO y NO la
+# razón de la denegación: esa lleva la ruta adentro ("/home/.../.ssh is a
+# protected directory") y viajaría en `watch.faulted.error` hasta una frase
+# hablada, y las rutas no salen de este proceso (regla R2). La razón entera queda
+# en el log local, que es donde el operador la necesita.
+PATH_TURNED_DENIED = "la ruta vigilada ya no se puede observar"
+NOT_A_FILE = "lo vigilado no es un archivo"
+UNVERIFIABLE = "no pude verificar qué archivo abrí"
+
+#: El kernel le pega esto al nombre de /proc/self/fd/N cuando el inodo se
+#: desenlazó después del open.
+_DELETED = " (deleted)"
+
+
+class Watched(NamedTuple):
+    """Un descriptor ya verificado y el `fstat` de lo que se abrió DE VERDAD.
+
+    Se devuelve el fstat del descriptor y no un `stat()` por ruta para que el
+    sensor mida el inodo que va a leer y no el que en este milisegundo tiene ese
+    nombre.
+    """
+    fd: int
+    info: os.stat_result
+
+
+@contextmanager
+def open_watched(raw_path: Any, *, allow_directory: bool = False,
+                 field_name: str = "path") -> Iterator[Watched]:
+    """Abre lo vigilado para ESTA muestra, clasificándolo de nuevo.
+
+    Un sensor con ruta guarda la ruta CRUDA y pasa por acá en cada `sample()`.
+    Clasificar una sola vez al armar no alcanza, y no es teoría: se reprodujo en
+    vivo de dos formas contra el sidecar corriendo, y las dos terminaban con el
+    sensor leyendo un `.env`.
+
+      (a) el symlink colgado. `paths.resolve()` camina al ancestro que EXISTE,
+          así que un link cuyo destino todavía no existe se resuelve a sí mismo y
+          pasa la clasificación con su propio basename inocente; cuando el
+          destino aparece, el sensor lo sigue.
+      (b) la rotación. Se arma sobre un archivo de verdad y después alguien lo
+          reemplaza por un symlink. No hace falta ningún link colgado, y es
+          exactamente la forma que tiene una rotación de logs.
+
+    Acá pesa más que en el agente, cuyo `classify()` corre milisegundos antes de
+    cada lectura: el sidecar convierte la carrera en una lectura PROGRAMADA y
+    repetida, una por período, durante horas.
+
+    Re-clasificar es la mitad obvia y sola no cierra nada: entre `classify()` y
+    `open()` hay dos syscalls y ahí adentro se puede cambiar un directorio del
+    medio. Por eso son tres cosas y no una:
+
+      1. se clasifica la ruta cruda de nuevo, ahora;
+      2. se abre con O_NOFOLLOW, que hace fallar el open si el ÚLTIMO componente
+         se volvió un symlink en el medio; y con O_NONBLOCK, para que un FIFO no
+         cuelgue el open para siempre (un watch colgado es un watch que el
+         usuario cree armado);
+      3. se clasifica lo que DE VERDAD se abrió, preguntándole al kernel el
+         nombre del descriptor, y recién ahí se lee. Esto es lo que tapa el
+         cambio de un directorio del MEDIO, que O_NOFOLLOW no mira.
+
+    Lo que QUEDA abierto, escrito acá para que nadie vuelva a creer que no queda
+    nada (creerlo es como llegamos a esto):
+
+      * la ventana entre clasificar y abrir sigue existiendo. Lo que cambia es
+        que adentro de la ventana no se lee nada: lo que se lee sale del
+        descriptor y el descriptor se clasifica DESPUÉS de abrirlo, así que
+        perder la carrera es un `SensorFault` y no una lectura.
+      * un hardlink no se ve. La denylist es por NOMBRE y un hardlink le da al
+        mismo inodo un segundo nombre inocente. Es un agujero del modelo de
+        políticas del agente entero, no de este archivo, y se cierra donde se
+        decidió que la política fuera por ruta.
+      * hace falta /proc. Sin él no hay con qué saber qué se abrió, y entonces el
+        sensor falla CERRADO, que es la dirección segura.
+    """
+    resolved = _classify_now(raw_path, field_name)
+    fd = _open_nofollow(resolved)
+    try:
+        info = os.fstat(fd)
+        if not (stat.S_ISREG(info.st_mode) or (allow_directory and stat.S_ISDIR(info.st_mode))):
+            # Un FIFO, un socket o un device no son lo que nadie quiso vigilar, y
+            # leerlos tiene efectos (un FIFO consume lo que otro escribió).
+            raise SensorFault(NOT_A_FILE)
+        _verify_opened(fd, field_name)
+        yield Watched(fd, info)
+    finally:
+        os.close(fd)
+
+
+def _classify_now(raw_path: Any, field_name: str) -> str:
+    """La clasificación de esta muestra. Denegada AHORA es sensor roto, no error.
+
+    `SensorFault` y no `SensorError` a propósito: "no pude leer" es transitorio y
+    deja el watch tiqueando, o sea reintentando la misma lectura denegada cada
+    período. Que la ruta vigilada pase a apuntar a un archivo denegado no se
+    arregla solo y no se debe reintentar: el watch termina y se dice por qué.
+    """
+    try:
+        return classify_path(raw_path, field_name)
+    except DeniedPath as exc:
+        # La razón entera (con la ruta) va al log y NO a la excepción: ver el
+        # comentario de PATH_TURNED_DENIED.
+        logger.warning(f"la ruta de un watch quedó denegada en pleno vuelo: {exc}")
+        raise SensorFault(PATH_TURNED_DENIED) from exc
+    except SpecError as exc:
+        # La tabla se cayó (AssetMissing) o la ruta dejó de ser una ruta. Sin
+        # tabla no hay con qué decidir, así que no se lee.
+        logger.warning(f"no se pudo clasificar la ruta de un watch: {exc}")
+        raise SensorFault(PATH_TURNED_DENIED) from exc
+
+
+def _open_nofollow(resolved: str) -> int:
+    """Abre sin seguir el último componente y sin poder colgarse."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    try:
+        return os.open(resolved, flags)
+    except FileNotFoundError as exc:
+        # Transitorio a propósito: una rotación de logs deja el archivo sin
+        # existir por un instante. Si de verdad no vuelve, el watch se declara
+        # `blind` y lo dice, que es lo honesto; decir "se paró" sería afirmar algo
+        # que este sensor no pudo ver.
+        raise SensorError("el archivo no está") from exc
+    except PermissionError as exc:
+        # Esto no se arregla solo: el sensor no va a poder leer nunca.
+        raise SensorFault("sin permiso para leer el archivo") from exc
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            # El último componente es un symlink. O alguien lo cambió justo en la
+            # ventana, o se armó sobre un link colgado (que no resuelve a nada, y
+            # entonces no hay nada que vigilar). Las dos son "no pude leer": no se
+            # leyó ni un byte, la próxima muestra vuelve a resolver, y si sigue
+            # así el watch se declara ciego, que es la verdad.
+            raise SensorError("la ruta pasó a ser un symlink") from exc
+        raise SensorError(f"no se pudo leer: {exc.__class__.__name__}") from exc
+
+
+def _verify_opened(fd: int, field_name: str) -> None:
+    """Clasifica lo que se abrió DE VERDAD, que es lo único que se va a leer.
+
+    El nombre sale del kernel (/proc/self/fd/N), no de lo que se pidió abrir, así
+    que un directorio del medio cambiado entre `classify()` y `open()` aparece
+    acá con su nombre real.
+    """
+    try:
+        actual = os.readlink(f"/proc/self/fd/{fd}")
+    except OSError as exc:
+        raise SensorFault(UNVERIFIABLE) from exc
+    if actual.endswith(_DELETED):
+        # Sin sacar el sufijo, las reglas por basename (`.env`, `id_rsa`) dejan de
+        # matchear y un unlink bien puesto saltea esta verificación entera.
+        actual = actual[: -len(_DELETED)]
+    _classify_now(actual, field_name)
 
 
 class Completed(NamedTuple):

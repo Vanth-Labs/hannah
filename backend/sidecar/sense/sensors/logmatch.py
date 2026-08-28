@@ -23,7 +23,7 @@ import logging
 import re
 from typing import Any, Mapping
 
-from .base import DETERMINISTIC, Sample, Sensor, SensorError, SensorFault, SpecError, classify_path, register
+from .base import DETERMINISTIC, Sample, Sensor, SpecError, classify_path, open_watched, register
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,9 @@ class LogMatchSensor(Sensor):
     confidence = DETERMINISTIC
 
     def __init__(self, path: str, pattern: str, compiled: re.Pattern[str]) -> None:
+        #: La ruta CRUDA. Se re-clasifica en cada muestra (ver `open_watched`):
+        #: guardar la resuelta del arme es lo que dejaba pasar un symlink que
+        #: cambiaba de destino después.
         self._path = path
         self._pattern = pattern
         self._compiled = compiled
@@ -55,7 +58,10 @@ class LogMatchSensor(Sensor):
 
     @classmethod
     def parse(cls, spec: Mapping[str, Any]) -> "LogMatchSensor":
-        path = classify_path(spec.get("path"))
+        path = spec.get("path")
+        # Al armar se clasifica para que una ruta denegada sea un 403 acá, donde
+        # el usuario escucha la razón; lo que se guarda es la cruda.
+        classify_path(path)
         pattern = spec.get("pattern")
         if not isinstance(pattern, str) or not pattern.strip():
             raise SpecError("pattern es obligatorio")
@@ -69,19 +75,15 @@ class LogMatchSensor(Sensor):
         return cls(path, pattern, compiled)
 
     async def sample(self) -> Sample:
-        try:
-            with open(self._path, "rb") as handle:
-                handle.seek(0, 2)
-                size = handle.tell()
+        with open_watched(self._path) as watched:
+            # `closefd=False`: el descriptor es de `open_watched`, que lo cierra
+            # él. Se envuelve para leer con la semántica de siempre (un `os.read`
+            # suelto puede devolver menos bytes de los pedidos).
+            with open(watched.fd, "rb", closefd=False) as handle:
+                size = watched.info.st_size
                 start = self._start_from(size)
                 handle.seek(start)
                 chunk = handle.read(MAX_TAIL_BYTES)
-        except FileNotFoundError as exc:
-            raise SensorError("el archivo no está") from exc
-        except PermissionError as exc:
-            raise SensorFault("sin permiso para leer el archivo") from exc
-        except OSError as exc:
-            raise SensorError(f"no se pudo leer: {exc.__class__.__name__}") from exc
 
         self._offset = start + len(chunk)
         # "replace" y no "strict": un log binario a medias no puede tirar un

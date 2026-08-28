@@ -10,12 +10,17 @@ Sin subproceso: es un `stat`, no un programa. El plan lo escribe como
 `stat -c %Y` porque describe el costo, no la implementación; un fork por sample
 por watch para leer un st_mtime que la libc ya sabe contestar sería gasto puro.
 Por eso R2 no pide ninguna herramienta en capability.TOOLS.
+
+Lo que sí hay es un descriptor: se abre y se hace `fstat` en vez de `stat` por
+ruta, porque un `stat()` sigue symlinks y mide el archivo que HOY tiene ese
+nombre (ver `open_watched`). El precio es que hace falta permiso de lectura sobre
+el archivo y no solo de recorrer su carpeta; a cambio se mide el mismo inodo que
+se verificó.
 """
-import os
 import time
 from typing import Any, Mapping
 
-from .base import DETERMINISTIC, Sample, Sensor, SensorError, SensorFault, SpecError, classify_path, register
+from .base import DETERMINISTIC, Sample, Sensor, SpecError, classify_path, open_watched, register
 
 # Cotas de stallSeconds. El piso evita el watch que dispara con cualquier pausa
 # normal de escritura; el techo (un día) evita el que nunca dispara y que el
@@ -33,6 +38,9 @@ class FileSensor(Sensor):
     confidence = DETERMINISTIC
 
     def __init__(self, path: str, stall_seconds: int) -> None:
+        #: La ruta CRUDA. Se re-clasifica en cada muestra (ver `open_watched`):
+        #: guardar la resuelta del arme es lo que dejaba pasar un symlink que
+        #: cambiaba de destino después.
         self._path = path
         self._stall_seconds = stall_seconds
         #: Piso de "última señal de vida" que impone una re-basificación.
@@ -40,7 +48,10 @@ class FileSensor(Sensor):
 
     @classmethod
     def parse(cls, spec: Mapping[str, Any]) -> "FileSensor":
-        path = classify_path(spec.get("path"))
+        path = spec.get("path")
+        # Al armar se clasifica para que una ruta denegada sea un 403 acá, donde
+        # el usuario escucha la razón; lo que se guarda es la cruda.
+        classify_path(path)
         stall = spec.get("stallSeconds")
         if not isinstance(stall, int) or isinstance(stall, bool):
             raise SpecError("stallSeconds tiene que ser un entero en segundos")
@@ -60,23 +71,16 @@ class FileSensor(Sensor):
         self._floor = time.time()
 
     async def sample(self) -> Sample:
-        try:
-            info = os.stat(self._path)
-        except FileNotFoundError as exc:
-            # Transitorio a propósito: una rotación de logs deja el archivo sin
-            # existir por un instante. Si de verdad no vuelve, el watch se
-            # declara `blind` y lo dice, que es lo honesto; decir "se paró"
-            # sería afirmar algo que este sensor no pudo ver.
-            raise SensorError("el archivo no está") from exc
-        except PermissionError as exc:
-            # Esto no se arregla solo: el sensor no va a poder leer nunca.
-            raise SensorFault("sin permiso para leer el archivo") from exc
-        except OSError as exc:
-            raise SensorError(f"no se pudo leer: {exc.__class__.__name__}") from exc
+        # `allow_directory`: un checkpoint puede ser una carpeta cuyo mtime
+        # avanza, y eso es exactamente lo que describe la fila R2 del plan.
+        with open_watched(self._path, allow_directory=True) as watched:
+            # El mtime sale del `fstat` del descriptor, o sea del inodo que se
+            # abrió y verificó, no del que en este milisegundo tenga ese nombre.
+            mtime = watched.info.st_mtime
 
         now = time.time()
         # El piso de re-basificación compite con el mtime: gana el más reciente.
-        last_progress = max(info.st_mtime, self._floor)
+        last_progress = max(mtime, self._floor)
         idle = max(0.0, now - last_progress)
         # `idleSeconds` es una duración, no un contenido: no dice qué archivo es
         # ni qué tiene adentro (regla R2).
