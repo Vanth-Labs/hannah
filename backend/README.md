@@ -30,6 +30,7 @@ npm run sidecar:tts         # Kokoro on :8002  ← required for her to speak
 npm run sidecar:asr         # faster-whisper on :8001 (if ASR_PROVIDER=local)
 npm run sidecar:vision      # YOLOv8 on :8003 — ONLY with VISION_PROVIDER=yolo (see below)
 npm run sidecar:motion      # EMAGE on :8004 (only if MOTION_PROVIDER=emage)
+npm run sidecar:sense       # the watches on :8007 (only if SENSE_ENABLED=true)
 ```
 
 **Two of those you will probably never start**, because the defaults do not use them:
@@ -53,6 +54,7 @@ cd ../hannah-motion-lab && .venv/bin/python -m uvicorn serve.main:app --port 800
 | Backend (REST + WS) | 3001 | listens on **127.0.0.1** by default (`HOST`) |
 | ASR · TTS · Vision | 8001 · 8002 · 8003 | this repo's sidecars |
 | Motion | 8005 (`lab`) · 8004 (`emage`) | each provider with its own URL |
+| Sense (the watches) | 8007 | this repo's fifth sidecar, **off by default** (`SENSE_ENABLED`) |
 | Ollama | 11434 | LLM, VLM and embeddings |
 | Vite (frontend) | 5173 | proxies `/api` and `/ws` over to the backend |
 
@@ -141,6 +143,37 @@ Verified without a model or a live agent: `tests/unit/agentBridge.test.js` feeds
 agent's own fixtures (`hannah-agent/docs/fixtures/*.jsonl`) with a spy in place of
 `processTextTurn`.
 
+## The eyes that stay open: `hannah-sense`
+
+A watch is a **standing state of attention**: it outlives the conversation turn and keeps looking
+at a process, a file's mtime, a log tail, a port or a systemd unit. It cannot be an agent task
+(one-hour timebox, one lane, an approval that denies by silence in two minutes) and it cannot be a
+loop in this process (the risk tiers, the path denylist and the audit trail all live on the agent's
+side of the seam). So it is the fifth sidecar, `sidecar/sense/` on **127.0.0.1:8007**.
+
+**It observes and never acts.** Every corrective action stays an ordinary agent task, so there is
+one actuator and one place to look when something happened. The sidecar spawns nothing outside its
+own probes, and everything it runs goes through an argv list with `shell=False` — a sensor is a
+**typed spec** (`{kind, ...}` from a closed catalog), never a command string, so a pattern of
+`; rm -rf ~` has nowhere to land. Every path is classified before use against the *generated*
+denylist asset from `agent/docs/fixtures/policy-paths.json`, with golden cases asserting both
+implementations still agree; without the asset it fails closed.
+
+**What she says, and when.** `senseBridge.js` holds one process-wide SSE subscription (resume by
+`Last-Event-ID`, per-watch `seq` dedupe) and narrates through `processTextTurn`, the same path the
+camera and the hands use. Three rules are this feature's own, and each one is a bug if it is
+dropped: a trip binds to the session that armed the watch and goes to a **durable inbox** if that
+session is gone, instead of falling back to whoever attached last; watch narration is **ephemeral**
+(no `memory.db` row, no embedding), so eight hours of watching cannot evict the real conversation;
+and after `SENSE_BLIND_MS` with no sample the watch is **blind and she says so**, because a watch
+that believes it is looking and is not is the worst failure this feature has. There is **no
+heartbeat event**: four quiet hours produce nothing, and liveness is answered on demand from
+`GET /api/v1/watches` or from `hannah doctor`'s `vigilancia:` line.
+
+`[WATCH:]` is assembled from a **live capability probe**, like the macro catalog: a rung whose tool
+is missing is absent from the ladder, so she cannot promise a watch that would fail hours later.
+With `SENSE_ENABLED=false` the vocabulary is not built at all.
+
 ## Actions: why there are four layers
 
 They coexist on purpose. The motivation is reliability with small local models.
@@ -187,6 +220,7 @@ Invalid JSON is ignored silently (only the size is logged, never the content).
 | `AGENT_APPROVAL` | `taskId`, `approvalId`, `decision` | HUD button on an agent approval (`by: hud` — the only attribution that can grant `high` risk) |
 | `AGENT_ANSWER` | `taskId`, `questionId`, `answer` | HUD answer to an agent question |
 | `AGENT_CANCEL` | `taskId` | Cancel the running task |
+| `WATCH_DISARM` | `watchId` | Stops a watch. The **only** way the HUD can: `/api/v1/watches` refuses anything carrying an `Origin` |
 
 ### Server → client
 
@@ -206,6 +240,13 @@ Invalid JSON is ignored silently (only the size is logged, never the content).
 | `agent_task_started` / `agent_task_progress` / `agent_task_done` | `taskId`, `title`, `state`, `kind`, `data` | The hands' task lifecycle, for the HUD. `kind` names the source event (`plan`, `progress`, `tool`…) |
 | `agent_approval_request` / `agent_question` | + `expiresAt` | The hands need a yes/no or an answer; silence expires into **deny** |
 | `agent_command_failed` | `command`, `taskId`, `reason` | A HUD/voice action could not be applied (e.g. `hud_confirmation_required`) |
+| `watch_armed` | `watchId`, `label`, `rung`, `tier`, `expiresAt` | A watch started |
+| `watch_state` | `watchId`, `state`, `lastSampleAt`, `samplesOk`, `fires` | Its state or counters moved (`armed`, `blind`, `suspended`…) |
+| `watch_tripped` | `watchId`, `label`, `at`, `confidence` | The thing she was watching stopped |
+| `watch_disarmed` | `watchId`, `reason` | `user` · `expired` · `shutdown` · `faulted` |
+
+The watch rows carry **no sample value, no matched log line, no path and no host** — by design, and
+enforced by a whitelist in `api/watches.js` rather than by trusting the sidecar's shape.
 
 **The WAV travels whole in base64**, not chunked: the browser decodes with `decodeAudioData`,
 which needs the entire file. With Kokoro it is `wav`/24000; with ElevenLabs, `mp3`/44100.
@@ -222,7 +263,7 @@ centralizes the 500 envelope — never in `server.js`.
 
 | Method | Route | What it does |
 |---|---|---|
-| `GET` | `/health` | Status, version, active providers and sidecar URLs |
+| `GET` | `/health` | Status, version, active providers and sidecar URLs, plus `watches: {armed, degraded, blind, suspended, lastSampleAt}` |
 | `POST` | `/session` | Creates a session → `{sessionId, expiresIn}`. **Mandatory before the WS** |
 | `DELETE` | `/session/:id` | Deletes the in-memory state (the SQLite history stays) |
 | `GET` | `/settings` | Provider config, **with the API keys redacted** |
@@ -238,7 +279,16 @@ centralizes the 500 envelope — never in `server.js`.
 | `POST` | `/skills` | Creates or edits a skill in `data/skills/<n>/SKILL.md` and reloads |
 | `DELETE` | `/skills/:name` | Deletes the user's skill |
 | `GET` | `/tts/voices` | Proxy to the Kokoro sidecar to populate the voice selector |
-| `POST` | `/text` | Text turn **without session or WS**. A testing route |
+| `GET`/`POST` | `/watches` | List the watches, or arm one. See below: these three are the one place the backend is **stricter than its own default** |
+| `DELETE` | `/watches/:id` | Disarm one |
+
+**`/api/v1/watches` requires the UI token even on loopback, and 403s any request carrying an
+`Origin`.** `authorize()` serves any loopback client with no token, and for the rest of the API
+that is right — nothing moves unless a human says something. A watch is the first primitive here
+that runs with **no human utterance at all**, so it does not inherit that default. The consequence
+is intended: the HUD, being a browser, cannot use these routes, which is why it learns about
+watches over the WebSocket and disarms with `WATCH_DISARM`. These routes are for what is not a
+browser — the launcher and `hannah doctor`. They never return a command string.
 
 **Middleware**: `helmet` (with CSP disabled on purpose for local testing), CORS by origin list
 (`CORS_ORIGIN`), and a rate limit **that exempts localhost** — otherwise normal usage itself
@@ -270,6 +320,12 @@ src/
 │   ├── windowControl.js    Agnostic logic for moving the overlay and for the gaze
 │   ├── vision.js / vlm.js  The two vision providers (YOLO / local model)
 │   ├── visionLoop.js       Continuous awareness: reacts only if the scene changed
+│   ├── senseClient.js      Transport to hannah-sense (:8007). Nothing here throws: it returns
+│   │                       { error, reason }, because the 403 of a denied path carries the
+│   │                       exact sentence the user has to hear
+│   ├── senseBridge.js      One SSE subscription per process: narration, the trip inbox and the
+│   │                       blindness clock (which runs here too, since a dead sidecar emits
+│   │                       nothing at all)
 │   └── desktop/            Per-desktop adapters: hyprland → kde → x11, plus env.js
 │                           (single detection) and sh.js (running compositor commands)
 ├── state/
@@ -282,7 +338,10 @@ src/
 │   ├── shortcuts.js        Voice shortcuts (sites and apps)
 │   ├── frameStore.js       Last camera frame per session
 │   └── dataDir.js          Single source of truth for data/
-├── api/                    REST routes (router.js registers them all)
+└── ../sidecar/sense/       hannah-sense, the fifth sidecar (Python, :8007): scheduler, registry,
+                            the six sensors and the shared path denylist. Its OWN venv
+├── api/                    REST routes (router.js registers them all); `watches.js` is the one
+│                           control plane that needs the UI token even on loopback
 └── utils/                  logger (winston) and timer (latency metrics)
 ```
 
@@ -319,6 +378,36 @@ another module — the two exceptions are documented in place: the pty shell
 
 The complete list is in `.env.example`, together with the Python sidecars' own variables (which the
 backend does **not** read: `ASR_DEVICE`, `TTS_DEVICE`, `PANTOMATRIX_DIR`).
+
+### The watches (`SENSE_*`)
+
+Everything ships **off**, and while `SENSE_ENABLED` is false the `[WATCH:]` vocabulary is not even
+assembled, so she cannot promise a watch nobody would arm.
+
+| Variable | Default | What for |
+|---|---|---|
+| `SENSE_ENABLED` | `false` | The master flag. `./hannah` starts `:8007` only when this is true |
+| `SENSE_SIDECAR_URL` | `http://127.0.0.1:8007` | Where the sidecar is |
+| `HANNAH_SENSE_TOKEN` | *(empty)* | Bearer for `:8007`. **Empty closes the sidecar, it does not open it**: every route but `/health` answers 401. The launcher generates it into `.env` (0600) when missing |
+| `SENSE_MAX_WATCHES` | `2` | Two and not five: five at a 15 s period is twenty subprocess spawns a minute, forever, on a machine already running four sidecars |
+| `SENSE_MIN_PERIOD_MS` | `15000` | Floor of the sampling period |
+| `SENSE_DEBOUNCE_N` | `3` | Consecutive bad samples before a trip |
+| `SENSE_BLIND_MS` | `120000` | No sample for this long → `blind`, and she says it out loud |
+| `SENSE_COOLDOWN_MS` | `600000` | Floor of the cooldown between fires (P5.2) |
+| `SENSE_MAX_FIRES` | `2` | Fires per window; after the last one the watch disarms itself **and says so** (P5.2) |
+| `SENSE_ASK_TIMEOUT_MS` | `900000` | How long a question born of a trip waits (P5.2) |
+| `SENSE_WATCH_TTL_MS` | `28800000` | How long a voice-armed watch lives (8 h, "until the morning"); the sidecar caps anything over 24 h |
+| `SENSE_SSH_ENABLED` · `SENSE_SCREEN_ENABLED` · `SENSE_GUI_ENABLED` | `false` | The three tiers that do not exist yet (P5.3, P5.5, P5.6). They are read anyway so that *off* and *absent* are the same observable state |
+
+**The caps are read twice, on purpose, and the launcher keeps them equal.** The sidecar has its own
+single reader (`sidecar/sense/config.py`) because it is a separate process, and `npm run` does not
+load the `.env` — so `./hannah` exports `SENSE_MAX_WATCHES`, `SENSE_MIN_PERIOD_MS`,
+`SENSE_DEBOUNCE_N` and `SENSE_BLIND_MS` when it starts it. Without that, the backend would say
+"two watches at most" *out loud, at arm time* while the sidecar enforced a different number.
+
+The knobs are **not** editable from the ⚙ panel (`state/settings.js` allows only `sense.url` and
+`sense.token`): they are the bounds of a primitive that runs with no human utterance, and widening
+them with a click is exactly what the bounds exist to prevent.
 
 ### Why she answers in English
 
@@ -392,10 +481,16 @@ a preset.
 
 ## Python sidecars
 
-Four FastAPI apps in `sidecar/`. **ASR, TTS and vision share the `sidecar/.venv` venv**; the
+Five FastAPI apps in `sidecar/`. **ASR, TTS and vision share the `sidecar/.venv` venv**; the
 **motion (EMAGE) one uses the venv at the workspace root** (`../.venv`), because the RTX 5070 Ti
 (Blackwell, sm_120) needs torch ≥ 2.7 with CUDA 12.8. `sidecar/common.py` centralizes the
 preload of the CUDA libraries.
+
+**`sense` has a third venv, `sidecar/sense/.venv`, created with `--system-site-packages`** — the
+screen and AT-SPI rungs that come later need `gi` and `dbus`, which are distro packages. It is
+deliberately not the shared one: that venv pins numpy and onnxruntime-gpu for faster-whisper,
+Kokoro and YOLO, so adding the system site-packages to it would break the voice at runtime and in
+silence. `site/install.sh` creates both.
 
 The scripts invoke `<venv>/bin/python -m uvicorn` and **not** the `uvicorn` console script: its
 shebang broke when the repo changed paths. Keep it that way.
