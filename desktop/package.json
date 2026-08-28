@@ -22,6 +22,7 @@
   "build": {
     "appId": "ai.hannah.desktop",
     "productName": "Hannah",
+    "artifactName": "Hannah-${version}-${os}-${arch}.${ext}",
     "files": [
       "main.js",
       "preload.js"

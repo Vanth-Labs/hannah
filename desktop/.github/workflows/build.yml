@@ -8,6 +8,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish to (e.g. v1.0.3); empty = build only"
+        required: false
+        default: ""
 
 # Mínimo por defecto; solo el job `release` sube a `contents: write`. Las actions van fijadas
 # por SHA (el tag `v4` es móvil: quien controle la action controlaría este build).
@@ -25,7 +30,7 @@ jobs:
           - os: windows-latest
             args: --win nsis
           - os: macos-latest
-            args: --mac dmg
+            args: --mac dmg --arm64 --x64   # Apple Silicon e Intel, sin firma (ver README)
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout hannah-desktop
@@ -34,16 +39,13 @@ jobs:
           path: hannah-desktop
           persist-credentials: false
 
-      # Los repos de la organización son PRIVADOS: el GITHUB_TOKEN del job solo ve ESTE repo.
-      # Hace falta un secret HANNAH_REPO_TOKEN (PAT fine-grained con Contents:read sobre
-      # Hannah-Motion-Lab/frontend) en Settings > Secrets de este repo.
+      # El frontend es un repo PÚBLICO hermano: el GITHUB_TOKEN del job basta para leerlo.
       - name: Checkout frontend
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Hannah-Motion-Lab/frontend
           path: hannah-frontend
-          token: ${{ secrets.HANNAH_REPO_TOKEN }}
-          persist-credentials: false   # el PAT no debe quedar en .git/config del checkout
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -83,7 +85,9 @@ jobs:
   # workflow no los hace descargables y el instalador sigue dando 404.
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,12 +96,21 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      # Sumas que verifica install.sh antes de instalar el AppImage (y lo que liste aquí).
+      # Sumas que verifica install.sh antes de instalar. Las líneas de los pesos del motion
+      # (motion-*.pt, subidos a mano al release) se conservan del SHA256SUMS ya publicado.
       - name: SHA256SUMS
-        run: cd artifacts && sha256sum *.AppImage *.deb *.exe *.dmg 2>/dev/null > SHA256SUMS; cat SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          sha256sum *.AppImage *.deb *.exe *.dmg 2>/dev/null > SHA256SUMS || true
+          gh release download "${RELEASE_TAG}" -R "${GITHUB_REPOSITORY}" -p SHA256SUMS -O old.sums 2>/dev/null \
+            && grep -E ' [*]?motion-.*\.pt$' old.sums >> SHA256SUMS || true
+          rm -f old.sums; cat SHA256SUMS
       - name: Publicar release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             artifacts/*.AppImage
             artifacts/*.deb
