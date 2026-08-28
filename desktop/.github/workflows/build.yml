@@ -98,17 +98,10 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      # Sumas que verifica install.sh antes de instalar. Las líneas de los pesos del motion
-      # (motion-*.pt, subidos a mano al release) se conservan del SHA256SUMS ya publicado.
+      # Sumas que verifican los instaladores antes de instalar la app. (Los pesos del modelo de
+      # gestos viven en su propio release, Hannah-Motion-Lab/motion-model `models`, con sus sumas.)
       - name: SHA256SUMS
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cd artifacts
-          sha256sum *.AppImage *.deb *.exe *.dmg 2>/dev/null > SHA256SUMS || true
-          gh release download "${RELEASE_TAG}" -R "${GITHUB_REPOSITORY}" -p SHA256SUMS -O old.sums 2>/dev/null \
-            && grep -E ' [*]?motion-.*\.pt$' old.sums >> SHA256SUMS || true
-          rm -f old.sums; cat SHA256SUMS
+        run: cd artifacts && sha256sum *.AppImage *.deb *.exe *.dmg 2>/dev/null > SHA256SUMS; cat SHA256SUMS
       - name: Publicar release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
