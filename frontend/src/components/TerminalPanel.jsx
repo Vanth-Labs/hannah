@@ -2,6 +2,7 @@
 // Panel de terminal real (xterm.js) conectado al pty del backend. Muestra la salida en
 // vivo (bus terminalOut) y manda lo que escribes (onInput). Hannah y tú comparten el shell.
 import { useEffect, useRef } from 'react';
+import { useHannahStore } from '../store/hannahStore.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -9,6 +10,7 @@ import { onTerminalOut, getHandsBacklog } from '../lib/terminalBus.js';
 
 export function TerminalPanel({ onInput, onResize, onClose }) {
     const hostRef = useRef(null);
+    const disabled = useHannahStore((s) => s.terminalDisabled);
 
     useEffect(() => {
         const term = new Terminal({
@@ -48,6 +50,13 @@ export function TerminalPanel({ onInput, onResize, onClose }) {
             }}>
                 <span>⌨ TERMINAL</span>
                 <span onClick={onClose} style={{ cursor: 'pointer', opacity: 0.7 }}>✕</span>
+            </div>
+            {disabled && (
+                <div style={{ padding: '10px 14px', fontFamily: "'DM Mono', monospace", fontSize: '12px', color: 'rgba(255,255,255,0.75)', background: 'rgba(122,184,232,0.08)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                    La terminal esta apagada. Enciende <b>"Puede actuar en este PC"</b> en ⚙ → Manos: es una shell real, por eso viene apagada.
+                </div>
+            )}
+            <div style={{ display: 'none' }}>
             </div>
             <div ref={hostRef} style={{ flex: 1, minHeight: 0, padding: '4px 8px' }} />
         </div>

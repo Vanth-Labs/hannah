@@ -65,6 +65,7 @@ export const useHannahStore = create((set, get) => ({
                                // re-renderiza con cada visema.
     commandRun: null,          // { command, output, at } — último comando ejecutado (toast, sin abrir terminal)
     terminalOpen: false,       // terminal abierta -> la ventana se divide (avatar arriba, terminal abajo)
+    terminalDisabled: false,   // el backend contesto terminal_disabled: falta encender "Puede actuar en este PC" (⚙ → Manos)
     handsFree: false,          // conversación manos-libres por VAD (Fase B) + barge-in
     brain: null,               // GET /api/v1/brain — { mode, configured, ollama, hardware, recommendation, job } (null = aún no consultado)
 
@@ -137,6 +138,7 @@ export const useHannahStore = create((set, get) => ({
 
     setCommandRun: (commandRun) => set({ commandRun }),
     setTerminalOpen: (terminalOpen) => set({ terminalOpen }),
+    setTerminalDisabled: (terminalDisabled) => set({ terminalDisabled }),
 
     addLog: (msg, type = 'info') => set((state) => ({
         logs: [...state.logs.slice(-49), {

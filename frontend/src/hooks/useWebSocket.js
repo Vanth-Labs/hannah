@@ -210,6 +210,7 @@ export function useWebSocket() {
                 useHannahStore.getState().markBrainRequired();
                 break;
             case 'error':
+                if (msg.code === 'terminal_disabled') useHannahStore.getState().setTerminalDisabled(true);
                 addLog(`[error] ${msg.message}`, 'error');
                 break;
 
@@ -219,6 +220,7 @@ export function useWebSocket() {
                 break;
 
             case 'terminal_out':
+                if (useHannahStore.getState().terminalDisabled) useHannahStore.getState().setTerminalDisabled(false);
                 emitTerminalOut(msg.data);
                 break;
 

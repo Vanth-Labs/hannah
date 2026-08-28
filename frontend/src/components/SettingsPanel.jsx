@@ -295,13 +295,31 @@ function LookCard() {
 
 // ── Tarjeta MANOS. El agente se enciende desde el launcher (AGENT_ENABLED); aquí se ve si
 // está y se le da su key. Una línea de privacidad, porque su modelo es remoto.
-function HandsCard({ form, saved, setField, health }) {
+function HandsCard({ form, saved, setField, health, refreshHealth }) {
     const agent = health?.agent;
     const hasKey = saved.agent?.hasApiKey;
+    // "Puede actuar en este PC": la terminal real y los comandos. Se guarda al instante (no con
+    // el boton Guardar): es un interruptor, no un formulario, y viene apagado por seguridad.
+    const canAct = !!(health?.tools?.systemControl);
+    const [switching, setSwitching] = useState(false);
+    const toggleAct = async () => {
+        setSwitching(true);
+        try {
+            await apiFetch(`/api/v1/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tools: { enabled: !canAct, systemControl: !canAct } }) });
+            await refreshHealth?.();
+        } finally { setSwitching(false); }
+    };
     return (
         <div style={S.card}>
             <div style={S.cardTitle}>Manos</div>
             <div style={S.hint}>Un agente que hace tareas en tu PC (ordenar carpetas, buscar archivos…) y te pide permiso antes de tocar nada.</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px' }}>
+                <button onClick={toggleAct} disabled={switching || health == null} style={{ ...S.preset, margin: 0, background: canAct ? 'rgba(143,227,162,0.14)' : 'rgba(255,255,255,0.06)', borderColor: canAct ? 'rgba(143,227,162,0.5)' : 'rgba(255,255,255,0.18)', color: canAct ? '#8fe3a2' : 'rgba(255,255,255,0.7)' }}>
+                    {canAct ? 'Puede actuar en este PC: si' : 'Puede actuar en este PC: no'}
+                </button>
+                <span style={S.hint}>Terminal real, abrir apps, comandos. Pide confirmacion antes de lo destructivo.</span>
+            </div>
             <div style={{ ...S.hint, marginTop: '8px', color: 'rgba(255,255,255,0.7)' }}>
                 {agent == null ? 'Estado: …'
                     : !agent.enabled ? <span><span style={S.dot(false)} />Apagadas. Se encienden con <code>AGENT_ENABLED=true</code> (instalador/launcher).</span>
@@ -736,7 +754,7 @@ export function SettingsPanel({ onClose, onWatchDisarm }) {
                 <BrainCard form={form} saved={saved} setField={setField} />
                 <VoiceCard form={form} setField={setField} />
                 <LookCard />
-                <HandsCard form={form} saved={saved} setField={setField} health={health} />
+                <HandsCard form={form} saved={saved} setField={setField} health={health} refreshHealth={() => apiFetch(`/api/v1/health`).then((r) => r.json()).then(setHealth).catch(() => {})} />
                 <WatchesSection health={health} onDisarm={onWatchDisarm} />
 
                 <div style={S.row}>
