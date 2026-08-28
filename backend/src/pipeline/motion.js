@@ -46,7 +46,7 @@ export const generateMotionFromText = async (
                 emotion: EMOTION_MAP[emotion] || 'neutral',
                 session_id: sessionId,
             },
-            { timeout: 15000 }
+            { timeout: MOTION_TIMEOUT_MS }
         );
         return toMotionResult(response.data, timer);
     } catch (error) {
@@ -80,7 +80,7 @@ export const generateMotion = async (wavBuffer) => {
         const response = await axios.post(
             `${config.motion.emageUrl}/motion`,
             form,
-            { headers: form.getHeaders(), timeout: 15000, maxBodyLength: Infinity }
+            { headers: form.getHeaders(), timeout: MOTION_TIMEOUT_MS, maxBodyLength: Infinity }
         );
 
         return toMotionResult(response.data, timer);
@@ -92,6 +92,9 @@ export const generateMotion = async (wavBuffer) => {
 
 /** Segundos de movimiento de más respecto al audio: el gesto termina y se asienta después de la voz. */
 export const MOTION_TAIL_S = 0.35;
+// Gestures are the point of the project: they are never skipped for being slow. On a CPU a long
+// sentence can take a few seconds; only a real hang (minutes) gives up on a chunk's motion.
+export const MOTION_TIMEOUT_MS = 120000;
 
 /**
  * Duración en segundos de un WAV PCM leyendo su cabecera (fmt: canales, tasa, bits; data: bytes).
