@@ -14,9 +14,11 @@
 //  - LA NARRACIÓN EFÍMERA: se dice y no se guarda.
 // Sin modelo, sin sidecar: el cliente de :8007 está mockeado y processTextTurn es un espía.
 //
-// LAS SESIONES DE ESTE ARCHIVO SON REALES (conversationManager.createSession): con strings
-// inventados no se puede distinguir "la sesión que armó volvió" de "se conectó otra", que es
-// justo lo que decide con qué palabras sale un disparo del buzón.
+// LAS SESIONES DE ESTE ARCHIVO SON REALES (conversationManager.createSession). Antes eran strings
+// inventados, y esa era la mitad del harness que faltaba: "se le puede hablar a esta sesión" son
+// dos preguntas (socket abierto Y conversación viva) y con ids de mentira la segunda no se podía
+// hacer. Con ids de mentira el espía narraba para sesiones que no existen, que es justo la falla
+// que el puente tenía.
 import { jest } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -53,6 +55,7 @@ const bridge = await import('../../src/pipeline/senseBridge.js');
 
 let narrated;      // [{ sessionId, prompt, opts }]
 let sentTo;        // sessionId -> [payload]
+let narrateImpl;   // un test puede reemplazar el espía (para matar la sesión a mitad de narración)
 const opened = []; // sesiones creadas por el test, para limpiarlas al final
 
 /** Una sesión de verdad, como la que crea POST /api/v1/session antes de abrir el socket. */
@@ -83,13 +86,22 @@ const arm = async (watchId, sessionId, label = 'the training') => {
         periodMs: 15000, expiresAt: Date.now() + 3600000, tier: 'observe' });
 };
 
+const trips = () => JSON.parse(fs.readFileSync(process.env.HANNAH_WATCH_INBOX_FILE, 'utf8')).trips;
+
 const originalBlindMs = config.sense.blindMs;
 beforeEach(async () => {
-    narrated = []; sentTo = {}; rows = []; deleted.length = 0;
+    narrated = []; sentTo = {}; rows = []; deleted.length = 0; narrateImpl = null;
     config.sense.blindMs = originalBlindMs;
     try { fs.unlinkSync(process.env.HANNAH_WATCH_INBOX_FILE); } catch { /* no existía */ }
     agentBridge._reset(); bridge._reset();
-    await agentBridge.init({ narrate: async (sessionId, prompt, send, opts) => { narrated.push({ sessionId, prompt, opts }); } });
+    // El espía imita a processTextTurn en lo único que importa acá: si la sesión no existe o
+    // expiró NO habla — atrapa el error y se lo manda al socket como {type:'error'}. Sin esto el
+    // espía "narra" contra sesiones muertas y el test no puede ver el silencio real.
+    await agentBridge.init({ narrate: async (sessionId, prompt, send, opts) => {
+        if (narrateImpl) return narrateImpl(sessionId, prompt, send, opts);
+        if (!conversationManager.getSession(sessionId)) { send({ type: 'error', message: 'La sesión no existe o ha expirado' }); return; }
+        narrated.push({ sessionId, prompt, opts });
+    } });
     await bridge.init();
 });
 afterEach(async () => {
@@ -128,6 +140,61 @@ describe('la regla de entrega: la sesión que armó, o el buzón — nunca una t
         expect(narrated).toHaveLength(0);
         expect((sentTo[b] || []).some((m) => m.type === 'watch_tripped')).toBe(false);
         expect(bridge.pendingTrips()).toBe(1);
+
+        // Y cuando la conversación de A se termina de verdad, el disparo deja de ser de nadie: se
+        // le cuenta a B, que es quien está, PERO sin atribuírselo.
+        conversationManager.deleteSession(a);
+        await bridge._settle();
+        expect(narrated).toHaveLength(1);
+        expect(narrated[0].sessionId).toBe(b);
+        expect(narrated[0].prompt).toMatch(/EARLIER conversation/);
+        expect(narrated[0].prompt).not.toMatch(/the thing you were keeping an eye on/);
+        expect(bridge.pendingTrips()).toBe(0);
+    });
+
+    test('la sesión dueña expira con el socket abierto: el disparo va al buzón, no al vacío', async () => {
+        // El caso central de la feature, no un borde: SESSION_TTL_MINUTES son 30, lastActivityAt
+        // solo se refresca dentro de getSession (o sea en un turno hablado) y una vigilancia está
+        // horas callada porque eso es lo que se le pidió. El socket sigue abierto, así que el mapa
+        // de sockets dice que la sesión está: hay que preguntarle también a conversationManager.
+        const s = open();
+        attach(s);
+        await arm('w_1', s, 'the training');
+        conversationManager.getSession(s).lastActivityAt = new Date(Date.now() - (config.session.ttl + 1) * 60000);
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+
+        expect(narrated).toHaveLength(0);
+        expect(bridge.pendingTrips()).toBe(1);            // sin esto el disparo no queda en ningún lado
+        expect(trips()).toHaveLength(1);
+        // Y NO se le manda un {type:'error'} al HUD: eso era todo lo que quedaba del disparo.
+        expect(sentTo[s].some((m) => m.type === 'error')).toBe(false);
+        // El HUD igual ve que disparó: el contador es estado de pantalla, no voz.
+        expect(sentTo[s].some((m) => m.type === 'watch_state' && m.fires === 1)).toBe(true);
+
+        // Y cuando el usuario vuelve (sesión nueva: el HUD pide una por cada conexión), se lo
+        // cuenta, sin fingir que la vigilancia era de esta conversación.
+        const s2 = open();
+        attach(s2);
+        await bridge._settle();
+        expect(narrated).toHaveLength(1);
+        expect(narrated[0].sessionId).toBe(s2);
+        expect(narrated[0].prompt).toMatch(/EARLIER conversation/);
+    });
+
+    test('si la sesión se muere MIENTRAS la narración espera su turno, el disparo tampoco se pierde', async () => {
+        // La ventana que la comprobación previa no cubre: la cola de agentBridge aguanta hasta 20 s
+        // a que termine el turno en curso. processTextTurn no propaga ese fallo (lo atrapa y lo
+        // manda al socket), así que la única forma de saber que no se dijo nada es volver a mirar.
+        const s = open();
+        attach(s);
+        await arm('w_1', s, 'the training');
+        narrateImpl = async (sessionId) => { conversationManager.deleteSession(sessionId); };
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'the training', at: Date.now(), fires: 1 });
+
+        expect(bridge.pendingTrips()).toBe(1);
+        expect(trips()[0].watchId).toBe('w_1');
     });
 
     test('sin ninguna sesión, el disparo NO se pierde: va al buzón durable, en disco', async () => {

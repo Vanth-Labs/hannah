@@ -66,6 +66,20 @@ class ConversationManager {
   }
 
   /**
+   * ¿Existe la sesión AHORA, sin tocarla? getSession() refresca lastActivityAt, así que
+   * preguntarle "¿seguís viva?" desde algo que NO es un turno del usuario (el puente de las
+   * vigilancias, que decide si le puede hablar a la sesión dueña) la mantendría viva para
+   * siempre: una vigilancia callada durante ocho horas nunca dejaría expirar a nadie.
+   * Cuenta la expiración perezosa: una sesión pasada del TTL está muerta aunque el barrido de
+   * los 5 minutos todavía no haya pasado, porque el próximo getSession la va a borrar.
+   */
+  hasSession(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    return (new Date() - session.lastActivityAt) / 1000 / 60 <= config.session.ttl;
+  }
+
+  /**
    * Appends a new turn (user utterance or assistant response) 
    * and strictly maintains the CONTEXT_TURNS window limit.
    */

@@ -18,6 +18,9 @@
 //     oírlo, una sola vez y con su hora real. Las dos alternativas son inaceptables: leerle un
 //     traceback de entrenamiento a quien justo abrió el HUD es una fuga, y perderlo en silencio
 //     anula la feature entera.
+//     "Puede oírlo" son DOS preguntas, y las dos hacen falta (ver canSpeakTo): el socket abierto
+//     Y la conversación viva. Y "ya no vuelve más" tiene una definición exacta, no una heurística:
+//     que conversationManager ya no conozca ese sessionId (ver flushInbox).
 //  2. LA NARRACIÓN ES EFÍMERA (plan §9): no deja fila en memory.db ni embedding. Ocho horas de
 //     vigilancia desalojarían la conversación real de la ventana de 10 turnos y grabarían para
 //     siempre lo observado en una base que la propia política del agente marca como sensible.
@@ -32,6 +35,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { DATA_DIR } from '../state/dataDir.js';
 import * as senseClient from './senseClient.js';
+import { conversationManager } from '../state/conversationManager.js';
 import { clean, hasSession, narrateTo } from './agentBridge.js';
 
 // ── Estado ─────────────────────────────────────────────────────────────────────────────
@@ -50,6 +54,9 @@ let eventChain = Promise.resolve();
 // los mismos parlantes; y su regla de colapso solo descarta lo viejo del MISMO id, así que dos
 // disparos distintos narran los dos (plan §10, "dos vigilancias disparan a la vez").
 let narrationChain = Promise.resolve();
+// Baja de conversationManager.onDelete: hay que enterarse de que una sesión dueña se terminó,
+// porque desde ese momento sus disparos guardados ya no son de nadie (ver onOwnerGone).
+let forgetHook = null;
 
 // Cuánto se guarda una vigilancia terminada: lo justo para que el HUD muestre por qué se
 // desarmó y para contestar una pregunta tardía. Mismo criterio (y mismo número) que el agente.
@@ -114,6 +121,22 @@ function toSession(sessionId, payload) {
 function broadcast(payload) { for (const send of sessions.values()) send(payload); }
 
 /**
+ * ¿Se le puede HABLAR a esa sesión ahora mismo? Son DOS preguntas y hacen falta las DOS.
+ *
+ * `hasSession` (el mapa de sockets) contesta solo la primera. Un socket abierto NO implica una
+ * conversación viva: SESSION_TTL_MINUTES son 30 y lastActivityAt se refresca únicamente dentro de
+ * getSession, o sea en un turno hablado, mientras que una vigilancia está horas callada — que es
+ * justo lo que se le pidió. Con la sesión expirada y el socket todavía abierto, narrateTo devuelve
+ * una cadena (así que el onLost del que llama NUNCA corre), processTextTurn tira "La sesión no
+ * existe o ha expirado", lo atrapa su propio catch y lo manda al socket como {type:'error'}: el
+ * disparo se pierde EN SILENCIO y no queda ni en el buzón. Es el caso central de la feature, no un
+ * borde: vigilar de noche es exactamente estar callada más de media hora.
+ */
+function canSpeakTo(sessionId) {
+    return hasSession(sessionId) && conversationManager.hasSession(sessionId);
+}
+
+/**
  * DOS CLASES DE FRASE, con reglas de entrega distintas a propósito:
  *
  *  - EL DISPARO es un hecho privado y fechado de lo que ESTA persona pidió mirar. Va a la sesión
@@ -126,8 +149,8 @@ function broadcast(payload) { for (const send of sessions.values()) send(payload
  * Devuelve la sesión dueña si puede oír, si no la última que se conectó y pueda, si no null.
  */
 function currentListener(preferred) {
-    if (hasSession(preferred)) return preferred;
-    for (const sessionId of [...sessions.keys()].reverse()) if (hasSession(sessionId)) return sessionId;
+    if (canSpeakTo(preferred)) return preferred;
+    for (const sessionId of [...sessions.keys()].reverse()) if (canSpeakTo(sessionId)) return sessionId;
     return null;
 }
 
@@ -187,6 +210,14 @@ function eyes(sessionId, watchId, kind, vars, onLost) {
         const chain = narrateTo(sessionId, eyesPrompt(kind, vars), { id: watchId, mustKeep: true, ephemeral: true });
         if (!chain) { onLost?.(); return; }
         await chain;
+        // La sesión puede morir MIENTRAS esto espera su turno: la cola de agentBridge aguanta hasta
+        // 20 s a que termine el turno en curso, y todavía más si hay otra narración adelante. Ese
+        // fracaso no se ve desde acá — processTextTurn atrapa "La sesión no existe o ha expirado" y
+        // lo manda al socket como {type:'error'}, o sea que `chain` resuelve igual —, así que
+        // preguntar de nuevo es la única forma de saber que no se dijo nada. Si la sesión se borró
+        // justo DESPUÉS de hablar, esto lo devuelve al buzón y se cuenta una segunda vez: repetirlo
+        // es el lado bueno de equivocarse, perderlo no.
+        if (!conversationManager.hasSession(sessionId)) onLost?.();
     }).catch((e) => logger.error('narración de vigilancia falló', { message: e.message }));
     return narrationChain;
 }
@@ -287,7 +318,7 @@ export async function onEvent(env) {
 
 /** La regla de entrega, en un solo lugar: la sesión que armó, o el buzón. Nunca una tercera. */
 function deliverTrip(w, trip) {
-    if (!hasSession(w.sessionId)) return toInbox(w, trip);
+    if (!canSpeakTo(w.sessionId)) return toInbox(w, trip);
     toSession(w.sessionId, { type: 'watch_tripped', watchId: w.watchId, label: w.label,
         at: trip.at, confidence: trip.confidence });
     eyes(w.sessionId, w.watchId, 'tripped', { label: w.label, when: clockOf(trip.at) },
@@ -308,10 +339,19 @@ function toInbox(w, trip) {
 }
 
 /**
- * Vacía lo que se pueda entregar AHORA y deja guardado lo demás. Se llama cuando llega alguien:
- * el buzón es "esto pasó mientras no estabas", y esa frase solo tiene sentido cuando el usuario
- * vuelve. Un disparo que nace sin nadie escuchando espera al próximo attach en vez de
- * interrumpir a quien está usando la máquina para otra cosa.
+ * Vacía lo que se pueda entregar AHORA y deja guardado lo demás.
+ *
+ * "Esa sesión ya no vuelve" NO es una heurística: es que conversationManager no la conozca más.
+ * websocket.js rechaza el upgrade (401) de cualquier sessionId que el manager no tenga, así que un
+ * id olvidado —expirado, borrado a mano, o de antes de un reinicio del backend, que se lleva el
+ * mapa entero porque vive en RAM— no puede volver a attachear nunca. Mientras la conversación siga
+ * viva, aunque su socket esté cerrado, el disparo es SUYO y se guarda: puede volver con el mismo
+ * id. Cuando muere deja de ser de nadie y se le cuenta a quien esté escuchando, con otras palabras.
+ *
+ * Se llama cuando cambia QUIÉN puede oír, que son dos momentos: alguien se conecta, o se muere la
+ * dueña de algo guardado. No en el momento del disparo: un disparo que nace huérfano espera a que
+ * alguien llegue en vez de interrumpir a quien está usando la máquina para otra cosa. Y esa espera
+ * tiene techo, SESSION_TTL_MINUTES, no "hasta mañana": el hook de onDelete lo suelta al expirar.
  */
 function flushInbox(arrived = null) {
     if (!inbox.length) return;
@@ -321,13 +361,27 @@ function flushInbox(arrived = null) {
     const pending = inbox.splice(0, inbox.length);
     const held = [];
     for (const trip of pending) {
-        if (hasSession(trip.sessionId)) { replay(trip.sessionId, trip, 'tripped_away'); continue; }
+        if (canSpeakTo(trip.sessionId)) { replay(trip.sessionId, trip, 'tripped_away'); continue; }
+        if (conversationManager.hasSession(trip.sessionId)) { held.push(trip); continue; }
         const listener = currentListener(arrived);
         if (listener) replay(listener, trip, 'tripped_orphan');
         else held.push(trip);
     }
     inbox.push(...held);
     saveInbox();
+}
+
+/**
+ * La sesión dueña se terminó (DELETE explícito, o el barrido de los 30 min, que desde M5.0.5 sí
+ * dispara los hooks). NO se la saca de `sessions`: ese mapa es la PANTALLA, y un HUD con el socket
+ * abierto sigue teniendo derecho a ver el estado de las vigilancias aunque su conversación ya no
+ * pueda hablar. Lo que cambia es que desde acá lo guardado para ella no es de nadie, y hay que
+ * dárselo a quien esté escuchando en vez de esperar un attach que puede no llegar hoy.
+ */
+function onOwnerGone(sessionId) {
+    if (!inbox.some((trip) => trip.sessionId === sessionId)) return;
+    logger.info('la sesión que armó una vigilancia se terminó: sus disparos quedan sin dueño', { sessionId });
+    flushInbox();
 }
 
 /**
@@ -475,6 +529,9 @@ export async function watchCounters() {
 export async function init(deps = {}) {
     client = deps.client || senseClient;
     if (!config.sense.enabled) { logger.info('sense: disabled (SENSE_ENABLED=false)'); return; }
+    // Enterarse de que una sesión se terminó, igual que agentBridge. Sin esto el puente cree que
+    // una sesión existe hasta que se cierra su socket, que son dos cosas distintas.
+    if (!forgetHook) forgetHook = conversationManager.onDelete(onOwnerGone);
     loadInbox();
     if (inbox.length) logger.info('buzón de vigilancias con entregas pendientes', { pending: inbox.length });
     // Adoptar lo que el sidecar ya tenga (backend reiniciado con vigilancias armadas). Vienen sin
