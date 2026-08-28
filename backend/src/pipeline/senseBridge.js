@@ -60,8 +60,15 @@ const INBOX_MAX = 10;
 
 // ── El buzón durable ───────────────────────────────────────────────────────────────────
 // Mismo idioma que api/auth.js con el ui-token: ruta override por entorno (los tests no tocan
-// data/ del usuario), carpeta 0700 y archivo 0600. Va en data/ y no en el sidecar a propósito:
-// lo que hay acá es una entrega pendiente del BACKEND, y el sidecar no sabe de sesiones.
+// data/ del usuario), carpeta 0700 y archivo 0600.
+//
+// DESVÍO DECLARADO del plan: VIGILANCE §10 dice "the trip goes to a durable inbox IN THE SIDECAR".
+// Vive acá, en el backend, por dos razones que se verificaron en el código: el contrato sense.v1
+// no tiene ninguna ruta de buzón (ni para leerlo ni para marcar entregado, y agregarla sería
+// inventar contrato), y el sidecar no sabe nada de sesiones ni de attach, que es exactamente la
+// condición de entrega. Lo que hay acá no es una observación: es una ENTREGA PENDIENTE del
+// backend, y el dueño del dato es quien conoce al destinatario. Si algún día el buzón se muda a
+// :8007, esto se borra entero y se reemplaza por dos rutas nuevas.
 export const INBOX_FILE = process.env.HANNAH_WATCH_INBOX_FILE || path.join(DATA_DIR, 'watch-inbox.json');
 let inbox = [];   // [{ watchId, label, at, confidence, fires }]
 
