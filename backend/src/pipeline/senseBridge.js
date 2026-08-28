@@ -154,10 +154,19 @@ function currentListener(preferred) {
     return null;
 }
 
-function pushState(w) {
-    broadcast({ type: 'watch_state', watchId: w.watchId, state: w.state,
-        lastSampleAt: w.lastSampleAt || null, samplesOk: w.samplesOk || 0, fires: w.fires || 0 });
-}
+// Los DOS mensajes con los que el HUD dibuja una vigilancia, en un solo lugar porque se emiten
+// desde tres sitios (el evento del sidecar, el attach de un HUD y la reconciliación) y una
+// vigilancia dibujada distinta según por dónde llegó es un bug que no se ve hasta que el usuario
+// recarga. `armed` es lo que no cambia (identidad) y `state` es lo que cambia (cómo va): el store
+// del HUD los MEZCLA por watchId, así que repetirlos es idempotente y por eso se pueden reenviar.
+// `sensorKind` viaja acá: es un enum del contrato, nunca contenido observado, y sin él la fila del
+// panel no puede decir con qué se está mirando.
+const armedMsg = (w) => ({ type: 'watch_armed', watchId: w.watchId, label: w.label, rung: w.rung,
+    sensorKind: w.sensorKind, tier: w.tier, expiresAt: w.expiresAt });
+const stateMsg = (w) => ({ type: 'watch_state', watchId: w.watchId, state: w.state,
+    lastSampleAt: w.lastSampleAt || null, samplesOk: w.samplesOk || 0, fires: w.fires || 0 });
+
+function pushState(w) { broadcast(stateMsg(w)); }
 
 // ── Lo que dice ────────────────────────────────────────────────────────────────────────
 // Una entrada por momento del plan §10. El texto que entra acá es SIEMPRE la etiqueta (las
@@ -250,6 +259,26 @@ async function getOrAdopt(env) {
     return w;
 }
 
+/**
+ * Adopta una fila del sidecar: una vigilancia que existe allá y que este proceso no conocía.
+ * Adoptar NO es re-armar (asunción A4): acá no se crea nada, se mira lo que el sidecar ya está
+ * mirando. El dueño sale de la fila, igual que en getOrAdopt: si el que reinició fue el sidecar,
+ * la sesión que armó sigue viva acá y el disparo es suyo; si el que reinició fue el backend, ese
+ * id no existe más y canSpeakTo lo manda al buzón, que es el lado seguro de equivocarse. `tier`
+ * es 'observe' porque en esta fase no hay otro, y la lista no lo trae.
+ */
+function adopt(row) {
+    const w = {
+        watchId: row.watchId, label: clean(row.label, 80) || 'what you are watching',
+        state: row.state || 'armed', rung: row.rung || null, sensorKind: row.sensorKind || null,
+        tier: 'observe', expiresAt: row.expiresAt || 0,
+        sessionId: row.sessionId || null, seq: 0, fires: row.fires || 0, samplesOk: row.samplesOk || 0,
+        lastSampleAt: row.lastSampleAt || null, blindSpoken: false,
+    };
+    watches.set(w.watchId, w);
+    return w;
+}
+
 export async function onEvent(env) {
     const w = await getOrAdopt(env);
     if (env.seq <= w.seq) return;                     // dedupe / resume: (watchId, seq) monotónico
@@ -261,8 +290,7 @@ export async function onEvent(env) {
             w.state = 'armed'; w.blindSpoken = false;
             w.rung = d.rung || w.rung; w.sensorKind = d.sensorKind || w.sensorKind;
             w.tier = d.tier || w.tier; w.expiresAt = d.expiresAt || w.expiresAt;
-            broadcast({ type: 'watch_armed', watchId: w.watchId, label: w.label, rung: w.rung,
-                tier: w.tier, expiresAt: w.expiresAt });
+            broadcast(armedMsg(w));
             // Sin narración: la persona YA dijo "listo, miro el log" en el turno que armó.
             break;
 
@@ -435,13 +463,26 @@ function onStreamStatus(status) {
     }, config.sense.blindMs);
 }
 
-/** Lo que el sidecar diga que está vivo manda sobre lo que recordamos (mismo criterio que el agente). */
+/**
+ * Lo que el sidecar diga que está vivo manda sobre lo que recordamos (mismo criterio que el
+ * agente), Y lo que tenga y no conozcamos se ADOPTA. Lo segundo no es un extra: una vigilancia
+ * sana no emite ningún evento (plan §10, "cuatro horas en silencio: nada") y una que vuelve de un
+ * reinicio del sidecar nace `suspended`, que tampoco anuncia nada. O sea que la ÚNICA forma de
+ * enterarse de esas es preguntando. Antes solo se preguntaba una vez, en init(), y si :8007
+ * todavía estaba arrancando (el launcher lo larga en la línea de arriba del backend) la respuesta
+ * era un error y este proceso no se enteraba NUNCA: el HUD dibujaba cero vigilancias y el prompt
+ * no nombraba ninguna, con el sidecar mirando del otro lado. Se llama al recuperar el stream y
+ * cuando un HUD se conecta.
+ */
 async function reconcile() {
     const r = await client.listWatches();
     if (r?.error) return;
     for (const row of r.watches || []) {
-        const w = watches.get(row.watchId);
-        if (!w) continue;
+        let w = watches.get(row.watchId);
+        // Terminal y desconocida: no hay nada que dibujar ni nada que narrar. Se ignora en vez de
+        // adoptarse para que la lista del HUD no se llene de filas muertas de otro arranque.
+        if (!w && terminal(row.state)) continue;
+        if (!w) { w = adopt(row); broadcast(armedMsg(w)); }
         w.state = row.state || w.state;
         w.lastSampleAt = row.lastSampleAt ?? w.lastSampleAt;
         w.samplesOk = row.samplesOk ?? w.samplesOk;
@@ -454,16 +495,26 @@ async function reconcile() {
 // ── Sesiones ───────────────────────────────────────────────────────────────────────────
 export function attachSession(sessionId, send) {
     sessions.set(sessionId, send);
+    // LA LISTA DEL HUD SALE POR ACÁ, y no de GET /api/v1/watches: esa ruta contesta 403 a todo lo
+    // que traiga `Origin` y 401 sin el token de la UI (api/auth.js), y un navegador manda Origin
+    // siempre. Es correcta y se queda como está — la usan el launcher y curl, que no son
+    // navegadores —, pero para el HUD el socket es el único camino. Por eso el attach manda la
+    // instantánea: un watch_armed y un watch_state por vigilancia viva, los mismos mensajes que
+    // el sidecar produce cuando algo cambia, que el store del HUD mezcla por watchId.
     for (const w of watches.values()) {
         if (terminal(w.state)) continue;
         // Este socket ve TODAS las vigilancias del proceso, pero no se queda con ninguna: acá había
         // una adopción (`w.sessionId = sessionId` para las huérfanas) y era la mitad tranquila del
         // mismo error que detachSession. La vigilancia es de quien la armó; lo que este HUD recibe
         // es la PANTALLA, y la voz la decide deliverTrip.
-        send({ type: 'watch_armed', watchId: w.watchId, label: w.label, rung: w.rung, tier: w.tier, expiresAt: w.expiresAt });
-        send({ type: 'watch_state', watchId: w.watchId, state: w.state,
-            lastSampleAt: w.lastSampleAt || null, samplesOk: w.samplesOk || 0, fires: w.fires || 0 });
+        send(armedMsg(w));
+        send(stateMsg(w));
     }
+    // Y lo que el sidecar tenga y este proceso no sepa. Va DESPUÉS y no en lugar de lo de arriba:
+    // esto es una ida y vuelta HTTP y el HUD tiene que pintar algo ya. Un HUD que se conecta es el
+    // único momento en que alguien PREGUNTA por la lista, así que es el momento de asegurarse de
+    // que la lista es la del sidecar y no la que recordamos.
+    reconcile().catch((e) => logger.error('reconciliar vigilancias al conectar falló', { message: e.message }));
     // "Esto pasó mientras no estabas": llegó un humano, así que cambió quién puede oír el buzón.
     flushInbox(sessionId);
     // Una ceguera que sigue siendo verdad se dice ahora: no es historia, es el estado actual.
@@ -534,16 +585,14 @@ export async function init(deps = {}) {
     if (!forgetHook) forgetHook = conversationManager.onDelete(onOwnerGone);
     loadInbox();
     if (inbox.length) logger.info('buzón de vigilancias con entregas pendientes', { pending: inbox.length });
-    // Adoptar lo que el sidecar ya tenga (backend reiniciado con vigilancias armadas). Vienen sin
-    // dueño: la sesión que las armó murió con el proceso anterior, y la próxima que attachee las
-    // adopta. Nunca se re-arma nada desde acá (asunción A4: re-armar no es consentimiento).
+    // Adoptar lo que el sidecar ya tenga (backend reiniciado con vigilancias armadas). Nunca se
+    // re-arma nada desde acá (asunción A4: re-armar no es consentimiento) y NADIE las hereda: el
+    // dueño es el que diga la fila, y si esa sesión murió con el proceso anterior lo que dispare
+    // va al buzón y se cuenta con las palabras de un disparo huérfano. Si el sidecar no contesta
+    // acá —arranca en la línea de arriba del backend en el launcher, así que pasa— esta lista
+    // vuelve a pedirse al recuperar el stream y cuando un HUD se conecta (ver reconcile).
     const r = await client.listWatches();
-    for (const row of (r?.watches || [])) {
-        watches.set(row.watchId, { watchId: row.watchId, label: clean(row.label, 80), state: row.state,
-            rung: row.rung, sensorKind: row.sensorKind, tier: 'observe', expiresAt: row.expiresAt,
-            sessionId: null, seq: 0, fires: row.fires || 0, samplesOk: row.samplesOk || 0,
-            lastSampleAt: row.lastSampleAt || null, blindSpoken: false });
-    }
+    for (const row of (r?.watches || [])) adopt(row);
     if (r?.error) logger.warn('sense: sidecar NO alcanzable al arrancar', { error: r.error });
     sub = client.subscribe(
         (env) => { eventChain = eventChain.then(() => onEvent(env)).catch((e) => logger.error('evento de vigilancia falló', { message: e.message })); },

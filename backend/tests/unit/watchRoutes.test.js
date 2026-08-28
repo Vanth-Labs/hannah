@@ -226,4 +226,30 @@ describe('el HUD: lo suyo entra y sale por el socket', () => {
         await settle();
         conversationManager.deleteSession(sessionId);
     });
+
+    // El caso que dejaba al panel diciendo "Nada vigilado ahora mismo" con el sidecar mirando: la
+    // vigilancia existe en :8007 y este proceso NUNCA vio un evento suyo. Pasa siempre que el
+    // sidecar arranca después del backend (el launcher los larga en dos líneas seguidas) y cada
+    // vez que el sidecar se reinicia: vuelve `suspended`, y una suspendida no anuncia nada. Como
+    // una vigilancia sana tampoco emite eventos, sin preguntar no hay forma de enterarse.
+    test('ve también las que el sidecar tiene y este proceso nunca oyó anunciar', async () => {
+        rows = [row('w_solo', { label: 'el render', state: 'suspended', rung: 'R3', sensorKind: 'logmatch',
+            lastSampleAt: 4321, samplesOk: 7, fires: 2 })];
+        const { sessionId } = conversationManager.createSession();
+        const { ws, got } = await connect(sessionId);
+        await settle();
+
+        const mine = got.filter((m) => m.watchId === 'w_solo');
+        // El orden ES el contrato: primero la identidad, después cómo va. El store del HUD mezcla
+        // por watchId, así que un watch_state solo dejaría una fila sin etiqueta.
+        expect(mine.map((m) => m.type)).toEqual(['watch_armed', 'watch_state']);
+        expect(mine[0]).toMatchObject({ label: 'el render', rung: 'R3', sensorKind: 'logmatch', tier: 'observe' });
+        expect(mine[1]).toMatchObject({ state: 'suspended', lastSampleAt: 4321, samplesOk: 7, fires: 2 });
+        // Y sigue sin viajar nada observado: la fila del sidecar puede traer de más.
+        expect(JSON.stringify(mine)).not.toMatch(/sessionId|path|command/i);
+
+        ws.close();
+        await settle();
+        conversationManager.deleteSession(sessionId);
+    });
 });
