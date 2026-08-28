@@ -26,6 +26,15 @@ describe('WatchPill', () => {
         expect(blind).toContain('border-style:dashed');
     });
 
+    test('una vigilancia de otra sesión se pinta sin la etiqueta que dictó su dueña', () => {
+        // El backend solo le manda el texto libre a la sesión que armó, así que aquí llega vacío.
+        // La píldora igual se pinta —la vigilancia existe y ocupa un cupo— pero sin un hueco donde
+        // iba el nombre, que es lo que dejaba el `{watch.label}` pelado.
+        const html = pill({ state: 'armed', label: null });
+        expect(html).toContain('de otra sesión');
+        expect(html).toContain('>armed<');
+    });
+
     test('suspended y expired tampoco se pintan como mirando', () => {
         for (const state of ['suspended', 'expired', 'faulted']) {
             expect(pill({ state })).toContain('border-style:dashed');

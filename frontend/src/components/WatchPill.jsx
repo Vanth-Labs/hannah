@@ -44,7 +44,13 @@ export function WatchPill({ watch, onDisarm }) {
             display: 'flex', gap: '7px', alignItems: 'center', pointerEvents: 'auto', whiteSpace: 'nowrap',
         }}>
             <span style={{ color: look.color }}>{look.icon}</span>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{watch.label}</span>
+            {/* Sin etiqueta = no la armó esta sesión: el backend solo le manda el texto libre a su
+                dueña (senseBridge: armedMsg). La píldora se pinta igual, porque la vigilancia
+                existe y ocupa un cupo; lo que no se pinta son las palabras de otro. */}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis',
+                fontStyle: watch.label ? 'normal' : 'italic', opacity: watch.label ? 1 : 0.7 }}>
+                {watch.label || 'de otra sesión'}
+            </span>
             <span style={{ opacity: 0.55 }}>{watch.state}</span>
             {/* El contador de disparos no es decoración: es cómo se ve que gritó "lobo". */}
             {fires > 0 && (

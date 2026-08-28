@@ -8,8 +8,11 @@ export const WATCH_TERMINAL = ['expired', 'disarmed', 'faulted'];
 
 // Fila por defecto. La UI no inventa datos: lo que el servidor no manda se queda en el neutro,
 // nunca en un valor que parezca una medición.
+// `mine` (¿la armó esta sesión?) por defecto en false y no en true: el backend solo manda la
+// etiqueta —texto libre que dictó una persona— a la sesión dueña, así que una fila de la que no
+// sabemos nada NO es nuestra, y pintarla como propia sería adivinar hacia el lado que filtra.
 const WATCH_DEFAULTS = {
-    label: '', state: 'armed', rung: '', sensorKind: '', tier: '',
+    label: '', state: 'armed', rung: '', sensorKind: '', tier: '', mine: false,
     fires: 0, samplesOk: 0, lastSampleAt: null, trippedAt: null, expiresAt: null, doneAt: null,
 };
 

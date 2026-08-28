@@ -5,6 +5,26 @@ import { emitTerminalOut, emitHands, formatHandsTool } from '../lib/terminalBus.
 import { isOverlay as IS_OVERLAY } from '../lib/overlay.js';
 import { DESKTOP, API_BASE, apiFetch, withToken } from '../lib/api.js';
 
+/**
+ * El parche de store que produce un `watch_armed`. Va aparte y exportado porque esta lista de
+ * campos ES el contrato con senseBridge y es justo donde se rompió sin que nadie lo viera: el
+ * backend manda `sensorKind` a propósito ("sin él la fila del panel no puede decir con qué se
+ * está mirando") y esta lista lo tiraba, así que `row.sensorKind` quedaba vacío para siempre y el
+ * sufijo del panel no se pintaba nunca, con los dos lados creyendo que el campo viajaba. Copiar
+ * `msg` entero tampoco sirve: entonces cualquier campo nuevo del servidor entraría a la fila sin
+ * que nadie lo decida. La lista se queda; lo que hace falta es que esté completa y probada.
+ *
+ * `mine` es propiedad, no adorno: el backend solo le manda la etiqueta a la sesión que armó, y sin
+ * este campo la UI tendría que deducir «no es mía» de que no vino texto.
+ */
+export const watchArmedPatch = (msg) => ({
+    watchId: msg.watchId, label: msg.label, rung: msg.rung, sensorKind: msg.sensorKind,
+    tier: msg.tier, mine: msg.mine === true,
+    // doneAt explícito: re-armar sobre una fila ya terminal la dejaría diciendo "armed" y
+    // desapareciendo igual a los 15s.
+    expiresAt: msg.expiresAt, state: 'armed', doneAt: null,
+});
+
 export function useWebSocket() {
     const ws = useRef(null);
     const audioCtx = useRef(null);
@@ -259,13 +279,8 @@ export function useWebSocket() {
             // audio_chunk; esto es solo lo visual. Nada optimista en ninguno de los cuatro: el
             // estado que se pinta es siempre el que acaba de contar el servidor.
             case 'watch_armed':
-                useHannahStore.getState().upsertWatch({
-                    watchId: msg.watchId, label: msg.label, rung: msg.rung, tier: msg.tier,
-                    // doneAt explícito: re-armar sobre una fila ya terminal la dejaría diciendo
-                    // "armed" y desapareciendo igual a los 15s.
-                    expiresAt: msg.expiresAt, state: 'armed', doneAt: null,
-                });
-                addLog(`[vigilancia] armada: ${msg.label} (${msg.rung})`, 'info');
+                useHannahStore.getState().upsertWatch(watchArmedPatch(msg));
+                addLog(`[vigilancia] armada: ${msg.label || '(de otra sesión)'} (${msg.rung})`, 'info');
                 break;
 
             case 'watch_state':
@@ -281,7 +296,9 @@ export function useWebSocket() {
                 useHannahStore.getState().tripWatch({
                     watchId: msg.watchId, label: msg.label, trippedAt: msg.at, fires: msg.fires,
                 });
-                addLog(`[vigilancia] saltó: ${msg.label} (${msg.confidence})`, 'error');
+                // Sin etiqueta = el disparo es de una vigilancia que armó otra conversación (el
+                // backend solo le manda las palabras a su dueña): el log lo dice, no escribe null.
+                addLog(`[vigilancia] saltó: ${msg.label || '(de otra sesión)'} (${msg.confidence})`, 'error');
                 break;
 
             case 'watch_disarmed':
