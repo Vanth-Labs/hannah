@@ -12,6 +12,7 @@ import { processTextTurn, processUserTextTurn } from '../pipeline/orchestrator.j
 import { getGaze } from '../pipeline/windowControl.js';
 import { attach as terminalAttach, input as terminalInput, resize as terminalResize, dispose as terminalDispose, resolveConfirm } from '../pipeline/terminal.js';
 import * as agentBridge from '../pipeline/agentBridge.js';
+import * as senseBridge from '../pipeline/senseBridge.js';
 
 export const initWebSocketGateway = (httpServer) => {
     // maxPayload: el buffer de audio se corta en 5 MB; un frame mayor no tiene sentido (por
@@ -45,7 +46,13 @@ export const initWebSocketGateway = (httpServer) => {
         let audioChunks = [];
         // Las "manos": registrar la sesión para que los eventos del agente lleguen a ESTE
         // socket (y para reproducirle las tareas vivas si se conectó a mitad de una).
-        agentBridge.attachSession(sessionId, (payload) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload)); });
+        const push = (payload) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload)); };
+        agentBridge.attachSession(sessionId, push);
+        // Los "ojos": las vigilancias viven en el PROCESO, no en la conexión. Al conectarse, este
+        // socket recibe las que están armadas y lo que disparó mientras no había nadie ("esto
+        // pasó mientras no estabas"). Va DESPUÉS de agentBridge a propósito: la voz de la
+        // narración sale por la cola del puente del agente, que necesita la sesión registrada.
+        senseBridge.attachSession(sessionId, push);
 
         // Barge-in: un AbortController por turno en curso. INTERRUPT lo aborta para
         // que Hannah deje de generar/hablar al instante cuando el usuario retoma.
@@ -153,6 +160,13 @@ export const initWebSocketGateway = (httpServer) => {
                         await agentBridge.cancelTask(data.taskId, 'user');
                         break;
 
+                    // Desarmar una vigilancia desde el HUD. Es el ÚNICO camino que tiene el
+                    // navegador: /api/v1/watches rechaza con 403 a todo lo que traiga `Origin`
+                    // (api/auth.js), justamente para que el HUD no sea un control plane.
+                    case 'WATCH_DISARM':
+                        await senseBridge.disarm(String(data.watchId || ''));
+                        break;
+
                     case 'SPEECH_START':
                         logger.info('Usuario empezó a hablar, limpiando buffers...', { sessionId });
                         // Si Hannah aún hablaba, cortar (barge-in por voz). OJO: esto aborta la
@@ -247,6 +261,7 @@ export const initWebSocketGateway = (httpServer) => {
             logger.info('Conexión WebSocket cerrada por el cliente', { sessionId });
             abortCurrentTurn();
             agentBridge.detachSession(sessionId);
+            senseBridge.detachSession(sessionId);
             stopGaze();
             if (detachTerminal) detachTerminal();
             terminalDispose(sessionId);

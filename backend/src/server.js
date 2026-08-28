@@ -11,6 +11,7 @@ import { router as apiRouter } from './api/router.js';
 import { initWebSocketGateway } from './gateway/websocket.js';
 import { requireUiAuth, clientIp, isLoopback } from './api/auth.js';
 import * as agentBridge from './pipeline/agentBridge.js';
+import * as senseBridge from './pipeline/senseBridge.js';
 import { processTextTurn } from './pipeline/orchestrator.js';
 import { classifyIntent } from './pipeline/llm.js';
 import { loadPersisted } from './state/settings.js';
@@ -98,10 +99,18 @@ initWebSocketGateway(httpServer);
 agentBridge.init({ narrate: processTextTurn, classify: classifyIntent })
   .catch((e) => logger.error('agent bridge init failed', { message: e.message }));
 
+// Los "ojos": el puente con hannah-sense. No recibe `narrate`: narra por la MISMA cola del puente
+// del agente (una sola boca), atado a la sesión que armó cada vigilancia. Si SENSE_ENABLED=false,
+// init() no hace nada y todo lo demás es no-op.
+senseBridge.init()
+  .catch((e) => logger.error('sense bridge init failed', { message: e.message }));
+
 // Apagado limpio: la tarea activa se cancela con reason "shutdown" (no se deja huérfana).
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
-    agentBridge.shutdown().catch(() => {}).finally(() => process.exit(0));
+    // El buzón de vigilancias se persiste en el apagado: un disparo sin entregar no se pierde
+    // porque el usuario reinició.
+    Promise.allSettled([agentBridge.shutdown(), senseBridge.shutdown()]).finally(() => process.exit(0));
   });
 }
 

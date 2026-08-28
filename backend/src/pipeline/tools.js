@@ -276,20 +276,21 @@ export async function handleCloseIntent(text, ctx) {
 // del plan): nada de esto ejecuta ni arregla nada.
 
 // El catálogo de sensores, en el orden de la escalera. ÚNICA fuente de tres cosas que si no
-// serían tres listas que se separan solas: qué escalón implementa cada sensor, qué vocabulario
-// ve el modelo (llm.js renderiza el protocolo desde acá) y cómo se arma el spec. Regla R2: un
+// serían cuatro listas que se separan solas: qué escalón implementa cada sensor, qué vocabulario
+// ve el modelo (llm.js renderiza el protocolo desde acá), cómo se arma el spec, y con qué nombre
+// manda cada campo quien no habla por tags (la ruta REST, `args`). Regla R2: un
 // sensor es un objeto TIPADO con campos con nombre, NUNCA una cadena de comando — por eso
 // `build` devuelve campos y en ninguna parte se concatena nada.
 export const WATCH_SENSORS = [
   {
-    rung: 'R1', kind: 'proc', tag: 'proc',
+    rung: 'R1', kind: 'proc', tag: 'proc', args: ['pattern'],
     usage: '[WATCH: proc | <pattern>]', hint: 'a process is still alive',
     build: ([pattern]) => (pattern
       ? { sensor: { kind: 'proc', pattern } }
       : { error: 'a proc watch needs the pattern that matches the process' }),
   },
   {
-    rung: 'R2', kind: 'file', tag: 'file',
+    rung: 'R2', kind: 'file', tag: 'file', args: ['path', 'minutes'],
     usage: '[WATCH: file | <path> | <minutes>]', hint: 'a file stopped being written to for that many minutes',
     build: ([path, minutes]) => {
       if (!path) return { error: 'a file watch needs the path of the file' };
@@ -302,7 +303,7 @@ export const WATCH_SENSORS = [
     },
   },
   {
-    rung: 'R3', kind: 'logmatch', tag: 'log',
+    rung: 'R3', kind: 'logmatch', tag: 'log', args: ['path', 'pattern'],
     usage: '[WATCH: log | <path> | <pattern>]', hint: 'a pattern shows up in a log',
     build: ([path, pattern]) => {
       if (!path) return { error: 'a log watch needs the path of the log' };
@@ -311,7 +312,7 @@ export const WATCH_SENSORS = [
     },
   },
   {
-    rung: 'R5', kind: 'port', tag: 'port',
+    rung: 'R5', kind: 'port', tag: 'port', args: ['port'],
     usage: '[WATCH: port | <number>]', hint: 'something is still listening on a port',
     build: ([port]) => {
       const n = Number.parseInt(String(port ?? '').replace(/[^\d]/g, ''), 10);
@@ -321,7 +322,7 @@ export const WATCH_SENSORS = [
     },
   },
   {
-    rung: 'R6', kind: 'unit', tag: 'unit',
+    rung: 'R6', kind: 'unit', tag: 'unit', args: ['unit'],
     usage: '[WATCH: unit | <name.service>]', hint: 'a system service is still up',
     build: ([unit]) => (unit && !/\s/.test(unit)
       ? { sensor: { kind: 'unit', unit } }
@@ -412,8 +413,31 @@ export function parseWatchTag(arg) {
 export async function armWatch(sessionId, tagArg, label) {
   const parsed = parseWatchTag(tagArg);
   if (parsed.error) return { error: 'bad_watch_spec', reason: parsed.error };
+  return armSensor(sessionId, parsed.sensor, label);
+}
+
+/**
+ * Traduce un spec tipado con campos POR NOMBRE ({ kind:'file', path, minutes }) al del sidecar.
+ * Es la puerta de quien no habla por tags: la ruta REST. Los campos se leen del catálogo, así
+ * que un objeto crudo del cliente nunca viaja entero y un campo de más se cae solo. Puro.
+ */
+export function specFromFields(sensor) {
+  const kind = String(sensor?.kind || '');
+  const entry = WATCH_SENSORS.find((s) => s.kind === kind || s.tag === kind);
+  if (!entry) return { error: `"${clean(kind, 20) || 'that'}" is not something I know how to watch` };
+  return entry.build(entry.args.map((a) => sensor[a]));
+}
+
+/**
+ * Arma un sensor YA tipado. Es el único lugar donde se decide con qué período, con qué debounce
+ * y hasta cuándo vive una vigilancia, venga de la voz o de la ruta REST: dos copias de esa
+ * política se separan, y la que se quede vieja arma vigilancias que nadie recuerda haber pedido.
+ * `sessionId` es la preferencia de entrega; sin él (REST) la vigilancia nace sin dueño y lo que
+ * dispare va al buzón hasta que alguien se conecte.
+ */
+export async function armSensor(sessionId, sensor, label) {
   const survey = await senseClient.survey();
-  if (!armableWatchSensors(survey).some((s) => s.kind === parsed.sensor.kind)) {
+  if (!armableWatchSensors(survey).some((s) => s.kind === sensor.kind)) {
     return { error: 'rung_unavailable', reason: 'that rung is not available on this machine' };
   }
   const r = await senseClient.createWatch({
@@ -422,7 +446,7 @@ export async function armWatch(sessionId, tagArg, label) {
     // mientras esté armada, así que es el punto exacto donde una inyección se volvería
     // permanente (plan §9 T9). `clean` es el mismo saneador que usa el puente del agente.
     label: clean(label, 80) || 'what you asked me to watch',
-    sensor: parsed.sensor,
+    sensor,
     periodMs: config.sense.minPeriodMs,
     debounceN: config.sense.debounceN,
     // Asunción A3: no hay vigilancias abiertas para siempre. El sidecar EXIGE expiresAt.
