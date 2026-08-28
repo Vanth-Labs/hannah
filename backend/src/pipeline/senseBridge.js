@@ -118,6 +118,28 @@ function saveInbox() {
 
 // ── Utilidades ─────────────────────────────────────────────────────────────────────────
 const now = () => Date.now();
+
+/**
+ * QUÉ SIGNIFICA UNA FILA, y sobre todo qué significa después de que el sidecar reinicia. Esa
+ * ambigüedad no estaba escrita en ninguna parte y produjo los tres bugs de esta ronda, así que
+ * queda acá y las decisiones se leen de esta tabla:
+ *
+ *   `armed`                        el sidecar la está MUESTREANDO. Es el ÚNICO estado en el que
+ *                                  se le puede decir a la persona que la está mirando.
+ *   `blind` | `suspended`          A OSCURAS: nadie muestrea, y la fila sigue existiendo allá.
+ *                                  `blind` es lo que dedujimos del silencio (el reloj de acá, o
+ *                                  el evento del sidecar); `suspended` es lo que el sidecar
+ *                                  devuelve para lo que sobrevivió a su reinicio. Para la persona
+ *                                  las dos son LA MISMA FRASE ("no la estoy mirando"), así que se
+ *                                  dicen y se reintentan igual. Ninguna es terminal: la
+ *                                  vigilancia todavía puede desarmarse, expirar o romperse.
+ *   `expired`|`disarmed`|`faulted` terminal: no existe más. Se le avisa al HUD y se olvida a los
+ *                                  FORGET_MS.
+ *
+ * Y la regla que las ata, que es la asunción A4 leída al pie de la letra: UN REINICIO DEL SIDECAR
+ * NO RE-ARMA NADA. Un `boot` distinto manda a `suspended` toda fila no terminal que este proceso
+ * conocía, sin preguntarle nada a nadie, y lo que el sidecar ya no tenga en su lista no existe.
+ */
 const TERMINAL = new Set(['expired', 'disarmed', 'faulted']);
 const terminal = (state) => TERMINAL.has(state);
 
@@ -610,11 +632,22 @@ function goBlind(w) {
 }
 
 /**
- * Volvió a verla. Solo se anuncia si se anunció la pérdida: si no, estaría avisando de que
- * recuperó algo que nunca dijo haber perdido. Y al revés importa más: haber dicho "no lo estoy
- * mirando" y volver a mirarlo sin decirlo deja al usuario creyendo que no hay nadie.
+ * Volvió a verla. DOS condiciones, y la primera es la que faltaba:
+ *
+ *  1. QUE ESTÉ MUESTREANDO DE VERDAD, y `armed` es el único estado que significa eso. Esto lo
+ *     decidía reconcile() con `if (w.state !== 'blind') goVisible(w)`, y `suspended` no es
+ *     `blind`: después de un reinicio del sidecar la persona oía las dos frases seguidas, "la
+ *     perdí" y "ya la veo de nuevo y la estoy mirando como antes", sobre una fila que NO se
+ *     muestrea — con el HUD diciendo suspendida y /health diciendo armed:0. La segunda es la
+ *     última que se oye, así que pisa a la verdadera, y "cree que mira y no mira" es exactamente
+ *     la falla que este hito existe para evitar. Recuperar es MUESTREAR; haber dicho la pérdida
+ *     no alcanza.
+ *  2. Que se haya anunciado la pérdida: si no, estaría avisando de que recuperó algo que nunca
+ *     dijo haber perdido. Y al revés importa más: haber dicho "no lo estoy mirando" y volver a
+ *     mirarlo sin decirlo deja al usuario creyendo que no hay nadie.
  */
 function goVisible(w) {
+    if (w.state !== 'armed') return;
     if (!w.blindSpoken) return;
     w.blindSpoken = false;
     eyes(currentListener(w.sessionId), w.watchId, 'recovered', { label: w.label });

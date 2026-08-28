@@ -51,7 +51,8 @@ const bridge = await import('../../src/pipeline/senseBridge.js');
  */
 class FakeSense {
     constructor() {
-        this.boot = 'b00700000000aaaa';
+        this.boot = 'b007000000000000';
+        this.reboots = 0;
         this.cursor = 0;
         this.seq = new Map();
         this.rows = [];
@@ -101,11 +102,20 @@ class FakeSense {
         res.end(text);
     }
 
-    /** Arma una vigilancia como el sidecar: aparece la fila Y sale `watch.armed`. */
-    arm(watchId, sessionId, label = 'the training') {
+    /**
+     * La fila que el sidecar YA TIENE, sin anunciar nada. Así la ve un backend que arranca
+     * después: armada por REST, o sobreviviente de un reinicio del backend. Nunca pasó un
+     * `watch.armed` por el stream, y esa es toda la diferencia con arm().
+     */
+    persist(watchId, sessionId, label = 'the training') {
         this.rows.push({ watchId, label, state: 'armed', rung: 'R2', sensorKind: 'file',
             lastSampleAt: null, samplesOk: 0, samplesFailed: 0, fires: 0,
             expiresAt: Date.now() + 3600000, sessionId });
+    }
+
+    /** Arma una vigilancia como el sidecar: aparece la fila Y sale `watch.armed`. */
+    arm(watchId, sessionId, label = 'the training') {
+        this.persist(watchId, sessionId, label);
         this.emit(watchId, 'watch.armed', { label, rung: 'R2', sensorKind: 'file',
             periodMs: 15000, expiresAt: Date.now() + 3600000, tier: 'observe' });
     }
@@ -131,42 +141,50 @@ class FakeSense {
         await new Promise((resolve) => this.server.close(resolve));
     }
 
-    /** SIGTERM y vuelta: otro `boot`, cursor y seq desde cero, y lo que había, `suspended`. */
-    async restart() {
-        const port = this.port;
-        await this.stop();
-        this.boot = 'b00700000000bbbb';
+    /**
+     * Vuelve a arrancar en el mismo puerto: otro `boot`, cursor y `seq` desde cero, y lo que
+     * había vuelve `suspended`, jamás armado (asunción A4).
+     *
+     * `keep` es lo que el sidecar de verdad PERSISTIÓ. Lo que no esté en esa lista no vuelve en
+     * ninguna respuesta, porque no existe más: es el caso de la fila que el backend recuerda y
+     * que allá ya no está en ningún lado.
+     */
+    async revive({ keep = null } = {}) {
+        this.boot = `b00700000000${String(++this.reboots).padStart(4, '0')}`;
         this.cursor = 0;
         this.seq = new Map();
+        if (keep) this.rows = this.rows.filter((r) => keep.includes(r.watchId));
         for (const row of this.rows) { row.state = 'suspended'; row.lastSampleAt = null; }
-        await this.start(port);
+        await this.start(this.port);
     }
+
+    /** SIGTERM y vuelta sin pausa: el `systemctl restart` de un segundo. */
+    async restart(opts) { await this.stop(); await this.revive(opts); }
 }
 
 // ── Andamio ────────────────────────────────────────────────────────────────────────────
 let sense;
 let narrated;       // [{ sessionId, prompt }]
+let sent;           // sessionId -> [payload] — lo que le llegó al HUD por el socket
 const opened = [];
 
 const open = () => { const { sessionId } = conversationManager.createSession(); opened.push(sessionId); return sessionId; };
 const attach = (sessionId) => {
-    const send = () => {};
+    sent[sessionId] = sent[sessionId] || [];
+    const send = (m) => sent[sessionId].push(m);
     agentBridge.attachSession(sessionId, send);
     bridge.attachSession(sessionId, send);
 };
+const hud = (sessionId) => sent[sessionId] || [];
 
 /**
- * Las frases de "dejé de mirar" que se dijeron.
- *
- * Se filtra en vez de contar todo lo narrado porque hoy hay un DEFECTO VECINO, en
- * `senseBridge.reconcile()`, que este archivo no puede arreglar (otro agente está en ese
- * archivo): la reconciliación hace `if (w.state !== 'blind') goVisible(w)`, y una fila
- * `suspended` no es 'blind', así que después de haber dicho la ceguera la reconexión siguiente
- * (o el attach de un HUD) dice "ya la veo de nuevo" sobre una vigilancia que NO está
- * muestreando. Es anterior a este arreglo —se llega igual por el reloj de ceguera de 120 s— y
- * se arregla en una línea: solo una fila `armed` es haberla recuperado.
+ * NO HAY FILTRO SOBRE `narrated`, y es a propósito. Acá había uno que se quedaba solo con las
+ * frases de "dejé de mirar" para no ver la que decía después "ya la veo de nuevo": esa segunda
+ * frase era el blocker de esta ronda —la última que oye la persona, sobre una vigilancia que no
+ * se muestrea— y filtrarla dejaba este archivo verde justo sobre la falla que su título dice
+ * cubrir. Lo que se afirma es TODO lo que se dijo, y cuánto.
  */
-const perdida = () => narrated.filter((n) => /LOST SIGHT/.test(n.prompt));
+const dicho = (re) => narrated.filter((n) => re.test(n.prompt));
 
 /** Espera a que algo pase, o falla diciendo qué esperaba. Nada de sleeps a ojo. */
 async function until(what, check, timeoutMs = 12000) {
@@ -182,17 +200,22 @@ const originalUrl = config.sense.url;
 const originalEnabled = config.sense.enabled;
 
 beforeEach(async () => {
-    narrated = [];
+    narrated = []; sent = {};
     sense = new FakeSense();
     await sense.start();
     config.sense.enabled = true;
     config.sense.url = `http://127.0.0.1:${sense.port}`;
     agentBridge._reset(); bridge._reset();
-    // El espía de la voz: imita a processTextTurn en lo único que importa acá — con la sesión
-    // muerta no habla (ver senseBridge.test.js, que encontró ese agujero).
+    // El espía de la voz: imita a processTextTurn en las dos cosas que importan acá. Con la
+    // sesión muerta no habla (ver senseBridge.test.js, que encontró ese agujero) Y DEVUELVE EL
+    // ACUSE `{spoken}` cuando sí habló. Lo segundo faltaba, y sin eso el espía no podía tener
+    // éxito como tiene éxito el original: el puente leía `spoken` ausente como "no se dijo",
+    // llamaba a onLost y desmarcaba la ceguera, así que la misma frase se repetía en cada attach
+    // — un falso verde al revés, que escondía lo repetido en vez de lo perdido.
     await agentBridge.init({ narrate: async (sessionId, prompt) => {
-        if (!conversationManager.getSession(sessionId)) return;
+        if (!conversationManager.getSession(sessionId)) return { spoken: false, error: 'La sesión no existe o ha expirado' };
         narrated.push({ sessionId, prompt });
+        return { spoken: true, error: null };
     } });
     await bridge.init();
 });
@@ -223,9 +246,23 @@ describe('el sidecar reinicia por debajo de una suscripción viva', () => {
         // vuelve con otro `boot` y con la vigilancia `suspended`.
         await sense.restart();
 
-        await until('se dice que dejó de mirar', () => perdida().length > 0);
-        expect(perdida()[0].sessionId).toBe(s);      // a la que armó, no a la última conectada
-        expect(perdida()[0].prompt).toContain('the training');
+        await until('se dice que dejó de mirar', () => narrated.length > 0);
+        expect(narrated[0].sessionId).toBe(s);       // a la que armó, no a la última conectada
+        expect(narrated[0].prompt).toMatch(/LOST SIGHT/);
+        expect(narrated[0].prompt).toContain('the training');
+
+        // Y NADA MÁS, que es la otra mitad de la frase del título. Acá vivía el blocker: la
+        // reconciliación decía a continuación "ya la veo de nuevo y la estoy mirando como antes"
+        // sobre una fila `suspended` —con el HUD mostrando la pastilla de suspendida y /health
+        // en armed:0— y esa frase, por ser la última, es la que le queda a la persona. Se espera
+        // a que el puente termine de ver el arranque nuevo para que la ausencia signifique algo.
+        await until('el puente ve la fila del arranque nuevo',
+            () => bridge.snapshot().find((w) => w.watchId === 'w_1')?.state === 'suspended');
+        await new Promise((r) => setTimeout(r, 200));
+        expect(narrated).toHaveLength(1);
+        expect(dicho(/can see/)).toHaveLength(0);
+        expect(hud(s).filter((m) => m.type === 'watch_state').at(-1))
+            .toMatchObject({ watchId: 'w_1', state: 'suspended' });
     });
 
     test('lo dice UNA vez: el mismo arranque no se vuelve a anunciar en cada reconexión', async () => {
@@ -235,13 +272,13 @@ describe('el sidecar reinicia por debajo de una suscripción viva', () => {
         sense.arm('w_1', s);
         await until('la vigilancia se conoce', () => bridge.snapshot().some((w) => w.watchId === 'w_1'));
         await sense.restart();
-        await until('se dice que dejó de mirar', () => perdida().length > 0);
+        await until('se dice que dejó de mirar', () => narrated.length > 0);
 
         const conexiones = sense.connects;
         sense.dropStreams();
         await until('reconecta', () => sense.connects > conexiones);
         await new Promise((r) => setTimeout(r, 200));
-        expect(perdida()).toHaveLength(1);
+        expect(narrated).toHaveLength(1);
     });
 
     test('un corte de red NO es un reinicio: con el mismo arranque no se dice nada', async () => {
@@ -281,3 +318,4 @@ describe('el sidecar reinicia por debajo de una suscripción viva', () => {
         expect(narrated).toHaveLength(0);
     });
 });
+
