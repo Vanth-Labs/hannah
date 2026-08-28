@@ -450,7 +450,12 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
         (finalLlmResult) => {
             // Si el usuario interrumpió, cortar en seco: no guardar respuesta parcial
             // ni emitir turn_complete.
-            if (finalLlmResult.error) error = finalLlmResult.error;
+            if (finalLlmResult.error) {
+                error = finalLlmResult.error;
+                // Que se vea: un modelo retirado o una key mala solo salian en el log y para el
+                // usuario era "no responde". Con status 401/403/404 el overlay reabre el cerebro.
+                onStreamSegment({ type: 'error', code: 'llm', status: finalLlmResult.status || null, message: finalLlmResult.message || 'the brain failed' });
+            }
             if (signal?.aborted || finalLlmResult.error) return;
 
             if (sentenceBuffer.trim().length > 0) {

@@ -1,7 +1,7 @@
 // The first-run brain choice: what counts as "usable", what the machine can carry, and how
 // vision/recall follow the mode. Pure helpers only — no Ollama, no network.
 import { config } from '../../src/config.js';
-import { hasModel, recommend, computeConfigured, syncBrain } from '../../src/pipeline/brain.js';
+import { hasModel, recommend, computeConfigured, syncBrain, validateCloud } from '../../src/pipeline/brain.js';
 
 describe('brain: model matching', () => {
   test('exact tag, and bare name matches :latest', () => {
@@ -59,5 +59,25 @@ describe('brain: the panel implies the mode', () => {
     applySettings({ llm: { baseUrl: 'http://localhost:11434/v1' } });
     expect(config.brain.mode).toBe('local');
     config.brain.mode = saved.mode; config.llm.baseUrl = saved.baseUrl; config.llm.apiKey = saved.key; syncBrain();
+  });
+});
+
+describe('brain: cloud validation at choose time', () => {
+  const respond = (status, body) => async () => ({ ok: status < 400, status, json: async () => body });
+  test('a retired model is refused with the ids the provider does serve', async () => {
+    const r = await validateCloud('https://api.groq.com/openai/v1', 'llama-3.1-8b-instant', 'gsk_x',
+      respond(200, { data: [{ id: 'llama-3.3-70b-versatile' }, { id: 'whisper-large-v3' }, { id: 'openai/gpt-oss-20b' }] }));
+    expect(r.ok).toBe(false); expect(r.error).toBe('model_not_found');
+    expect(r.available).toEqual(['llama-3.3-70b-versatile', 'openai/gpt-oss-20b']);
+  });
+  test('a served model passes; Google-style "models/x" ids match too', async () => {
+    expect((await validateCloud('https://x/v1', 'gemini-2.5-flash', 'k', respond(200, { data: [{ id: 'models/gemini-2.5-flash' }] }))).ok).toBe(true);
+    expect((await validateCloud('https://x/v1', 'gpt-4o-mini', 'k', respond(200, { data: [{ id: 'gpt-4o-mini' }] }))).ok).toBe(true);
+  });
+  test('a bad key is refused; a provider without /models or a network error is trusted', async () => {
+    expect((await validateCloud('https://x/v1', 'm', 'k', respond(401, {}))).error).toBe('bad_key');
+    expect((await validateCloud('https://x/v1', 'm', 'k', respond(404, {}))).ok).toBe(true);
+    expect((await validateCloud('https://x/v1', 'm', 'k', async () => { throw new Error('ECONNREFUSED'); })).ok).toBe(true);
+    expect((await validateCloud('https://x/v1', 'm', '', respond(200, {}))).error).toBe('bad_key');
   });
 });

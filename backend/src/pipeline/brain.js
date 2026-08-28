@@ -288,3 +288,31 @@ export function startPull(models) {
 
 export const currentJob = () => (job ? { ...job } : null);
 export function _reset() { job = null; ollamaCache = { at: 0, value: { reachable: false, models: [], url: OLLAMA_DEFAULT } }; hwCache = null; }
+
+/**
+ * Is this cloud brain usable? Asks the provider's /models with the key. Pure enough to test:
+ * `fetchImpl` is injectable. Returns { ok } or { ok:false, error, message, available? }.
+ *   bad_key          401/403 from the provider
+ *   model_not_found  /models answered and the model is not in it (available = a few ids)
+ * A provider without /models (404 there, or a network error) is trusted: cannot be validated.
+ */
+export async function validateCloud(baseUrl, model, apiKey, fetchImpl = fetch) {
+  if (!apiKey) return { ok: false, error: 'bad_key', message: 'no API key' };
+  const url = `${String(baseUrl || '').replace(/\/$/, '')}/models`;
+  let r;
+  try {
+    r = await fetchImpl(url, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(8000) });
+  } catch { return { ok: true, unverified: true }; }
+  if (r.status === 401 || r.status === 403) return { ok: false, error: 'bad_key', message: `the provider rejected the key (HTTP ${r.status})` };
+  if (!r.ok) return { ok: true, unverified: true };
+  let ids = [];
+  try {
+    const j = await r.json();
+    ids = (j.data || j.models || []).map((m) => m.id || m.name).filter(Boolean);
+  } catch { return { ok: true, unverified: true }; }
+  if (!ids.length) return { ok: true, unverified: true };
+  const want = String(model || '');
+  if (ids.includes(want) || ids.includes(`models/${want}`) || ids.some((id) => id.endsWith(`/${want}`))) return { ok: true };
+  const chat = ids.filter((id) => !/embed|whisper|tts|guard|moderation|image|audio|vision-only|rerank/i.test(id)).slice(0, 8);
+  return { ok: false, error: 'model_not_found', message: `the provider has no model "${want}"`, available: chat };
+}

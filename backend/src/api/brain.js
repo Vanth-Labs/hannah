@@ -5,6 +5,7 @@
 import * as brain from '../pipeline/brain.js';
 import { applySettings, persist } from '../state/settings.js';
 import { logger } from '../utils/logger.js';
+import { config } from '../config.js';
 
 // GET /brain -> mode, configured, ollama (reachable/models/installed), hardware, recommendation, job
 export const readBrain = async (req, res) => {
@@ -21,6 +22,12 @@ export const chooseBrain = async (req, res) => {
     patch.llm.baseUrl = llm?.baseUrl && brain.isLocalUrl(llm.baseUrl) ? llm.baseUrl : 'http://localhost:11434/v1';
     patch.llm.model = llm?.model || brain.LOCAL_MODELS.brain;
     patch.llm.apiKey = 'ollama';
+  }
+  if (mode === 'cloud') {
+    // Validate before saving: a retired model or a bad key must fail HERE, with words, not on
+    // the first sentence with a silent turn. Providers that do not serve /models are trusted.
+    const check = await brain.validateCloud(patch.llm.baseUrl, patch.llm.model, patch.llm.apiKey || config.llm.apiKey);
+    if (!check.ok) return res.status(400).json(check);
   }
   applySettings(patch);
   persist();

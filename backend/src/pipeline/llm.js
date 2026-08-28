@@ -110,7 +110,7 @@ export const generateDialogueStream = async (history, onToken, onComplete, signa
             return;
         }
         logger.error('OpenAI-compatible stream engine runtime error', { message: error.message });
-        if (onComplete) onComplete({ error: 'llm_failed', message: error.message });
+        if (onComplete) onComplete({ error: 'llm_failed', message: error.message, status: error.status });
     }
 };
 
