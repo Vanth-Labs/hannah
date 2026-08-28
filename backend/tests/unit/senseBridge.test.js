@@ -584,6 +584,26 @@ describe('EL ACUSE DE RECIBO: nada sale del buzón hasta que se sabe que se DIJO
         await bridge._settle();
         expect(bridge.pendingTrips()).toBe(0);
     });
+
+    test('rendirse no es una excusa para mostrarle la etiqueta a otro HUD', async () => {
+        // El tercer canal de la misma fuga, y el que abrió el propio arreglo de arriba: gritar por
+        // el HUD era un broadcast, así que la vigilancia de A terminaba escrita en la pantalla de
+        // B. "Que se entere alguien" no es motivo para eso (plan §10, ce847d4): se le manda a su
+        // dueña, y si su socket está cerrado quedan el log y el contador.
+        const a = open(), b = open();
+        attach(a);
+        await arm('w_1', a, 'el entrenamiento de la tesis de Marta');
+        attach(b);
+        llmDown = true;
+
+        await emit('w_1', 2, 'watch.tripped', { label: 'el entrenamiento de la tesis de Marta', at: Date.now(), fires: 1 });
+        for (let i = 0; i < 3; i++) { attach(a); await bridge._settle(); }
+
+        expect(narrateCalls).toBe(3);
+        expect(JSON.stringify(sentTo[b])).not.toContain('Marta');
+        expect(sentTo[a].filter((m) => m.type === 'watch_tripped')).toHaveLength(4);
+        expect(bridge.pendingTrips()).toBe(1);
+    });
 });
 
 describe('la etiqueta que llega al MODELO, también en el canal POR DISPARO', () => {

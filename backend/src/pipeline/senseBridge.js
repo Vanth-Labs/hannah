@@ -503,8 +503,14 @@ function outOfInbox(trip) {
 /**
  * No se dijo. Vuelve a estar disponible y se le cuenta el intento. Al llegar al techo se RINDE
  * EN VOZ ALTA — que acá no puede ser literal, porque la voz es justo lo que está roto: se grita
- * por el log y se le manda al HUD el disparo, que es el único canal que no depende del modelo.
- * La fila NO se borra: sigue en el archivo y sigue contando en pendingTrips().
+ * por el log, se cuenta en pendingTrips() (y por ahí en /api/v1/health) y se le manda el disparo
+ * A SU DUEÑA, que es el único canal que no depende del modelo. La fila NO se borra.
+ *
+ * A SU DUEÑA Y NO POR BROADCAST, aunque el broadcast lo vería más gente: la etiqueta son las
+ * palabras que dictó ella, y "que se entere alguien" no es motivo para ponérselas en la pantalla
+ * a un tercero. Es la misma regla de ce847d4 y del plan §10, y este era el tercer canal por el
+ * que se escapaba. Si su socket está cerrado no lo ve nadie en pantalla, y está bien: para eso
+ * están el log y el contador, que es exactamente lo que se decidió para el disparo huérfano.
  */
 function failedDelivery(trip) {
     trip.inFlight = false;
@@ -514,7 +520,7 @@ function failedDelivery(trip) {
     if (trip.attempts > TRIP_MAX_ATTEMPTS) return;                 // ya se gritó una vez
     logger.error('NO se pudo decir un disparo despues de varios intentos: queda guardado y sin contar',
         { watchId: trip.watchId, at: trip.at, attempts: trip.attempts });
-    broadcast({ type: 'watch_tripped', watchId: trip.watchId, label: trip.label,
+    toSession(trip.sessionId, { type: 'watch_tripped', watchId: trip.watchId, label: trip.label,
         at: trip.at, confidence: trip.confidence });
 }
 
