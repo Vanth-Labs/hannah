@@ -6,7 +6,7 @@ import { embed, cosine } from '../state/embeddings.js';
 import { runTool, WATCH_SENSORS, armableWatchSensors } from './tools.js';
 import * as senseClient from './senseClient.js';
 import { skillsPromptSection, resolveSkill } from '../state/skills.js';
-import { isHealthy as agentHealthy, handsStatus, clean, dispatch as dispatchTask } from './agentBridge.js';
+import { isHealthy as agentHealthy, handsStatus, dispatch as dispatchTask } from './agentBridge.js';
 import { referencePromptSection } from '../state/reference.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
@@ -289,24 +289,85 @@ const kindEnum = () => (watchKinds ??= new Set([...WATCH_SENSORS.map((s) => s.ki
 const WATCH_LIVE = new Set(['armed', 'blind', 'suspended']);
 const asEnum = (value, allowed) => (allowed.has(value) ? value : 'unknown');
 
+// ── La ETIQUETA, saneada para el MODELO ────────────────────────────────────────────────
+// Una PALABRA de la etiqueta son letras (con acentos y ñ) y dígitos, y nada más. Todo lo otro
+// —'/', '~', '@', '.', '-', '_', ':', '|', ';', las comillas invertidas, los corchetes— es
+// exactamente el material con el que se escriben una ruta, un host, un flag, una URL o un tag,
+// que es lo único que esta línea no puede llevar (plan §10).
+const LABEL_WORD = /^[\p{L}\p{N}]{1,24}$/u;
+// Puntuación de FRASE, y solo en los extremos del token: el ASR puntúa lo que dicta el usuario
+// ("...que no se pare.") y tirar la última palabra de cada oración dejaría la etiqueta
+// irreconocible. En los extremos y no adentro, a propósito: '/home/u/.ssh/id_rsa' sigue teniendo
+// barras en el medio y se cae entero igual.
+const LABEL_EDGE = /^[¿¡"'«(]+|[,.;:!?"'»)…]+$/g;
+// Verbos que ACTÚAN: son letras, así que pasan el filtro de arriba, y son lo que hace que la
+// línea se lea como un comando en vez de como el nombre de algo. Están los que mandan y no los
+// que el usuario dice de verdad al pedir una vigilancia ('python', 'node', 'git' se quedan): sin
+// ruta, sin flag y sin separador ninguno de esos dos grupos puede hacer nada, y perder una
+// palabra que el usuario sí dijo es justo lo que vuelve irreconocible su etiqueta.
+const LABEL_COMMANDS = new Set(['rm', 'rmdir', 'unlink', 'mkfs', 'dd', 'chmod', 'chown', 'chattr',
+    'kill', 'killall', 'pkill', 'sudo', 'doas', 'shutdown', 'reboot', 'poweroff', 'halt', 'curl',
+    'wget', 'ssh', 'scp', 'nc', 'ncat', 'bash', 'sh', 'zsh', 'eval', 'exec', 'whoami', 'cat',
+    'tail', 'head', 'ls', 'mv', 'cp', 'ln', 'systemctl', 'nohup', 'crontab', 'base64', 'xxd']);
+const LABEL_MAX_WORDS = 8;
+const LABEL_MAX_CHARS = 60;
+// Cuando no sobrevive nada. Es la MISMA frase con la que tools.js arma una vigilancia sin
+// etiqueta: "no sé cómo se llama esto" ya tenía una forma de decirse y no hacen falta dos.
+const LABEL_NONE = 'what you asked me to watch';
+
+/**
+ * La etiqueta como la ve el MODELO. `clean()` (el saneador del puente del agente) no alcanza acá
+ * y la diferencia es concreta: colapsa los separadores en espacios, así que deja
+ * '/home/u/.ssh/id_rsa' como "/home/u/.ssh/id rsa" y una ruta entra igual. Acá se mira el token
+ * ENTERO y se tira completo el que no sea una palabra.
+ *
+ * EL CANJE, dicho: la etiqueta existe para que el usuario RECONOZCA su vigilancia cuando Hannah
+ * la nombra, así que romperla no es gratis y lo que se conserva son sus palabras. Lo que se
+ * pierde es todo lo que no es una palabra, y con eso una etiqueta nacida de una inyección se
+ * queda sin corchetes, sin ruta, sin host, sin flag y sin verbo de comando: no puede abrir un
+ * tag, no puede NOMBRAR un archivo ni una máquina, y lo que sobreviva son ocho palabras sueltas
+ * entre comillas. Escribir una orden con puras palabras sigue siendo posible; que esa orden
+ * apunte a algo, no. Y si no sobrevive ninguna se dice el sustantivo genérico: la vigilancia
+ * sigue existiendo y "¿cómo va?" se sigue pudiendo contestar, que es para lo que está la línea.
+ * Exportada para tests.
+ */
+export function watchLabel(raw) {
+    const kept = [];
+    let chars = 0;
+    for (const token of String(raw ?? '').split(/\s+/)) {
+        if (kept.length >= LABEL_MAX_WORDS) break;
+        const word = token.replace(LABEL_EDGE, '');
+        if (!LABEL_WORD.test(word) || LABEL_COMMANDS.has(word.toLowerCase())) continue;
+        const grows = word.length + (kept.length ? 1 : 0);
+        if (chars + grows > LABEL_MAX_CHARS) break;
+        chars += grows;
+        kept.push(word);
+    }
+    return kept.join(' ') || LABEL_NONE;
+}
+
 /**
  * El estado de las vigilancias para el system prompt. Hermano de handsStatus() y con su MISMA
  * cláusula final, palabra por palabra: sin ella el 7B, preguntado "¿cómo va el entrenamiento?",
  * inventa una curva de pérdida.
  *
- * Emite SOLO cuatro cosas: la etiqueta (las palabras del usuario, saneadas), el NOMBRE del
+ * Emite SOLO cuatro cosas: la etiqueta (las palabras del usuario, por watchLabel), el NOMBRE del
  * sensor como enum, el estado y los disparos. Ni un valor muestreado, ni una línea de log, ni
  * una ruta, ni un host, ni un comando. La razón es estructural, no estética: esto se anexa al
  * system prompt de CADA turno mientras la vigilancia esté armada, así que cualquier contenido
  * observado que entrara acá sería un punto de inyección permanente durante horas (plan §10,
  * §9 T9) — leído por el modelo justo cuando el usuario no está para desmentirlo.
+ *
+ * Los tres campos de máquina se validan contra su enum; el cuarto, la ETIQUETA, es el único
+ * texto libre que queda, y por eso es el que hay que sanear acá y no confiar en quien lo escribió
+ * (el sidecar puede estar suplantado, y la ruta REST acepta la etiqueta que le manden).
  */
 export async function watchStatus() {
     const { watches } = await senseClient.watchRows();
     const live = watches.filter((w) => WATCH_LIVE.has(w?.state));
     if (!live.length) return '';
     return '\n\n[WATCH STATUS] ' + live.slice(0, 5).map((w) =>
-        `"${clean(w.label, 80)}": ${asEnum(w.state, WATCH_STATES)}, watching ${asEnum(w.sensorKind, kindEnum())}`
+        `"${watchLabel(w.label)}": ${asEnum(w.state, WATCH_STATES)}, watching ${asEnum(w.sensorKind, kindEnum())}`
         + `, ${Number.isInteger(w.fires) ? w.fires : 0} trips`).join(' | ')
         + '\nIf the user asks how a watch is going, answer from this status only.';
 }

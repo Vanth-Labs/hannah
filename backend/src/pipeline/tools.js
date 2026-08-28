@@ -444,7 +444,11 @@ export async function armSensor(sessionId, sensor, label) {
     // La ETIQUETA son las palabras del USUARIO, saneadas: ni la paráfrasis del modelo ni una
     // línea observada. Es lo único de esta vigilancia que vuelve al system prompt en cada turno
     // mientras esté armada, así que es el punto exacto donde una inyección se volvería
-    // permanente (plan §9 T9). `clean` es el mismo saneador que usa el puente del agente.
+    // permanente (plan §9 T9). `clean` es el mismo saneador que usa el puente del agente, y acá
+    // hace lo que puede hacer de este lado: la etiqueta que se guarda es la que ve el USUARIO en
+    // el HUD, con su puntuación. Quien la neutraliza para el MODELO es watchLabel (llm.js), en el
+    // momento de escribirla en el prompt, porque esta fila puede volver del sidecar (o de la ruta
+    // REST) sin haber pasado nunca por acá.
     label: clean(label, 80) || 'what you asked me to watch',
     sensor,
     periodMs: config.sense.minPeriodMs,
