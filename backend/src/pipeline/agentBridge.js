@@ -103,19 +103,18 @@ function narrationPrompt(task, event) {
 // la más reciente (INTEGRATION §6) — salvo aprobaciones/preguntas, que nunca se pierden.
 const narrationQueue = new Map();   // sessionId -> { chain: Promise, pending: [] }
 
-async function speak(task, event) {
-    if (!narrate) return;
-    const s = sessions.get(task.sessionId) || [...sessions.values()].at(-1);
-    if (!s) return;
-    const sessionId = [...sessions.entries()].find(([, v]) => v === s)?.[0] || task.sessionId;
-    task.lastNarratedAt = now();
+/**
+ * El motor de la cola, compartido por las manos y por los ojos (senseBridge). `id` es la clave
+ * de colapso — la tarea, o la vigilancia —: solo se descartan narrables VIEJOS del MISMO id.
+ * `opts` se mezcla con lo que recibe processTextTurn (hoy: `ephemeral` para las vigilancias).
+ */
+function enqueue(sessionId, s, { id, mustKeep, prompt, opts }) {
     const q = narrationQueue.get(sessionId) || { chain: Promise.resolve(), pending: [] };
     narrationQueue.set(sessionId, q);
-    const mustKeep = event.type === 'task.approval.requested' || event.type === 'task.question';
-    // colapsar: si ya hay narrables esperando de esta tarea y esta no es una pregunta, la nueva
-    // reemplaza a las viejas (lo último que pasó es lo que importa)
-    if (!mustKeep) q.pending = q.pending.filter((p) => p.task.taskId !== task.taskId || p.mustKeep);
-    q.pending.push({ task, event, mustKeep });
+    // colapsar: si ya hay narrables esperando de este id y este no es una pregunta, el nuevo
+    // reemplaza a los viejos (lo último que pasó es lo que importa)
+    if (!mustKeep) q.pending = q.pending.filter((p) => p.id !== id || p.mustKeep);
+    q.pending.push({ id, mustKeep, prompt, opts });
     q.chain = q.chain.then(async () => {
         const item = q.pending.shift();
         if (!item) return;
@@ -124,7 +123,7 @@ async function speak(task, event) {
         const ctl = new AbortController();
         s.narrating = ctl;   // barge-in (SPEECH_START/INTERRUPT) aborta ESTA narración, no la tarea
         try {
-            await narrate(sessionId, narrationPrompt(item.task, item.event), s.send, { noActions: true, signal: ctl.signal });
+            await narrate(sessionId, item.prompt, s.send, { noActions: true, signal: ctl.signal, ...item.opts });
         } catch (e) {
             logger.error('agent narration failed', { message: e.message });
         } finally {
@@ -133,6 +132,36 @@ async function speak(task, event) {
     });
     return q.chain;
 }
+
+async function speak(task, event) {
+    if (!narrate) return;
+    const s = sessions.get(task.sessionId) || [...sessions.values()].at(-1);
+    if (!s) return;
+    const sessionId = [...sessions.entries()].find(([, v]) => v === s)?.[0] || task.sessionId;
+    task.lastNarratedAt = now();
+    const mustKeep = event.type === 'task.approval.requested' || event.type === 'task.question';
+    return enqueue(sessionId, s, { id: task.taskId, mustKeep, prompt: narrationPrompt(task, event) });
+}
+
+/**
+ * Narrar algo que NO es una tarea (hoy: las vigilancias) por la MISMA cola y la misma voz: una
+ * sola boca, un solo turno a la vez, el mismo barge-in.
+ *
+ * La diferencia con speak() es deliberada y es el punto entero: acá NO hay fallback a
+ * [...sessions.values()].at(-1). Un disparo de vigilancia se le cuenta a la sesión que la armó o
+ * a nadie — leerle lo que pasó en el entrenamiento de otro a quien justo abrió el HUD es una
+ * fuga. Devuelve la promesa de la cadena, o null si esa sesión no está conectada, y el que llama
+ * decide qué hacer con el silencio (senseBridge lo guarda en el buzón).
+ */
+export function narrateTo(sessionId, prompt, { id = 'other', mustKeep = true, ephemeral = false } = {}) {
+    if (!narrate || !sessionId) return null;
+    const s = sessions.get(sessionId);
+    if (!s) return null;
+    return enqueue(sessionId, s, { id, mustKeep, prompt, opts: ephemeral ? { ephemeral: true } : {} });
+}
+
+/** ¿Está esa sesión conectada AHORA? La usa senseBridge para decidir voz o buzón. */
+export const hasSession = (sessionId) => !!sessionId && sessions.has(sessionId);
 
 /** Barge-in: aborta la narración en curso de la sesión (la tarea sigue). */
 export function abortNarration(sessionId) {

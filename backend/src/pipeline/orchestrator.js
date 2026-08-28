@@ -349,7 +349,9 @@ export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegm
 
         // 3. LLM: Disparar directo la tubería cognitiva evadiendo el hardware del micrófono
         // opts.noActions: la inyección solo RELATA (narración de las manos); opts.signal: abortable.
-        await executeLlmPipeline(sessionId, temporalTurns, onStreamSegment, opts.signal, { noActions: !!opts.noActions });
+        // opts.ephemeral: se habla y NO se guarda (narración de una vigilancia; ver addTurn).
+        await executeLlmPipeline(sessionId, temporalTurns, onStreamSegment, opts.signal,
+            { noActions: !!opts.noActions, ephemeral: !!opts.ephemeral });
 
     } catch (error) {
         logger.error('Fallo crítico en el Orquestador (Texto/YOLO)', { message: error.message });
@@ -426,7 +428,7 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment, signal
             // historial no debe enseñarle al modelo a repetir tags, y la memoria la resume mejor.
             const spokenOrDelegated = String(finalLlmResult.text || '')
                 .replace(/^\s*[[(*]\s*TASK:\s*([^\])*\n]+?)\s*[\])*]\s*$/i, '(I handed this to my hands: $1)');
-            conversationManager.addTurn(sessionId, 'assistant', spokenOrDelegated);
+            conversationManager.addTurn(sessionId, 'assistant', spokenOrDelegated, { ephemeral: !!opts.ephemeral });
             conversationManager.updateSessionMetadata(sessionId, { emotion: finalLlmResult.emotion });
 
             // Cerrar ciclo de transmisión en el frontend cuando el último segmento ya fue enviado

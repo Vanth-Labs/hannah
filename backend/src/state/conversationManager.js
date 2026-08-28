@@ -69,7 +69,15 @@ class ConversationManager {
    * Appends a new turn (user utterance or assistant response) 
    * and strictly maintains the CONTEXT_TURNS window limit.
    */
-  addTurn(sessionId, role, content) {
+  addTurn(sessionId, role, content, { ephemeral = false } = {}) {
+    // Turno EFÍMERO: se dice y no se recuerda. Es lo que hace la narración de una vigilancia
+    // (plan VIGILANCE §9, "evidence frames are never persisted"). Sin esta salida, ocho horas
+    // de vigilancia desalojan la conversación real de la ventana de CONTEXT_TURNS y dejan lo
+    // observado grabado para siempre en memory.db, que es justamente la base que la política
+    // del agente marca como sensible. Se sale ANTES de tocar la ventana, SQLite y el embedding:
+    // las tres cosas son el daño, no solo la última.
+    if (ephemeral) return false;
+
     const session = this.getSession(sessionId);
     if (!session) return false;
 
