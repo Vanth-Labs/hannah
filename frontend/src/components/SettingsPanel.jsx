@@ -11,17 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useHannahStore } from '../store/hannahStore.js';
 import { API_BASE, apiFetch } from '../lib/api.js';
 
-// Proveedores en la nube (OpenAI-compatible). El modelo es el "bueno y barato" de cada uno;
-// se puede afinar en Avanzado.
-const CLOUD = [
-    { id: 'anthropic', label: 'Anthropic (Claude)', baseUrl: 'https://api.anthropic.com/v1/', model: 'claude-haiku-4-5-20251001', keys: 'https://console.anthropic.com' },
-    { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', keys: 'https://platform.openai.com/api-keys' },
-    { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.1-8b-instant', keys: 'https://console.groq.com/keys' },
-    { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-3.1-8b-instruct', keys: 'https://openrouter.ai/keys' },
-];
-const LOCAL = { baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5:7b' };
-const isLocalUrl = (u) => /localhost|127\.0\.0\.1|:11434/.test(u || '');
-const cloudOf = (u) => CLOUD.find((c) => (u || '').startsWith(c.baseUrl.replace(/\/$/, '')));
+import { CLOUD, LOCAL, isLocalUrl, cloudOf } from '../lib/brain.js';
 
 // Presets del modo avanzado (mismo dato, otra vista).
 const LLM_PRESETS = [{ label: 'Ollama (local)', ...LOCAL }, ...CLOUD.map((c) => ({ label: c.label, baseUrl: c.baseUrl, model: c.model }))];
@@ -189,7 +179,7 @@ function BrainCard({ form, saved, setField }) {
                 <button style={S.segBtn(!local)} onClick={() => choose(cloud || CLOUD[0])}>En la nube</button>
             </div>
             {local ? (
-                <div style={{ ...S.hint, marginTop: '8px' }}>Gratis y privado: nada sale de tu máquina. Usa el modelo que instaló el instalador ({form.llm?.model || LOCAL.model}).</div>
+                <div style={{ ...S.hint, marginTop: '8px' }}>Gratis y privado: nada sale de tu máquina. Modelo local en Ollama: {form.llm?.model || LOCAL.model}.</div>
             ) : (
                 <div>
                     <label style={S.label}>Proveedor</label>

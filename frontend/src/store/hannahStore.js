@@ -32,6 +32,7 @@ export const useHannahStore = create((set) => ({
     commandRun: null,          // { command, output, at } — último comando ejecutado (toast, sin abrir terminal)
     terminalOpen: false,       // terminal abierta -> la ventana se divide (avatar arriba, terminal abajo)
     handsFree: false,          // conversación manos-libres por VAD (Fase B) + barge-in
+    brain: null,               // GET /api/v1/brain — { mode, configured, ollama, hardware, recommendation, job } (null = aún no consultado)
 
     // Log de pipeline
     logs: [],
@@ -52,6 +53,9 @@ export const useHannahStore = create((set) => ({
     setGestureTrigger: (gestureTrigger) => set({ gestureTrigger }),
     setAutoLookat: (autoLookat) => set({ autoLookat }),
     setHandsFree: (handsFree) => set({ handsFree }),
+    setBrain: (brain) => set({ brain }),
+    // el backend rechazó un turno por falta de cerebro: reabrir la bienvenida
+    markBrainRequired: () => set((st) => ({ brain: { ...(st.brain || {}), configured: false } })),
     setOverlayGaze: (overlayGaze) => set({ overlayGaze }),
     setPendingConfirm: (pendingConfirm) => set({ pendingConfirm }),
     setAgentTask: (agentTask) => set({ agentTask }),
