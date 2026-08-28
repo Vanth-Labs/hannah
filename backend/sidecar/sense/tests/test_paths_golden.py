@@ -102,7 +102,13 @@ def test_la_carpeta_data_del_backend_esta_denegada_sin_variable_de_entorno():
     """
     assert os.environ.get("HANNAH_AGENT_DENY_DIRS") is None
     target = os.path.join(paths.local_directories()[0], "settings.json")
-    assert paths.classify(target, "/").sensitive is False, "el port fiel no lo deniega, y está bien"
+    # Si el checkout se llama `hannah-backend/` (el nombre que crea el instalador) la regla
+    # compilada ya lo deniega sola; si se llama `backend/` (upstream) no, y entonces es la regla
+    # local del sidecar la que tiene que hacerlo. Lo que importa en los dos casos es la ultima
+    # aserción: settings.json nunca es vigilable.
+    faithful = paths.classify(target, "/").sensitive
+    named_like_installer = os.path.basename(os.path.dirname(os.path.dirname(paths.local_directories()[0]))) == "hannah-backend"
+    assert faithful is named_like_installer, "el port fiel deniega exactamente cuando la carpeta se llama hannah-backend"
     with pytest.raises(sensors.DeniedPath) as denial:
         sensors.classify_path(target)
     assert str(denial.value).endswith("is a protected directory")
