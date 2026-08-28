@@ -331,30 +331,19 @@ function HandsCard({ form, saved, setField, health }) {
 // peldaño que armó y la antigüedad de la ÚLTIMA MUESTRA: sin ese dato, un watch ciego y uno
 // armado se leen igual. El aspecto lo comparte con la píldora del HUD (watchLook) justo para que
 // "ciega" no signifique dos cosas distintas en dos pantallas.
-function WatchesSection({ health, onDisarm }) {
-    const watches = useHannahStore((s) => s.watches);
-    const [status, setStatus] = useState('');
-    const [now, setNow] = useState(() => Date.now());
-
-    // Instantánea al abrir el panel: los eventos del WebSocket solo cuentan lo que pasó con esta
-    // pestaña abierta, así que sin esto un watch armado ayer no aparecería en la lista.
-    useEffect(() => {
-        apiFetch(`/api/v1/watches`)
-            .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-            .then((d) => { useHannahStore.getState().setWatches(d.watches || []); setStatus(''); })
-            // Esta ruta pide el token de la UI incluso en loopback (la única del backend que lo
-            // hace). Sin instantánea se muestra lo que haya llegado por el WS: una lista vacía
-            // sería peor, porque diría "no vigilo nada" sin saberlo.
-            .catch(() => setStatus('sin instantánea (falta el token de la UI)'));
-    }, []);
-
-    // La antigüedad es el dato vivo de esta sección: sin un tick se congela en el instante en que
-    // se abrió el panel y "hace 3s" pasa a ser mentira a los cuatro segundos.
-    useEffect(() => {
-        const id = setInterval(() => setNow(Date.now()), 1000);
-        return () => clearInterval(id);
-    }, []);
-
+//
+// De dónde salen las filas: del store, que las recibe por el WebSocket (al attachear, el backend
+// manda un watch_armed y un watch_state por cada vigilancia viva). NO se pide GET
+// /api/v1/watches: ese plano de control contesta 403 a cualquier petición con cabecera Origin
+// ("The watch control plane does not serve browsers", backend/src/api/auth.js) y 401 sin token de
+// la UI, que es el flujo normal en navegador. Desde esta pantalla fallaba siempre, y su catch era
+// justo lo que pintaba "Nada vigilado ahora mismo": la pantalla afirmando que no vigila nada
+// cuando lo único que sabía era que no había podido preguntar.
+//
+// La vista va separada del contenedor porque el contenedor lee el store, y en los tests (sin DOM)
+// zustand sirve `getInitialState`: un componente suscrito no se puede poner en un estado concreto
+// desde fuera. Con la vista pura, la regla de abajo sí se puede afirmar.
+export function WatchesView({ watches, connected, health, onDisarm, now }) {
     const ago = (ts) => {
         if (!ts) return 'sin muestra todavía';
         const s = Math.max(0, Math.round((now - ts) / 1000));
@@ -371,12 +360,24 @@ function WatchesSection({ health, onDisarm }) {
         <div style={S.sec}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={S.secTitle}>Vigilancia (lo que está mirando)</div>
-                <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>{status || summary}</span>
+                <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)' }}>{summary}</span>
             </div>
             <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.35)', marginBottom: '6px' }}>
                 Una fila que no dice «armed» es una que NO está mirando.
             </div>
-            {!watches.length && (
+            {/* "No vigilo nada" y "no lo sé" son dos frases distintas y aquí no pueden colapsar en
+                una. La lista solo es la respuesta del servidor mientras el socket está attacheado;
+                con el socket caído es una caché del último momento en que lo estuvo, y decir
+                "nada vigilado" con una vigilancia armada al otro lado es el fallo que este feature
+                existe para no cometer. */}
+            {!connected && (
+                <div style={{ ...S.hint, marginTop: '6px', color: '#f5c842' }}>
+                    {watches.length
+                        ? 'Sin conexión con el backend: esto es lo último que se supo, no lo que está pasando.'
+                        : 'Sin conexión con el backend: no sé qué está vigilando ahora mismo.'}
+                </div>
+            )}
+            {connected && !watches.length && (
                 <div style={{ ...S.hint, marginTop: '6px' }}>Nada vigilado ahora mismo.</div>
             )}
             {watches.map((row) => {
@@ -406,6 +407,23 @@ function WatchesSection({ health, onDisarm }) {
             })}
         </div>
     );
+}
+
+// El contenedor. Se suscribe con selectores atómicos (`s.watches`, `s.connected`) para que una
+// muestra cada 15s no re-renderice el formulario entero, y lleva el reloj de la antigüedad: sin
+// tick se congela en el instante en que se abrió el panel y "hace 3s" es mentira a los cuatro
+// segundos.
+function WatchesSection({ health, onDisarm }) {
+    const watches = useHannahStore((s) => s.watches);
+    const connected = useHannahStore((s) => s.connected);
+    const [now, setNow] = useState(() => Date.now());
+
+    useEffect(() => {
+        const id = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    return <WatchesView watches={watches} connected={connected} health={health} onDisarm={onDisarm} now={now} />;
 }
 
 // ── Atajos de voz (abrir apps/páginas). Estado propio: carga GET /shortcuts, edita
