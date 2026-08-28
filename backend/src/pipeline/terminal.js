@@ -3,6 +3,8 @@
 // para que Hannah (y el usuario, vía el panel xterm) corran comandos con estado (cd/env),
 // SSH e interactivos. Salida en vivo a los suscriptores (el panel) + captura para el LLM.
 import os from 'os';
+import path from 'node:path';
+import fs from 'node:fs';
 import pty from 'node-pty';
 import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger.js';
@@ -12,7 +14,9 @@ const sessions = new Map();   // sessionId -> { pty, subs:Set<send>, lastData }
 function create(sessionId) {
   // Shell por OS: Windows -> PowerShell/cmd; Linux/Mac -> login shell del usuario.
   const isWin = process.platform === 'win32';
-  const shell = isWin ? (process.env.COMSPEC || 'powershell.exe') : (process.env.SHELL || 'bash');
+  // Windows: PowerShell si esta (siempre, en 10/11), y cmd solo de respaldo; COMSPEC apunta a cmd.
+  const psPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const shell = isWin ? (fs.existsSync(psPath) ? psPath : (process.env.COMSPEC || 'cmd.exe')) : (process.env.SHELL || 'bash');
   const args = isWin ? [] : ['-l'];
   // Sin secretos en el shell: las API keys del backend no tienen por qué verlas los comandos
   // (un `env` en el panel, una skill, o un modelo con mala intención las leería).

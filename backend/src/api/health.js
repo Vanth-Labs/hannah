@@ -30,6 +30,8 @@ export const getHealth = async (req, res) => {
     },
     // Las "manos". `healthy` sí es real (viene del stream de eventos), a diferencia de los
     // sidecars de arriba, que solo reflejan la config.
+    // Si puede tocar la maquina (terminal real, comandos): lo muestra la tarjeta Manos.
+    tools: { enabled: !!config.tools.enabled, systemControl: !!config.tools.systemControl },
     agent: config.agent.enabled
       ? { enabled: true, healthy: agentHealthy(), url: config.agent.url, tasks: agentTasks().length }
       : { enabled: false },

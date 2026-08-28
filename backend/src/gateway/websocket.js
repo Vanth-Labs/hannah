@@ -131,7 +131,7 @@ export const initWebSocketGateway = (httpServer) => {
                     // Sin el flag no se crea ni se escribe en la terminal.
                     case 'TERMINAL_START':
                         if (!config.tools.systemControl) {
-                            safeSend({ type: 'error', message: 'terminal deshabilitada (activá TOOLS_SYSTEM_CONTROL)' });
+                            safeSend({ type: 'error', code: 'terminal_disabled', message: 'terminal apagada: activá "Puede actuar en este PC" en ⚙ → Manos' });
                             break;
                         }
                         if (!detachTerminal) detachTerminal = terminalAttach(sessionId, safeSend);

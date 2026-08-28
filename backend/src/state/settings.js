@@ -24,6 +24,9 @@ const ALLOWED = {
   sense: ['url', 'token'],
   // The first-run choice: 'local' (Ollama) or 'cloud' (a provider). Vision and memory recall follow it.
   brain: ['mode'],
+  // "Puede actuar en este PC": the real terminal and the free-form commands, switched from the
+  // ⚙ panel (Manos card). Booleans; false is a value, not a blank.
+  tools: ['enabled', 'systemControl'],
 };
 
 // Secretos: nunca vuelven al navegador (se redactan a hasApiKey/hasToken).
