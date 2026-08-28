@@ -111,7 +111,9 @@ def test_la_carpeta_data_del_backend_esta_denegada_sin_variable_de_entorno():
     assert faithful is named_like_installer, "el port fiel deniega exactamente cuando la carpeta se llama hannah-backend"
     with pytest.raises(sensors.DeniedPath) as denial:
         sensors.classify_path(target)
-    assert str(denial.value).endswith("is a protected directory")
+    # La razon depende de quien lo atrapo primero: la regla compilada (carpeta hannah-backend/)
+    # o la regla local del sidecar (carpeta backend/). Denegado es lo que importa.
+    assert str(denial.value).endswith("is a protected directory") or "Hannah's own data" in str(denial.value)
 
 
 def test_sin_asset_todo_lo_que_lleve_ruta_falla_cerrado(monkeypatch):
