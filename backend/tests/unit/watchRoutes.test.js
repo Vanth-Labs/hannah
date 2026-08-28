@@ -197,15 +197,17 @@ describe('el HUD: lo suyo entra y sale por el socket', () => {
     const settle = () => new Promise((r) => setTimeout(r, 80));
 
     test('al conectarse ve las vigilancias armadas, y las desarma con WATCH_DISARM', async () => {
-        rows = [row('w_1')];
+        // La sesión se crea PRIMERO porque la fila del sidecar la nombra dueña: la etiqueta viaja
+        // solo hacia quien armó (ver el test de más abajo), así que sin dueña no habría qué afirmar.
+        const { sessionId } = conversationManager.createSession();
+        rows = [row('w_1', { sessionId })];
         hooks.onEvent({ v: 'sense.v1', watchId: 'w_1', seq: 1, ts: Date.now(), type: 'watch.armed',
             data: { label: 'the training', rung: 'R2', sensorKind: 'file', periodMs: 15000, expiresAt: rows[0].expiresAt, tier: 'observe' } });
         await senseBridge._settle();
 
-        const { sessionId } = conversationManager.createSession();
         const { ws, got } = await connect(sessionId);
         await settle();
-        expect(got.find((m) => m.type === 'watch_armed')).toMatchObject({ watchId: 'w_1', label: 'the training', tier: 'observe' });
+        expect(got.find((m) => m.type === 'watch_armed')).toMatchObject({ watchId: 'w_1', mine: true, label: 'the training', tier: 'observe' });
         expect(got.find((m) => m.type === 'watch_state')).toMatchObject({ watchId: 'w_1', state: 'armed' });
 
         ws.send(JSON.stringify({ type: 'WATCH_DISARM', watchId: 'w_1' }));
@@ -233,9 +235,9 @@ describe('el HUD: lo suyo entra y sale por el socket', () => {
     // vez que el sidecar se reinicia: vuelve `suspended`, y una suspendida no anuncia nada. Como
     // una vigilancia sana tampoco emite eventos, sin preguntar no hay forma de enterarse.
     test('ve también las que el sidecar tiene y este proceso nunca oyó anunciar', async () => {
-        rows = [row('w_solo', { label: 'el render', state: 'suspended', rung: 'R3', sensorKind: 'logmatch',
-            lastSampleAt: 4321, samplesOk: 7, fires: 2 })];
         const { sessionId } = conversationManager.createSession();
+        rows = [row('w_solo', { label: 'el render', state: 'suspended', rung: 'R3', sensorKind: 'logmatch',
+            lastSampleAt: 4321, samplesOk: 7, fires: 2, sessionId })];
         const { ws, got } = await connect(sessionId);
         await settle();
 
@@ -251,5 +253,40 @@ describe('el HUD: lo suyo entra y sale por el socket', () => {
         ws.close();
         await settle();
         conversationManager.deleteSession(sessionId);
+    });
+
+    // La fuga de la PANTALLA, hermana de la que el plan §10 cierra en la voz: la lista de
+    // vigilancias es del proceso, así que el sobre `watch_armed` —por evento y, desde la
+    // instantánea del attach, también al conectarse— le llevaba a CUALQUIER HUD el texto libre que
+    // dictó otra persona. En vivo: un HUD que no había armado nada recibió al conectarse la
+    // etiqueta de una vigilancia de una sesión muerta en un arranque anterior del backend.
+    test('la etiqueta solo le llega al HUD que armó; el resto ve la fila sin las palabras', async () => {
+        const owner = conversationManager.createSession().sessionId;
+        const stranger = conversationManager.createSession().sessionId;
+        rows = [row('w_ajena', { label: 'el log de mi entrenamiento privado', sessionId: owner })];
+
+        const a = await connect(owner);
+        await settle();
+        const b = await connect(stranger);
+        await settle();
+
+        // La fuga primero: nada de lo que dictó el dueño puede aparecer en el socket del otro.
+        expect(JSON.stringify(b.got)).not.toContain('privado');
+
+        const theirs = b.got.find((m) => m.type === 'watch_armed' && m.watchId === 'w_ajena');
+        // Lo que SÍ ve el que no armó: que la fila existe (le ocupa un cupo de SENSE_MAX_WATCHES y
+        // explica por qué la persona habló sola), con qué se mira y cómo va. Nunca el texto libre.
+        expect(theirs).toMatchObject({ mine: false, label: null, rung: 'R2', sensorKind: 'file' });
+        expect(b.got.find((m) => m.type === 'watch_state' && m.watchId === 'w_ajena'))
+            .toMatchObject({ state: 'armed' });
+
+        // Y a su dueña sí, entera: esconderla de todos sería el error simétrico.
+        expect(a.got.find((m) => m.type === 'watch_armed' && m.watchId === 'w_ajena'))
+            .toMatchObject({ mine: true, label: 'el log de mi entrenamiento privado' });
+
+        a.ws.close(); b.ws.close();
+        await settle();
+        conversationManager.deleteSession(owner);
+        conversationManager.deleteSession(stranger);
     });
 });

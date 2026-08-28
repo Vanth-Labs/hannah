@@ -119,6 +119,17 @@ function toSession(sessionId, payload) {
 // Las vigilancias son del PROCESO, no de la sesión: cualquier HUD conectado muestra las mismas.
 // Esto es el estado para la pantalla, no la voz — la voz sí está atada (ver eyes()).
 function broadcast(payload) { for (const send of sessions.values()) send(payload); }
+// Igual que broadcast, pero el sobre se ARMA para cada destinatario: hay algo de una vigilancia
+// que no es igual de cierto para todos los que están mirando la pantalla (ver armedMsg).
+function broadcastEach(build) { for (const [sessionId, send] of sessions) send(build(sessionId)); }
+
+/**
+ * ¿Esta vigilancia es de esta sesión? Dueña es la que la armó, y no cambia nunca (fdb2f32).
+ * Sin dueña —armada por REST, o adoptada de un arranque anterior del backend, que se lleva el
+ * mapa de sesiones entero— no es de NADIE: entonces no es de nadie tampoco el texto que alguien
+ * dictó para ella, y `false` es el lado seguro de equivocarse.
+ */
+const owns = (w, sessionId) => Boolean(w.sessionId) && w.sessionId === sessionId;
 
 /**
  * ¿Se le puede HABLAR a esa sesión ahora mismo? Son DOS preguntas y hacen falta las DOS.
@@ -161,7 +172,23 @@ function currentListener(preferred) {
 // del HUD los MEZCLA por watchId, así que repetirlos es idempotente y por eso se pueden reenviar.
 // `sensorKind` viaja acá: es un enum del contrato, nunca contenido observado, y sin él la fila del
 // panel no puede decir con qué se está mirando.
-const armedMsg = (w) => ({ type: 'watch_armed', watchId: w.watchId, label: w.label, rung: w.rung,
+//
+// LA ETIQUETA ES SOLO PARA SU DUEÑA, y por eso este sobre se arma POR DESTINATARIO. `label` es
+// texto libre que dictó una persona ("miráme el log del entrenamiento y avisáme si se para") y la
+// lista de vigilancias es del PROCESO: sin esto, cualquier HUD conectado recibe las palabras de
+// una sesión ajena —en el evento y, desde la instantánea del attach, también al conectarse—,
+// incluso de una sesión que murió en un arranque anterior del backend. Es la misma fuga que el
+// plan §10 cierra en la voz, por el otro canal.
+// Lo que SÍ ve quien no es dueño: que la fila existe, en qué estado está y con qué se está
+// mirando. No es un regalo: esa vigilancia le ocupa uno de los SENSE_MAX_WATCHES cupos y explica
+// por qué la persona habló sola. Esconderla entera haría mentir al panel por omisión hacia el
+// otro lado ("no hay nada vigilado" con algo vigilado).
+// `label: null` va EXPLÍCITO y no ausente: el store del HUD mezcla por watchId y una clave que no
+// viene significa "no cambió", así que omitirla dejaría en pantalla una etiqueta vieja.
+// Y `mine` viaja para que el HUD no tenga que deducir la propiedad de "no vino etiqueta": lo que
+// se dibuja distinto tiene que estar dicho en el sobre.
+const armedMsg = (w, sessionId) => ({ type: 'watch_armed', watchId: w.watchId,
+    mine: owns(w, sessionId), label: owns(w, sessionId) ? w.label : null, rung: w.rung,
     sensorKind: w.sensorKind, tier: w.tier, expiresAt: w.expiresAt });
 const stateMsg = (w) => ({ type: 'watch_state', watchId: w.watchId, state: w.state,
     lastSampleAt: w.lastSampleAt || null, samplesOk: w.samplesOk || 0, fires: w.fires || 0 });
@@ -290,7 +317,7 @@ export async function onEvent(env) {
             w.state = 'armed'; w.blindSpoken = false;
             w.rung = d.rung || w.rung; w.sensorKind = d.sensorKind || w.sensorKind;
             w.tier = d.tier || w.tier; w.expiresAt = d.expiresAt || w.expiresAt;
-            broadcast(armedMsg(w));
+            broadcastEach((sid) => armedMsg(w, sid));
             // Sin narración: la persona YA dijo "listo, miro el log" en el turno que armó.
             break;
 
@@ -482,7 +509,7 @@ async function reconcile() {
         // Terminal y desconocida: no hay nada que dibujar ni nada que narrar. Se ignora en vez de
         // adoptarse para que la lista del HUD no se llene de filas muertas de otro arranque.
         if (!w && terminal(row.state)) continue;
-        if (!w) { w = adopt(row); broadcast(armedMsg(w)); }
+        if (!w) { w = adopt(row); broadcastEach((sid) => armedMsg(w, sid)); }
         w.state = row.state || w.state;
         w.lastSampleAt = row.lastSampleAt ?? w.lastSampleAt;
         w.samplesOk = row.samplesOk ?? w.samplesOk;
@@ -506,8 +533,9 @@ export function attachSession(sessionId, send) {
         // Este socket ve TODAS las vigilancias del proceso, pero no se queda con ninguna: acá había
         // una adopción (`w.sessionId = sessionId` para las huérfanas) y era la mitad tranquila del
         // mismo error que detachSession. La vigilancia es de quien la armó; lo que este HUD recibe
-        // es la PANTALLA, y la voz la decide deliverTrip.
-        send(armedMsg(w));
+        // es la PANTALLA, y la voz la decide deliverTrip. Y ve la FILA, no las palabras: de las que
+        // no son suyas, armedMsg le manda el estado y el sensor sin la etiqueta.
+        send(armedMsg(w, sessionId));
         send(stateMsg(w));
     }
     // Y lo que el sidecar tenga y este proceso no sepa. Va DESPUÉS y no en lugar de lo de arriba:
@@ -523,7 +551,12 @@ export function attachSession(sessionId, send) {
 
 /** `kind` es 'tripped_away' si se lo entrega a su dueña y 'tripped_orphan' si no (ver flushInbox). */
 function replay(sessionId, trip, kind) {
-    toSession(sessionId, { type: 'watch_tripped', watchId: trip.watchId, label: trip.label,
+    // La etiqueta, otra vez, solo para su dueña: en el reenvío huérfano el que escucha NO es quien
+    // la dictó. La VOZ sí la dice ahí, pero envuelta en la frase que aclara que la armó otra
+    // conversación (EYES.tripped_orphan); una fila del panel se lee sin esa frase y se queda en
+    // pantalla mucho después de que la frase terminó.
+    toSession(sessionId, { type: 'watch_tripped', watchId: trip.watchId,
+        label: owns(trip, sessionId) ? trip.label : null,
         at: trip.at, confidence: trip.confidence });
     eyes(sessionId, trip.watchId, kind,
         { label: clean(trip.label, 80), when: clockOf(trip.at), ago: agoOf(trip.at) },
