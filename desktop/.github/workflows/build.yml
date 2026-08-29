@@ -30,7 +30,7 @@ jobs:
           - os: windows-latest
             args: --win nsis
           - os: macos-latest
-            args: --mac dmg --arm64 --x64   # Apple Silicon e Intel, sin firma (ver README)
+            args: --mac dmg --arm64 --x64   # Apple Silicon e Intel, firma ad-hoc con entitlements (ver package.json build.mac)
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout hannah-desktop
@@ -63,13 +63,32 @@ jobs:
       - name: Build desktop installer
         working-directory: hannah-desktop
         env:
-          # Sin firma de código (personal); evita que electron-builder busque certificados.
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Sin certificado (personal): en Linux/Windows evita que electron-builder busque uno.
+          # En macOS NO se pone: anula la identidad ad-hoc ("-") de build.mac, y sin firma ni
+          # entitlements macOS nunca pide el micro (TCC deniega en silencio).
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.os != 'macos-latest' }}
         run: |
           npm ci
           # --publish never: en CI electron-builder intenta subir él mismo al release y exige
           # GH_TOKEN; publicar es trabajo del job `release`, con los tres SO juntos.
           npx electron-builder ${{ matrix.args }} --publish never
+
+      # Que no vuelva a salir un DMG sin firma: la app tiene que estar firmada (ad-hoc) y llevar
+      # el entitlement del micro, si no macOS no muestra el prompt y Hannah queda sorda sin error.
+      - name: Verificar firma y entitlements (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: hannah-desktop
+        run: |
+          set -e
+          found=0
+          for app in dist/mac*/Hannah.app; do
+            [ -d "$app" ] || continue
+            found=1
+            codesign -dv "$app" 2>&1 | grep -q 'Signature=adhoc' || { echo "FAIL: $app no esta firmada"; exit 1; }
+            codesign -d --entitlements - "$app" 2>/dev/null | grep -q 'com.apple.security.device.audio-input' || { echo "FAIL: $app sin entitlement audio-input"; exit 1; }
+            echo "ok: $app firmada ad-hoc con entitlements"
+          done
+          [ "$found" = 1 ] || { echo "FAIL: no hay Hannah.app en dist/mac*"; exit 1; }
 
       - name: Subir artefactos
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

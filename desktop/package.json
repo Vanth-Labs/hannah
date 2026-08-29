@@ -1,6 +1,6 @@
 {
   "name": "hannah-desktop",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "Hannah — overlay de escritorio universal (Electron: Windows/Mac/Linux)",
   "main": "main.js",
   "type": "commonjs",
@@ -62,7 +62,17 @@
       "target": [
         "dmg"
       ],
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "identity": "-",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Hannah listens when you talk to her.",
+        "NSCameraUsageDescription": "Hannah looks through the camera when you ask her to."
+      }
     }
   },
   "allowScripts": {
