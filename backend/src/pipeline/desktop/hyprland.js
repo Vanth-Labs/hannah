@@ -48,6 +48,12 @@ export async function close(queries) {
 
 export async function place(win, x, y, w, h) {
   await sh(`hyprctl dispatch setfloating "address:${win.id}"`);
+  // The window must BELONG to the target monitor: movewindowpixel only draws it there, and
+  // Hyprland routes clicks by the workspaces of the monitor under the cursor, so on another
+  // screen it was visible but clicks fell through to whatever was behind.
+  const cx = x + w / 2, cy = y + h / 2;
+  const target = (await hypr('monitors'))?.find((m) => cx >= m.x && cx < m.x + m.width / (m.scale || 1) && cy >= m.y && cy < m.y + m.height / (m.scale || 1));
+  if (target?.activeWorkspace?.id != null) await sh(`hyprctl dispatch movetoworkspacesilent "${target.activeWorkspace.id},address:${win.id}"`);
   await sh(`hyprctl dispatch resizewindowpixel "exact ${w} ${h},address:${win.id}"`);
   await sh(`hyprctl dispatch movewindowpixel "exact ${x} ${y},address:${win.id}"`);
   await sh(`hyprctl dispatch pin "address:${win.id}"`);
