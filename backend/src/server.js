@@ -37,7 +37,7 @@ app.use(helmet({
 const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 app.use(cors({
   origin: (origin, cb) => cb(null, !origin || config.corsOrigin.includes(origin) || LOOPBACK_ORIGIN.test(origin)),
-  methods: ['GET', 'POST', 'DELETE'],
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'],   // PUT: avatar upload (without it the preflight fails: 'Failed to fetch')
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
