@@ -27,11 +27,8 @@ function floatToWav(float32, sampleRate = 16000) {
     return buf;
 }
 
-const MAX_UTTERANCE_MS = 20000;
-
 export function useVoiceActivity({ enabled, onUtterance, onInterrupt, onSpeechStart }) {
     const vadRef = useRef(null);
-    const capRef = useRef(null);
     // refs a los callbacks para no re-crear el VAD en cada render
     const cbUtter = useRef(onUtterance); cbUtter.current = onUtterance;
     const cbStart = useRef(onSpeechStart); cbStart.current = onSpeechStart;
@@ -47,30 +44,27 @@ export function useVoiceActivity({ enabled, onUtterance, onInterrupt, onSpeechSt
                     baseAssetPath: '/vad/',
                     onnxWASMBasePath: '/vad/',
                     model: 'v5',
-                    // Ajustes de robustez:
-                    // - umbral más sensible para captar el inicio de tu voz
+                    // Robustez (vad-web 0.0.30 lee estas opciones en MILISEGUNDOS; los nombres
+                    // antiguos en frames los ignora sin avisar):
+                    // - umbral sensible para captar el inicio de tu voz
                     positiveSpeechThreshold: 0.35,
-                    negativeSpeechThreshold: 0.25,
-                    // - esperar más antes de dar por terminada la frase (no cortar en pausas)
-                    redemptionFrames: 18,
-                    // - pocos frames para no perder palabras cortas ("abre", "sí")
-                    minSpeechFrames: 3,
-                    // - capturar el arranque de la palabra (que el ASR no pierda la primera sílaba)
-                    preSpeechPadFrames: 4,
-                    // - al pausar en mitad de un enunciado, entregarlo (es lo que usa el tope de abajo)
-                    submitUserSpeechOnPause: true,
+                    // - el silencio se decide con el MISMO umbral: si el de silencio es mas bajo, un
+                    //   micro con ruido de fondo deja la probabilidad en la franja gris entre ambos y
+                    //   el enunciado no se cierra nunca (no llega SPEECH_END: "no me escucha")
+                    negativeSpeechThreshold: 0.35,
+                    // - 1.4 s sin voz cierran la frase (no cortar en pausas normales)
+                    redemptionMs: 1400,
+                    // - poco minimo de voz para no perder palabras cortas ("abre", "si")
+                    minSpeechMs: 250,
+                    // - capturar el arranque de la palabra (que el ASR no pierda la primera silaba)
+                    preSpeechPadMs: 800,
                     onSpeechStart: () => {
                         cbStart.current?.();   // SIEMPRE: el backend stampa el inicio del enunciado
                         if (useHannahStore.getState().isSpeaking) cbInterrupt.current?.();
-                        // Tope de enunciado: con ruido de fondo por encima del umbral de silencio el
-                        // VAD nunca ve el final, no llega SPEECH_END y parece que no escucha. A los
-                        // 20 s se cierra el enunciado (pause entrega el audio) y se sigue escuchando.
-                        clearTimeout(capRef.current);
-                        capRef.current = setTimeout(() => {
-                            try { vadRef.current?.pause(); vadRef.current?.start(); } catch { /* noop */ }
-                        }, MAX_UTTERANCE_MS);
                     },
-                    onSpeechEnd: (audio) => { clearTimeout(capRef.current); cbUtter.current?.(floatToWav(audio)); },
+                    onSpeechEnd: (audio) => { cbUtter.current?.(floatToWav(audio)); },
+                    // arranque sin voz suficiente detras (un golpe, una tos): no hay enunciado
+                    onVADMisfire: () => { console.info('[vad] misfire: too short to be speech'); },
                 });
                 if (cancelled) { vad.destroy?.(); return; }
                 vadRef.current = vad;
@@ -85,7 +79,6 @@ export function useVoiceActivity({ enabled, onUtterance, onInterrupt, onSpeechSt
 
         return () => {
             cancelled = true;
-            clearTimeout(capRef.current);
             try { vadRef.current?.pause?.(); vadRef.current?.destroy?.(); } catch { /* noop */ }
             vadRef.current = null;
         };
