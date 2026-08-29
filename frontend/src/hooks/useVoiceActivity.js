@@ -27,8 +27,11 @@ function floatToWav(float32, sampleRate = 16000) {
     return buf;
 }
 
+const MAX_UTTERANCE_MS = 20000;
+
 export function useVoiceActivity({ enabled, onUtterance, onInterrupt, onSpeechStart }) {
     const vadRef = useRef(null);
+    const capRef = useRef(null);
     // refs a los callbacks para no re-crear el VAD en cada render
     const cbUtter = useRef(onUtterance); cbUtter.current = onUtterance;
     const cbStart = useRef(onSpeechStart); cbStart.current = onSpeechStart;
@@ -54,11 +57,20 @@ export function useVoiceActivity({ enabled, onUtterance, onInterrupt, onSpeechSt
                     minSpeechFrames: 3,
                     // - capturar el arranque de la palabra (que el ASR no pierda la primera sílaba)
                     preSpeechPadFrames: 4,
+                    // - al pausar en mitad de un enunciado, entregarlo (es lo que usa el tope de abajo)
+                    submitUserSpeechOnPause: true,
                     onSpeechStart: () => {
                         cbStart.current?.();   // SIEMPRE: el backend stampa el inicio del enunciado
                         if (useHannahStore.getState().isSpeaking) cbInterrupt.current?.();
+                        // Tope de enunciado: con ruido de fondo por encima del umbral de silencio el
+                        // VAD nunca ve el final, no llega SPEECH_END y parece que no escucha. A los
+                        // 20 s se cierra el enunciado (pause entrega el audio) y se sigue escuchando.
+                        clearTimeout(capRef.current);
+                        capRef.current = setTimeout(() => {
+                            try { vadRef.current?.pause(); vadRef.current?.start(); } catch { /* noop */ }
+                        }, MAX_UTTERANCE_MS);
                     },
-                    onSpeechEnd: (audio) => { cbUtter.current?.(floatToWav(audio)); },
+                    onSpeechEnd: (audio) => { clearTimeout(capRef.current); cbUtter.current?.(floatToWav(audio)); },
                 });
                 if (cancelled) { vad.destroy?.(); return; }
                 vadRef.current = vad;
@@ -73,6 +85,7 @@ export function useVoiceActivity({ enabled, onUtterance, onInterrupt, onSpeechSt
 
         return () => {
             cancelled = true;
+            clearTimeout(capRef.current);
             try { vadRef.current?.pause?.(); vadRef.current?.destroy?.(); } catch { /* noop */ }
             vadRef.current = null;
         };
