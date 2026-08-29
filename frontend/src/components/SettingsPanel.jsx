@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useHannahStore, WATCH_TERMINAL } from '../store/hannahStore.js';
 import { API_BASE, apiFetch } from '../lib/api.js';
 import { watchLook } from './WatchPill.jsx';
+import { Select } from './Select.jsx';
 
 import { CLOUD, LOCAL, isLocalUrl, cloudOf } from '../lib/brain.js';
 
@@ -185,10 +186,8 @@ function BrainCard({ form, saved, setField }) {
             ) : (
                 <div>
                     <label style={S.label}>Proveedor</label>
-                    <select style={S.input} value={cloud?.id || ''} onChange={(e) => choose(CLOUD.find((c) => c.id === e.target.value) || CLOUD[0])}>
-                        {!cloud && <option value="">Otro (ver Avanzado)</option>}
-                        {CLOUD.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-                    </select>
+                    <Select style={S.input} value={cloud?.id || ''} onChange={(v) => choose(CLOUD.find((c) => c.id === v) || CLOUD[0])}
+                        options={[...(!cloud ? [{ value: '', label: 'Otro (ver Avanzado)' }] : []), ...CLOUD.map((c) => ({ value: c.id, label: c.label }))]} />
                     <label style={S.label}>API key {cloud && <a href={cloud.keys} target="_blank" rel="noreferrer" style={{ color: '#7ab8e8' }}>(dónde conseguirla)</a>}</label>
                     <input style={S.input} type="password" value={form.llm?.apiKey ?? ''}
                         placeholder={hasKey ? '•••••• (guardada)' : 'pega tu key'}
@@ -223,14 +222,12 @@ function VoiceCard({ form, setField }) {
             ) : (
                 <div>
                     <label style={S.label}>Idioma</label>
-                    <select style={S.input} value={groups[lang] ? lang : (langs[0] || '')} onChange={(e) => pickLang(e.target.value)}>
-                        {langs.map((p) => <option key={p} value={p}>{LANG_BY_PREFIX[p] || p.toUpperCase()}</option>)}
-                    </select>
+                    <Select style={S.input} value={groups[lang] ? lang : (langs[0] || '')} onChange={pickLang}
+                        options={langs.map((p) => ({ value: p, label: LANG_BY_PREFIX[p] || p.toUpperCase() }))} />
                     <label style={S.label}>Voz</label>
                     <div style={{ display: 'flex', gap: '6px' }}>
-                        <select style={S.input} value={current} onChange={(e) => setField('tts', 'voiceId', e.target.value)}>
-                            {(groups[lang] || []).map((v) => <option key={v} value={v}>{voiceName(v)}</option>)}
-                        </select>
+                        <Select style={S.input} value={current} onChange={(v) => setField('tts', 'voiceId', v)}
+                            options={(groups[lang] || []).map((v) => ({ value: v, label: voiceName(v) }))} />
                         <ListenButton voice={current} />
                     </div>
                 </div>
@@ -652,9 +649,8 @@ function AdvancedSections({ form, saved, setField, applyPreset }) {
                     <div key={fld.name}>
                         <label style={S.label}>{fld.label}</label>
                         {fld.type === 'select' ? (
-                            <select style={S.input} value={val} onChange={(e) => setField(s.key, fld.name, e.target.value)}>
-                                {fld.options.map((o) => <option key={o} value={o}>{o}</option>)}
-                            </select>
+                            <Select style={S.input} value={val} onChange={(v) => setField(s.key, fld.name, v)}
+                                options={fld.options.map((o) => ({ value: o, label: o }))} />
                         ) : fld.type === 'textarea' ? (
                             <textarea
                                 style={{ ...S.input, minHeight: '80px', resize: 'vertical', lineHeight: 1.4 }}

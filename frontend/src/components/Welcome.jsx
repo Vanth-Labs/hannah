@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../lib/api.js';
 import { CLOUD, cloudOf } from '../lib/brain.js';
 import { useHannahStore } from '../store/hannahStore.js';
+import { Select } from './Select.jsx';
 
 const ACCENT = '#7ab8e8';
 const S = {
@@ -148,9 +149,8 @@ export function Welcome() {
                     <div style={S.card}>
                         <div style={S.hint}>Más lista y sin descargas, en cualquier máquina. Lo que le digas viaja al proveedor. La key se guarda en tu PC y nunca se muestra.</div>
                         <label style={S.label}>Proveedor</label>
-                        <select style={S.input} value={provider.id} onChange={(e) => { setProvider(CLOUD.find((c) => c.id === e.target.value) || CLOUD[0]); setModelChoice(null); setAvailable([]); }}>
-                            {CLOUD.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-                        </select>
+                        <Select style={S.input} value={provider.id} onChange={(v) => { setProvider(CLOUD.find((c) => c.id === v) || CLOUD[0]); setModelChoice(null); setAvailable([]); }}
+                            options={CLOUD.map((c) => ({ value: c.id, label: c.label }))} />
                         <label style={S.label}>Modelo</label>
                         <input style={S.input} type="text" value={model} onChange={(e) => setModelChoice(e.target.value)} />
                         {available.length > 0 && (
