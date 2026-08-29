@@ -32,7 +32,7 @@ language-tags==1.3.1
 markdown-it-py==4.2.0
 mdurl==0.1.2
 numpy==2.4.6
-onnxruntime-gpu==1.27.0  # CUDA EP para Kokoro; las libs cuDNN/cuBLAS se precargan del venv de motion
+onnxruntime-gpu==1.27.0  # CUDA EP para Kokoro; las libs cuDNN/cuBLAS se precargan del venv de motion (common.py), sin torch aqui
 packaging==26.2
 phonemizer-fork==3.3.1
 protobuf==7.35.0
@@ -65,5 +65,5 @@ typing_extensions==4.15.0
 uritemplate==4.2.0
 uvicorn==0.48.0
 # Vision sidecar (YOLO) — instala también torch como dependencia
-ultralytics
-pillow
+# YOLO (VISION_PROVIDER=yolo, off by default) lives in requirements-vision-yolo.txt: ultralytics pulls
+# torch, triton, the CUDA libs, opencv, av and polars (about 5 GB) that the default install never uses.

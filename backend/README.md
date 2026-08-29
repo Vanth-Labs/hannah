@@ -28,7 +28,7 @@ npm run dev                 # nodemon on :3001   (npm start = node src/server.js
 ```bash
 npm run sidecar:tts         # Kokoro on :8002  ← required for her to speak
 npm run sidecar:asr         # faster-whisper on :8001 (if ASR_PROVIDER=local)
-npm run sidecar:vision      # YOLOv8 on :8003 — ONLY with VISION_PROVIDER=yolo (see below)
+npm run sidecar:vision      # YOLOv8 on :8003 — ONLY with VISION_PROVIDER=yolo; first: uv pip install -p sidecar/.venv/bin/python -r sidecar/requirements-vision-yolo.txt
 npm run sidecar:motion      # EMAGE on :8004 (only if MOTION_PROVIDER=emage)
 npm run sidecar:sense       # the watches on :8007 (the launcher starts it with the rest)
 ```
