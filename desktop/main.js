@@ -315,6 +315,13 @@ async function placeAt(rect) {
   desired = rect;
   const addr = await hyprAddress();
   if (!addr) { win.setBounds(rect); return; }
+  // Primero cambiarla de workspace al del monitor destino. `movewindowpixel` solo la DIBUJA
+  // allí: Hyprland la sigue teniendo en el workspace del monitor de origen, y el reparto de
+  // clics mira los workspaces del monitor bajo el cursor, así que en la otra pantalla se veía
+  // pero los clics atravesaban a lo que hubiera detrás (medido: el foco iba al navegador).
+  const mons = await monitorRects();
+  const target = monitorContaining({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, mons);
+  if (target?.ws != null) await run('hyprctl', ['dispatch', 'movetoworkspacesilent', `${target.ws},address:${addr}`]);
   await run('hyprctl', ['dispatch', 'resizewindowpixel', `exact ${rect.width} ${rect.height},address:${addr}`]);
   await run('hyprctl', ['dispatch', 'movewindowpixel', `exact ${rect.x} ${rect.y},address:${addr}`]);
 }
@@ -345,6 +352,7 @@ async function monitorRects() {
         x: m.x, y: m.y,
         width: Math.round((girado ? m.height : m.width) / k),
         height: Math.round((girado ? m.width : m.height) / k),
+        ws: m.activeWorkspace?.id,   // para placeAt: la ventana tiene que PERTENECER al monitor destino
       };
     });
     if (ms.length) { monsCache = ms; monsAt = Date.now(); return ms; }

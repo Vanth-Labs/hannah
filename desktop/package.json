@@ -1,6 +1,6 @@
 {
   "name": "hannah-desktop",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "description": "Hannah — overlay de escritorio universal (Electron: Windows/Mac/Linux)",
   "main": "main.js",
   "type": "commonjs",
