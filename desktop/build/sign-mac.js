@@ -9,35 +9,37 @@ const fs = require('fs');
 const path = require('path');
 
 const ENTITLEMENTS = path.join(__dirname, 'entitlements.mac.plist');
-const NESTED = /\.(app|framework|dylib|node)$/;
 
-function sign(target) {
-  execFileSync('codesign', ['--force', '--sign', '-', '--options', 'runtime', '--entitlements', ENTITLEMENTS, target], { stdio: 'pipe' });
+function codesign(args, target) {
+  try {
+    execFileSync('codesign', [...args, target], { stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    throw new Error(`sign-mac: codesign failed on ${target}\n${(e.stderr || '').toString()}`);
+  }
 }
 
-// depth-first: children before their parent bundle
-function walk(dir, out) {
-  for (const name of fs.readdirSync(dir)) {
-    const p = path.join(dir, name);
-    let st;
-    try { st = fs.lstatSync(p); } catch { continue; }
-    if (st.isSymbolicLink()) continue;
-    if (st.isDirectory()) walk(p, out);
-    if (NESTED.test(name)) out.push(p);
-  }
+function list(dir, re) {
+  try { return fs.readdirSync(dir).filter((n) => re.test(n)).map((n) => path.join(dir, n)); } catch { return []; }
 }
 
 exports.default = async function afterSign(context) {
   if (context.electronPlatformName !== 'darwin') return;
   const app = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
   if (!fs.existsSync(app)) throw new Error(`sign-mac: ${app} not found`);
-  const nested = [];
-  walk(path.join(app, 'Contents', 'Frameworks'), nested);
-  for (const t of nested) sign(t);
-  sign(app);
-  const ents = execFileSync('codesign', ['-d', '--entitlements', '-', app], { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
-  if (!/com\.apple\.security\.device\.audio-input/.test(ents)) {
-    throw new Error('sign-mac: Hannah.app is signed but the audio-input entitlement is missing');
+  const fw = path.join(app, 'Contents', 'Frameworks');
+  // 1) frameworks (Electron Framework and friends): --deep signs the dylibs and helpers they
+  //    carry inside; frameworks carry no entitlements
+  for (const f of list(fw, /\.framework$/)) codesign(['--force', '--deep', '--sign', '-', '--options', 'runtime'], f);
+  // 2) helper apps (Hannah Helper (GPU/Renderer/Plugin).app): Chromium opens the audio device
+  //    from these, so they need the same entitlements as the main app
+  const helpers = list(fw, /\.app$/);
+  for (const h of helpers) codesign(['--force', '--deep', '--sign', '-', '--options', 'runtime', '--entitlements', ENTITLEMENTS], h);
+  // 3) the outer bundle, last
+  codesign(['--force', '--sign', '-', '--options', 'runtime', '--entitlements', ENTITLEMENTS], app);
+  for (const t of [app, ...helpers]) {
+    const ents = execFileSync('codesign', ['-d', '--entitlements', '-', t], { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+    if (!/com\.apple\.security\.device\.audio-input/.test(ents)) throw new Error(`sign-mac: ${t} is signed but the audio-input entitlement is missing`);
   }
-  console.log(`  • sign-mac: ${path.basename(app)} ad-hoc signed with mic/camera entitlements (${nested.length} nested items)`);
+  execFileSync('codesign', ['--verify', '--deep', '--strict', app], { stdio: ['ignore', 'pipe', 'pipe'] });
+  console.log(`  • sign-mac: ${path.basename(app)} + ${helpers.length} helpers ad-hoc signed with mic/camera entitlements`);
 };
