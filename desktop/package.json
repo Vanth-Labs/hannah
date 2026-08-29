@@ -73,7 +73,8 @@
         "NSMicrophoneUsageDescription": "Hannah listens when you talk to her.",
         "NSCameraUsageDescription": "Hannah looks through the camera when you ask her to."
       }
-    }
+    },
+    "afterSign": "build/sign-mac.js"
   },
   "allowScripts": {
     "electron@33.4.11": true
