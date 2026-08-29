@@ -174,7 +174,7 @@ export function VrmAvatar({ url = '/avatar.glb' }) {
         const headV = new THREE.Vector3();
         node('head')?.getWorldPosition(headV); vrm.scene.worldToLocal(headV);
         const headRestY = node('head') ? headV.y : new THREE.Box3().setFromObject(vrm.scene).max.y - 0.2;
-        if (import.meta.env.DEV) window.__hannahVrm = { vrm, group };   // inspección en dev (capturas, consola)
+        window.__hannahVrm = { vrm, group, offsets, abduct, restQuat };   // inspeccion (capturas, consola, diagnostico de la build)
         const lookTarget = new THREE.Object3D();
         if (vrm.lookAt) { vrm.lookAt.target = lookTarget; vrm.lookAt.autoUpdate = true; }
 

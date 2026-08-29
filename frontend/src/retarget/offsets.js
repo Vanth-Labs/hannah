@@ -51,6 +51,13 @@ export function quatFromMatrix3(m3, out = new THREE.Quaternion()) {
  * rig, whose rest rotations are identity for every VRM.
  */
 export function humanoidRestPositions(vrm) {
+    // The rig must be AT REST when sampled, and it is not always: drei caches the VRM object
+    // by URL, so a second rig build (StrictMode, a remount, a URL change) measures a model
+    // whose hips already carry the 180 degree facing and whose arms are already posed. Sampled
+    // like that, the arm direction comes out mirrored and the idle pose lands arms up (or the
+    // offsets end up identity: T-pose). Resetting first makes the computation idempotent.
+    vrm.humanoid.resetNormalizedPose();
+    vrm.humanoid.resetRawPose();
     vrm.scene.updateMatrixWorld(true);
     const pos = {};
     const v = new THREE.Vector3();
