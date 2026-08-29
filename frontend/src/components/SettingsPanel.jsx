@@ -730,6 +730,12 @@ export function SettingsPanel({ onClose, onWatchDisarm }) {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
             });
             const d = await r.json();
+            if (!r.ok) {
+                // el backend valido el cerebro con el proveedor y no cuadra: decir por que
+                const list = d.available?.length ? ` Disponibles: ${d.available.join(', ')}` : '';
+                setStatus(d.error === 'bad_key' ? 'el proveedor rechazo la API key' : `${d.message || 'no se pudo guardar'}.${list}`);
+                return;
+            }
             setSaved(d);
             // limpiar los campos de key (ya guardados; el placeholder mostrará "guardada")
             setForm((prev) => {
