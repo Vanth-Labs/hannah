@@ -29,3 +29,32 @@ describe('applySettings — agent section', () => {
     expect(view.hasToken).toBe(true);
   });
 });
+
+describe('writeSettings validates a cloud brain before saving', () => {
+  const originalLlm = { ...config.llm };
+  const originalFetch = global.fetch;
+  afterEach(() => { Object.assign(config.llm, originalLlm); global.fetch = originalFetch; });
+  const res = () => { const r = { code: 0, body: null }; r.status = (c) => { r.code = c; return r; }; r.json = (b) => { r.body = b; return r; }; return r; };
+  const providerWith = (ids) => async () => ({ ok: true, status: 200, json: async () => ({ data: ids.map((id) => ({ id })) }) });
+
+  test('a model the provider no longer serves is refused with the list of what it has', async () => {
+    const { writeSettings } = await import('../../src/api/settings.js');
+    config.llm.baseUrl = 'https://api.groq.com/openai/v1'; config.llm.apiKey = 'gsk_x';
+    global.fetch = providerWith(['openai/gpt-oss-20b', 'whisper-large-v3']);
+    const r = res();
+    await writeSettings({ body: { llm: { model: 'llama-3.3-70b-versatile' } } }, r);
+    expect(r.code).toBe(400);
+    expect(r.body.error).toBe('model_not_found');
+    expect(r.body.available).toEqual(['openai/gpt-oss-20b']);
+    expect(config.llm.model).toBe(originalLlm.model);   // nothing was applied
+  });
+
+  test('a local brain (Ollama) is never validated against a provider', async () => {
+    const { writeSettings } = await import('../../src/api/settings.js');
+    global.fetch = async () => { throw new Error('must not be called'); };
+    const r = res();
+    await writeSettings({ body: { llm: { baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5:7b' } } }, r);
+    expect(r.code).toBe(200);
+    expect(config.llm.model).toBe('qwen2.5:7b');
+  });
+});
