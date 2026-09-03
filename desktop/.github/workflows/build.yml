@@ -3,7 +3,7 @@ name: build
 # Buildea Hannah (Electron) para Linux, Windows y Mac en runners nativos.
 # Dispara al pushear un tag v* (p.ej. v1.0.1) o a mano (workflow_dispatch).
 # NOTA: este repo (hannah-desktop) empaqueta el frontend (repo aparte). El job clona
-# Hannah-Motion-Lab/frontend como hermano, lo buildea, y luego arma el instalador.
+# Vanth-Labs/frontend como hermano, lo buildea, y luego arma el instalador.
 on:
   push:
     tags: ['v*']
@@ -43,7 +43,7 @@ jobs:
       - name: Checkout frontend
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: Hannah-Motion-Lab/frontend
+          repository: Vanth-Labs/frontend
           path: hannah-frontend
           persist-credentials: false
 
@@ -118,7 +118,7 @@ jobs:
           path: artifacts
           merge-multiple: true
       # Sumas que verifican los instaladores antes de instalar la app. (Los pesos del modelo de
-      # gestos viven en su propio release, Hannah-Motion-Lab/motion-model `models`, con sus sumas.)
+      # gestos viven en su propio release, Vanth-Labs/motion-model `models`, con sus sumas.)
       - name: SHA256SUMS
         run: cd artifacts && sha256sum *.AppImage *.deb *.exe *.dmg 2>/dev/null > SHA256SUMS; cat SHA256SUMS
       - name: Publicar release
