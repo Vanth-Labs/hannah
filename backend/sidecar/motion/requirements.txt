@@ -1,0 +1,13 @@
+# Motion sidecar (EMAGE / PantoMatrix) — venv at Hannah-Motion/.venv (uv, Python 3.12)
+# torch MUST come from the cu128 index on Blackwell GPUs (RTX 50xx, sm_120):
+#   uv pip install torch --index-url https://download.pytorch.org/whl/cu128
+torch
+librosa
+soundfile
+numpy
+transformers<5   # EMAGE model classes use the transformers 4.x from_pretrained API
+omegaconf
+einops
+fastapi
+uvicorn
+python-multipart

@@ -1,0 +1,9 @@
+# The YOLO vision provider (VISION_PROVIDER=yolo, sidecar on :8003). NOT installed by default:
+# the default provider is a VLM through Ollama and needs nothing from here. ultralytics pulls torch,
+# triton, the CUDA libs, opencv, av and polars (about 5 GB), so it is opt-in:
+#   uv pip install -p sidecar/.venv/bin/python -r sidecar/requirements-vision-yolo.txt   (Linux/macOS)
+#   uv pip install -p sidecar\.venv\Scripts\python.exe -r sidecar\requirements-vision-yolo.txt   (Windows)
+# then `npm run sidecar:vision` (weights: sidecar/vision/yolov8n.pt, see the backend README).
+-r requirements.txt
+ultralytics
+pillow
