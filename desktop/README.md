@@ -1,4 +1,4 @@
-# hannah-desktop
+# desktop
 
 Hannah's **Electron** app: the floating overlay, and the universal path to making it behave the
 same on Windows, macOS and every Linux desktop (GNOME, KDE, XFCE, Cinnamon, Hyprland…).
@@ -10,7 +10,7 @@ when it is outside the window**.
 ```bash
 npm install
 npm run start:dev     # uses the Vite dev server on :5173 (started by ./hannah)
-npm start             # serves the packaged dist; first: (cd ../hannah-frontend && npm run build)
+npm start             # serves the packaged dist; first: (cd ../frontend && npm run build)
 npm run lint
 npm run build:linux   # .AppImage / .deb
 npm run build:win     # .exe  — requires Windows or Wine

@@ -495,7 +495,7 @@ function createWindow() {
   // app no arrancó". Decir qué pasó y mostrarla igual, así el fallo se ve.
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error(`[hannah] no cargó ${url} (${code} ${desc})`);
-    if (DEV) console.error('[hannah] ¿está corriendo el frontend? -> cd hannah-frontend && npm run dev');
+    if (DEV) console.error('[hannah] ¿está corriendo el frontend? -> cd frontend && npm run dev');
     if (!win.isVisible()) win.show();
   });
   win.webContents.on('render-process-gone', (_e, d) => console.error('[hannah] el renderer murió:', d.reason));
@@ -505,7 +505,7 @@ function createWindow() {
   } else {
     const distDir = app.isPackaged
       ? path.join(process.resourcesPath, 'frontend')   // = build.extraResources[].to (package.json)
-      : path.join(__dirname, '..', 'hannah-frontend', 'dist');
+      : path.join(__dirname, '..', 'frontend', 'dist');
     serveDist(distDir).then((port) => { APP_ORIGINS.add(`http://127.0.0.1:${port}`); win.loadURL(`http://127.0.0.1:${port}/?overlay=1`); });
   }
 

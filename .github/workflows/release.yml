@@ -1,9 +1,9 @@
-name: build
+name: release
 
 # Buildea Hannah (Electron) para Linux, Windows y Mac en runners nativos.
 # Dispara al pushear un tag v* (p.ej. v1.0.1) o a mano (workflow_dispatch).
-# NOTA: este repo (hannah-desktop) empaqueta el frontend (repo aparte). El job clona
-# Vanth-Labs/frontend como hermano, lo buildea, y luego arma el instalador.
+# Monorepo: frontend/ se buildea primero (Electron empaqueta su dist), luego desktop/ arma el
+# instalador. Solo corre por tag o a mano: un push normal no dispara builds de tres SO.
 on:
   push:
     tags: ['v*']
@@ -33,18 +33,9 @@ jobs:
             args: --mac dmg --arm64 --x64   # Apple Silicon e Intel, firma ad-hoc con entitlements (ver package.json build.mac)
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout hannah-desktop
+      - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: hannah-desktop
-          persist-credentials: false
-
-      # El frontend es un repo PÚBLICO hermano: el GITHUB_TOKEN del job basta para leerlo.
-      - name: Checkout frontend
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: Vanth-Labs/frontend
-          path: hannah-frontend
           persist-credentials: false
 
       - name: Setup Node
@@ -53,7 +44,7 @@ jobs:
           node-version: 20
 
       - name: Build frontend (dist que empaqueta Electron)
-        working-directory: hannah-frontend
+        working-directory: frontend
         # --legacy-peer-deps es OBLIGATORIO en el frontend (vite 5 vs @vitejs/plugin-basic-ssl,
         # que pide vite >=6): con `npm ci` a secas el job falla antes de buildear nada.
         run: |
@@ -61,7 +52,7 @@ jobs:
           npm run build
 
       - name: Build desktop installer
-        working-directory: hannah-desktop
+        working-directory: desktop
         env:
           # Sin certificado (personal): en Linux/Windows evita que electron-builder busque uno.
           # En macOS NO se pone: anula la identidad ad-hoc ("-") de build.mac, y sin firma ni
@@ -77,7 +68,7 @@ jobs:
       # el entitlement del micro, si no macOS no muestra el prompt y Hannah queda sorda sin error.
       - name: Verificar firma y entitlements (macOS)
         if: matrix.os == 'macos-latest'
-        working-directory: hannah-desktop
+        working-directory: desktop
         run: |
           set -e
           found=0
@@ -95,10 +86,10 @@ jobs:
         with:
           name: hannah-${{ matrix.os }}
           path: |
-            hannah-desktop/dist/*.AppImage
-            hannah-desktop/dist/*.deb
-            hannah-desktop/dist/*.exe
-            hannah-desktop/dist/*.dmg
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
           if-no-files-found: ignore
 
   # Con un tag v*, los instaladores de los tres SO se PUBLICAN como release de GitHub. Es lo

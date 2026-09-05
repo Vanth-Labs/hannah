@@ -11,24 +11,23 @@ are `pacman`; on other distros change only that part).
 
 ## 0. Expected structure
 
-Everything lives under a single working folder (the "meta-repo"). The folder names matter: the
-launcher and the venvs assume them.
+Everything lives under one folder: this repo, plus the gesture model (its own repo) cloned
+beside the code. The folder names matter: the launcher and the venvs assume them.
 
 ```
-Hannah-Motion/            ← this repo (launcher + docs)
-├── hannah                ← bash launcher (Super+H)
-├── hannah-backend/       ← repo: backend
-├── hannah-frontend/      ← repo: frontend
-├── hannah-motion-lab/    ← repo: gesture model (optional but recommended)
-├── hannah-desktop/       ← repo: Electron app (optional)
+hannah/                   ← this repo
+├── hannah                ← bash launcher (Super+H); hannah-mac, hannah.ps1 for the other OSes
+├── backend/              ← WS gateway, REST, sidecars
+├── frontend/             ← the avatar (React + three.js)
+├── desktop/              ← the Electron overlay
+├── motion-model/         ← repo Vanth-Labs/motion-model, cloned here (optional but recommended)
+├── agent/                ← repo Vanth-Labs/agent, cloned by `hannah hands on` (optional)
 └── .venv/                ← EMAGE sidecar venv (only if you use MOTION_PROVIDER=emage)
 ```
 
 ```bash
-git clone <url-of-this-repo> Hannah-Motion && cd Hannah-Motion
-git clone https://github.com/Vanth-Labs/backend.git      hannah-backend
-git clone https://github.com/Vanth-Labs/frontend.git     hannah-frontend
-git clone https://github.com/Vanth-Labs/motion-model.git hannah-motion-lab
+git clone https://github.com/Vanth-Labs/hannah.git && cd hannah
+git clone https://github.com/Vanth-Labs/motion-model.git motion-model
 ```
 
 ---
@@ -66,7 +65,7 @@ Check it: `curl -s localhost:11434/api/tags` must list all three.
 ## 3. Backend
 
 ```bash
-cd hannah-backend
+cd backend
 npm install
 cp .env.example .env
 ```
@@ -86,7 +85,7 @@ TOOLS_SYSTEM_CONTROL=true  # REAL TERMINAL — read the security warning further
 ### Python sidecars (ASR, TTS, vision)
 
 ```bash
-cd hannah-backend/sidecar
+cd backend/sidecar
 uv venv .venv --python 3.12          # or: python -m venv .venv
 uv pip install -r requirements.txt   # or: .venv/bin/pip install -r requirements.txt
 ```
@@ -94,7 +93,7 @@ uv pip install -r requirements.txt   # or: .venv/bin/pip install -r requirements
 ### The watch sidecar (hannah-sense, `:8007`) — its own venv, and it has to be its own
 
 ```bash
-cd hannah-backend/sidecar/sense
+cd backend/sidecar/sense
 uv venv .venv --python 3.12 --system-site-packages   # or: python -m venv --system-site-packages .venv
 uv pip install -r requirements.txt                   # or: .venv/bin/pip install -r requirements.txt
 ```
@@ -110,10 +109,10 @@ runtime, silently. Two venvs cost disk; one costs the product.
 ### Voice weights (MANDATORY — without this Hannah doesn't speak)
 
 They are not in git. Download them from the **v1.0** release of `kokoro-onnx` into
-`hannah-backend/sidecar/tts/`:
+`backend/sidecar/tts/`:
 
 ```bash
-cd hannah-backend/sidecar/tts
+cd backend/sidecar/tts
 # kokoro-v1.0.onnx (~311 MB) and voices-v1.0.bin (~27 MB)
 # release: https://github.com/thewh1teagle/kokoro-onnx/releases  (model-files v1.0)
 curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
@@ -126,14 +125,14 @@ else, search for "kokoro-onnx model files v1.0" — the package version is `koko
 ### YOLO (optional)
 
 Only if you're going to use `VISION_PROVIDER=yolo` instead of the default VLM: put `yolov8n.pt` in
-`hannah-backend/sidecar/vision/` (`ultralytics` downloads it the first time it's used).
+`backend/sidecar/vision/` (`ultralytics` downloads it the first time it's used).
 
 ---
 
 ## 4. Frontend
 
 ```bash
-cd hannah-frontend
+cd frontend
 npm install --legacy-peer-deps   # the flag is NOT optional (vite 5 vs plugin-basic-ssl)
 ```
 
@@ -144,7 +143,7 @@ The avatar (`public/avatar.glb`) and the gesture clips already ship in the repo.
 ## 5. Gesture model (so she moves while speaking)
 
 ```bash
-cd hannah-motion-lab
+cd motion-model
 uv venv .venv --python 3.12
 uv pip install -r requirements.txt
 ```
@@ -155,8 +154,8 @@ doesn't start and Hannah speaks **without co-speech gestures** (everything else 
 You need these two files, copied from the machine where it was trained:
 
 ```
-hannah-motion-lab/runs/vae/latest.pt     (~175 MB)
-hannah-motion-lab/runs/flow/latest.pt    (~214 MB)
+motion-model/runs/vae/latest.pt     (~175 MB)
+motion-model/runs/flow/latest.pt    (~214 MB)
 ```
 
 (They can be re-trained with the scripts in `src/motionlab/train/`, but it takes hours of GPU time.)
@@ -172,7 +171,7 @@ runs simple commands without it.
 ```bash
 # 1) bun (the agent is TypeScript run by bun, not Node)
 sudo pacman -S unzip && curl -fsSL https://bun.sh/install | bash     # CachyOS/Arch; Debian: apt install unzip
-cd hannah-agent && bun install
+cd agent && bun install
 
 # 2) the model — remote either way: READ THE PRIVACY NOTE in README.
 #    Default profile: Claude Sonnet 5 (Anthropic). Key: https://console.anthropic.com
@@ -181,7 +180,7 @@ scripts/install-profile.sh                     # writes ~/.config/hannah-agent/
 #                               https://openrouter.ai/keys — the account needs CREDITS
 #                  --local      Ollama, needs qwen3-coder:30b — does NOT fit next to the rest in 16GB
 
-# 3) tell the backend, in hannah-backend/.env
+# 3) tell the backend, in backend/.env
 AGENT_ENABLED=true
 ANTHROPIC_API_KEY=sk-ant-...          # or OPENROUTER_API_KEY=sk-or-... with --openrouter
 ```
@@ -204,7 +203,7 @@ promises a watch this machine cannot arm. `SENSE_ENABLED=false` in `.env` is an 
 hatch, not a setting.
 
 ```bash
-# hannah-backend/.env
+# backend/.env
 # SENSE_ENABLED=true   # default; false switches the watches off
 # HANNAH_SENSE_TOKEN=   # leave it: ./hannah generates it into the .env (0600) on first start
 ```
@@ -237,12 +236,12 @@ bind = SUPER, H, exec, /path/to/Hannah-Motion/hannah
 **Option B — by hand (to see the logs):**
 
 ```bash
-cd hannah-backend && npm run sidecar:tts     # :8002  (voice — essential)
-cd hannah-backend && npm run sidecar:asr     # :8001  (listening)
-cd hannah-backend && npm run sidecar:sense   # :8007  (the watches)
-cd hannah-motion-lab && .venv/bin/python -m uvicorn serve.main:app --port 8005   # gestures
-cd hannah-backend && npm run dev             # :3001  backend
-cd hannah-frontend && npm run dev            # :5173  UI  → open it in the browser
+cd backend && npm run sidecar:tts     # :8002  (voice — essential)
+cd backend && npm run sidecar:asr     # :8001  (listening)
+cd backend && npm run sidecar:sense   # :8007  (the watches)
+cd motion-model && .venv/bin/python -m uvicorn serve.main:app --port 8005   # gestures
+cd backend && npm run dev             # :3001  backend
+cd frontend && npm run dev            # :5173  UI  → open it in the browser
 ```
 
 **From your phone / another computer on the network:** go to `https://<pc-ip>:5173` (accept the
@@ -300,8 +299,8 @@ setup:
 **The most portable route** is the desktop app, which already has it all solved:
 
 ```bash
-cd hannah-frontend && npm run build          # builds the dist that the app bundles
-cd ../hannah-desktop && npm install && npm start
+cd frontend && npm run build          # builds the dist that the app bundles
+cd ../desktop && npm install && npm start
 ```
 
 Also install `wmctrl` (or `kdotool` on KDE) so Hannah can **move by voice**
@@ -356,7 +355,7 @@ in a modal — that's *best-effort*, not a security barrier.
 If you don't need it, leave it at `false`: Hannah still converses, sees through the camera,
 searches the internet and opens pages.
 
-Don't share your `hannah-backend/.env` or `hannah-backend/data/` either (that's where the API keys
+Don't share your `backend/.env` or `backend/data/` either (that's where the API keys
 and your conversation memory live); they're already gitignored.
 
 ---
@@ -384,7 +383,7 @@ the path in the error ends in `\n`) → the file `node_modules/electron/path.txt
 line break and Electron reads it without trimming it. It happens when the binary was installed by
 hand (postinstall blocked). Fix it with:
 ```bash
-cd hannah-desktop && printf 'electron' > node_modules/electron/path.txt
+cd desktop && printf 'electron' > node_modules/electron/path.txt
 ```
 If the binary is missing as well (`dist/electron` doesn't exist), reinstall allowing the
 postinstall: `npm rebuild electron` or `npm install electron --force`.
@@ -420,7 +419,7 @@ app; `hannah stop`, `hannah doctor`, `hannah uninstall` and `hannah hands on` wo
 Linux-only (it leans on `ss`, `/proc`, `ip` and the X11/Hyprland adapters).
 
 If you would rather do it by hand, this is what the installers do — the **overlay app** is built
-for you ([releases](https://github.com/Vanth-Labs/desktop/releases/latest):
+for you ([releases](https://github.com/Vanth-Labs/hannah/releases/latest):
 `Hannah-<version>-mac-arm64.dmg` (Apple Silicon), `-mac-x64.dmg` (Intel), `-win-x64.exe`), and
 the rest of the stack goes in your user folder:
 
@@ -436,16 +435,16 @@ the rest of the stack goes in your user folder:
   wheel — swap it for `onnxruntime` (`sed 's/onnxruntime-gpu==.*/onnxruntime/' requirements.txt > req-cpu.txt`)
   and run the TTS with `TTS_DEVICE=cpu`. Whisper runs on CPU as is. Expect ~1–2 s per sentence
   for the voice on Apple Silicon.
-- **Gestures on any device**: `hannah-motion-lab` with `requirements-serve.txt` (torch from PyPI on
+- **Gestures on any device**: `motion-model` with `requirements-serve.txt` (torch from PyPI on
   macOS, from the cu128 or cpu index elsewhere) and the weights from the `models` release; the
   server picks CUDA → MPS → CPU by itself.
-- **Run it** (four terminals from `hannah-backend`): `TTS_DEVICE=cpu npm run sidecar:tts`,
-  `npm run sidecar:asr`, `npm run dev`; then `HANNAH_HTTP=1 npm run dev` in `hannah-frontend`
-  and open the overlay app (or `HANNAH_DEV=1 npm start` in `hannah-desktop` to use the dev server).
+- **Run it** (four terminals from `backend`): `TTS_DEVICE=cpu npm run sidecar:tts`,
+  `npm run sidecar:asr`, `npm run dev`; then `HANNAH_HTTP=1 npm run dev` in `frontend`
+  and open the overlay app (or `HANNAH_DEV=1 npm start` in `desktop` to use the dev server).
 - **Unsigned builds - quarantine is only half of it.** macOS quarantines the download and says the
   app "can't be opened": `xattr -dr com.apple.quarantine ~/Applications/Hannah.app` fixes that
   without admin (you own the file). Windows SmartScreen: "More info → Run anyway". An app you build
-  yourself (`npm run build:mac` / `build:win` in `hannah-desktop`) carries no quarantine at all.
+  yourself (`npm run build:mac` / `build:win` in `desktop`) carries no quarantine at all.
 
   **On macOS, clearing the quarantine still does not get you the microphone or the camera.** The
   published DMGs ship with *no code signature at all* - `codesign -dv ~/Applications/Hannah.app`
@@ -502,7 +501,7 @@ the rest of the stack goes in your user folder:
   never opens a shell. It hits every macOS install, Intel and Apple Silicon alike; the whole fix is
   one bit:
   ```bash
-  chmod +x hannah-backend/node_modules/node-pty/prebuilds/darwin-*/spawn-helper
+  chmod +x backend/node_modules/node-pty/prebuilds/darwin-*/spawn-helper
   ```
   Redo it after any `npm install` that rewrites `node_modules`, since npm restores the tarball's
   original mode. `hannah doctor` checks this too, on its `terminal :` line.

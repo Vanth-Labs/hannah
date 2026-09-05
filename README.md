@@ -9,11 +9,11 @@ Whisper, Kokoro, YOLO/VLM). It can also **use the internet** and **a real termin
 
 | Dir | What it is | Language |
 |-----|--------|----------|
-| `hannah-backend/` | WS gateway + REST: orchestrates ASR→LLM→TTS→lip-sync + Python sidecars (Whisper, Kokoro, YOLO/VLM). Tools (internet, terminal), memory, window control. | Node (ESM) |
-| `hannah-frontend/` | React + three.js client: VRoid/VRM avatar, mic, camera, HUD, terminal panel. | React/Vite |
-| `hannah-motion-lab/` | text→motion model (gestures) served on :8005. | Python |
-| `hannah-backend/sidecar/sense/` | **hannah-sense** on :8007: the watches. Keeps looking at a process, a log or a port after the conversation ends and says when it stops. Observes only — it never touches the machine. Off by default (`SENSE_ENABLED`). | Python |
-| `hannah-desktop/` | **Electron desktop app** (universal overlay Win/Mac/Linux). | Electron |
+| `backend/` | WS gateway + REST: orchestrates ASR→LLM→TTS→lip-sync + Python sidecars (Whisper, Kokoro, YOLO/VLM). Tools (internet, terminal), memory, window control. | Node (ESM) |
+| `frontend/` | React + three.js client: VRoid/VRM avatar, mic, camera, HUD, terminal panel. | React/Vite |
+| `motion-model/` | text→motion model (gestures) served on :8005. | Python |
+| `backend/sidecar/sense/` | **hannah-sense** on :8007: the watches. Keeps looking at a process, a log or a port after the conversation ends and says when it stops. Observes only — it never touches the machine. Off by default (`SENSE_ENABLED`). | Python |
+| `desktop/` | **Electron desktop app** (universal overlay Win/Mac/Linux). | Electron |
 | `hannah-site/` | Landing page + Ollama-style installer (live at [vanthlabs.org](https://vanthlabs.org/)). | Static HTML |
 | `hannah` | **Launcher**: brings up the whole stack and opens the overlay (by default, the app). | Bash |
 
@@ -25,7 +25,7 @@ Whisper, Kokoro, YOLO/VLM). It can also **use the internet** and **a real termin
   1. **Browser mode** (`hannah` launcher): opens the frontend in a browser in app-mode
      and places it with the environment's **adapter** (Hyprland via `hyprctl`, X11 via
      `xdotool`/`wmctrl`). Lightweight, nothing extra to install. Linux.
-  2. **Electron app** (`hannah-desktop`): Chromium, overlay with cross-platform APIs
+  2. **Electron app** (`desktop`): Chromium, overlay with cross-platform APIs
      (`setAlwaysOnTop`, `setBounds`, `getCursorScreenPoint`, `getAllDisplays`). **Win/Mac/Linux**.
 
 ## Ports and network
@@ -35,7 +35,7 @@ Whisper, Kokoro, YOLO/VLM). It can also **use the internet** and **a real termin
 | Backend (API + WS) | 3001 | listens on **127.0.0.1** (env `HOST`) |
 | Frontend (Vite) | 5173 | listens on `0.0.0.0` — this is how your phone gets in |
 | ASR · TTS · Vision | 8001 · 8002 · 8003 | local sidecars |
-| Motion (lab, default) | 8005 | `hannah-motion-lab` · EMAGE on 8004 (fallback) |
+| Motion (lab, default) | 8005 | `motion-model` · EMAGE on 8004 (fallback) |
 | Ollama | 11434 | LLM + embeddings |
 | Agent (hannah-agent) | 8006 | **127.0.0.1** · the "hands", off by default (`AGENT_ENABLED`) |
 | Sense (hannah-sense) | 8007 | **127.0.0.1** · the watches, off by default (`SENSE_ENABLED`). Bearer on every route but `/health`; any request carrying an `Origin` is refused |
@@ -57,7 +57,7 @@ protocol, pick the voice per language) and the ASR **already provides that data 
 consumes it. The blocker is the TTS, so the day you plug in a better one, that is the work.
 
 **Memory:** besides the session history, it keeps long-term memory in SQLite
-(`hannah-backend/data/memory.db`) with a rolling summary and vector recall.
+(`backend/data/memory.db`) with a rolling summary and vector recall.
 
 ## Requirements
 
@@ -67,7 +67,7 @@ consumes it. The blocker is the TTS, so the day you plug in a better one, that i
 
 - **Ollama** with `qwen2.5:7b` (chat + tools, ~5GB) and `nomic-embed-text` (memory);
   `llama3.1:8b` works if you don't use tools.
-- Python 3.12 + venvs for the sidecars (details in `hannah-backend/README.md`).
+- Python 3.12 + venvs for the sidecars (details in `backend/README.md`).
 - Node 20+. For the Electron app: nothing extra (it ships Chromium).
 - Overlay on Linux: `hyprctl` (Hyprland) **or** `xdotool`+`wmctrl` (X11).
 
@@ -75,8 +75,8 @@ consumes it. The blocker is the TTS, so the day you plug in a better one, that i
 
 ```bash
 # 1) install (once)
-cd hannah-backend  && npm install && cp .env.example .env
-cd ../hannah-frontend && npm install --legacy-peer-deps   # careful: without the flag it fails (vite 5 vs plugin-basic-ssl)
+cd backend  && npm install && cp .env.example .env
+cd ../frontend && npm install --legacy-peer-deps   # careful: without the flag it fails (vite 5 vs plugin-basic-ssl)
 
 # 2) brings up everything (Ollama, sidecars, backend, Vite) and opens the overlay:
 ./hannah                       # opens the Electron app; if it's already open, it focuses it
@@ -88,8 +88,8 @@ HANNAH_MODE=browser ./hannah   # lightweight alternative: the frontend in a brow
 HANNAH_MODE=services ./hannah  # everything up, NO window: prints https://<this-ip>:5173/?token=… for another device on the LAN
 
 # 2') or the desktop app alone (Win/Mac/Linux), with the backend already running:
-cd hannah-desktop && npm install && npm run start:dev   # uses the Vite on :5173
-cd hannah-frontend && npm run build && cd ../hannah-desktop && npm start   # no Vite, from dist/
+cd desktop && npm install && npm run start:dev   # uses the Vite on :5173
+cd frontend && npm run build && cd ../desktop && npm start   # no Vite, from dist/
 ```
 
 > **Closing the window shuts everything down.** The sidecars and the loaded models hold on to VRAM
@@ -126,18 +126,18 @@ terminal panel echoes every command the hands run and a glimpse of its output.
 > Everything a task touches — file contents, command output, your request — reaches that third party. The `companion` preset and the agent's sensitive-path
 > denylist limit *what* a task can read; they do not change *where* it goes. It is **off by
 > default**; enable it knowingly (`AGENT_ENABLED=true`), or use the agent's local Ollama profile
-> for sensitive work. Details: `hannah-agent/docs/SECURITY.md`.
+> for sensitive work. Details: `agent/docs/SECURITY.md`.
 
 ## Per-repo documentation
 
 | Where | What you'll find |
 |---|---|
-| `hannah-backend/README.md` | WS and REST contracts, the path a turn takes, the deterministic action layer, configuration and design decisions |
-| `hannah-desktop/README.md` | Why XWayland, why the flags go in argv, geometry via the compositor and window behavior |
-| `hannah-frontend/README.md` | VRM avatar, retarget from geometry, state and audio capture |
+| `backend/README.md` | WS and REST contracts, the path a turn takes, the deterministic action layer, configuration and design decisions |
+| `desktop/README.md` | Why XWayland, why the flags go in argv, geometry via the compositor and window behavior |
+| `frontend/README.md` | VRM avatar, retarget from geometry, state and audio capture |
 | `SETUP.md` | Bring everything up on a new machine, step by step |
 | `SKILLS.md` | Teach her capabilities without touching code |
-| `hannah-agent/docs/` | The agent: integration contract (`INTEGRATION.md`), coexistence with the backend's tool layer, security model, decision records |
+| `agent/docs/` | The agent: integration contract (`INTEGRATION.md`), coexistence with the backend's tool layer, security model, decision records |
 
 ## Tools (internet + terminal)
 
@@ -145,7 +145,7 @@ They are **OFF by default**. You turn them on in your `.env` (in the file, not a
 variables):
 
 ```bash
-# hannah-backend/.env
+# backend/.env
 TOOLS_ENABLED=true          # actions (internet, open/close, commands)
 TOOLS_SYSTEM_CONTROL=true   # master flag for the real TERMINAL (pty) — implies shell access
 ```
@@ -157,18 +157,18 @@ TOOLS_SYSTEM_CONTROL=true   # master flag for the real TERMINAL (pty) — implie
   `shutdown`, `git --force`…, `DANGER` regex, best-effort). `TOOLS_SYSTEM_CONTROL` gates
   `run_command`, `terminal`-type skills and the panel alike.
 - **Skills and reference**: you can teach her capabilities without touching code —
-  `hannah-backend/skills/<name>/SKILL.md` (`run`/`terminal`/`open`/`search` action, with
+  `backend/skills/<name>/SKILL.md` (`run`/`terminal`/`open`/`search` action, with
   per-OS variants) and `reference/*.md` (cheat-sheets that guide the model). See `SKILLS.md`.
 
 ## Distribute (per-OS builds)
 
 ```bash
-cd hannah-desktop
+cd desktop
 npm run build:linux   # .AppImage / .deb   (tested: Hannah-*.AppImage runs self-contained)
 npm run build:win     # .exe  — requires Windows or Wine (you can NOT build it from bare Linux)
 npm run build:mac     # .dmg  — requires macOS (impossible from Linux)
 ```
-> Before packaging: `cd hannah-frontend && npm run build` (the Electron loads that `dist/`).
+> Before packaging: `cd frontend && npm run build` (the Electron loads that `dist/`).
 > For the three OSes at once, the practical way is CI (GitHub Actions with native runners).
 > The Electron app is the **overlay**; it still needs the **backend + Ollama + sidecars**
 > running (locally). Packaging the backend as a service is future work.

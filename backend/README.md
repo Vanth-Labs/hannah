@@ -44,7 +44,7 @@ npm run sidecar:sense       # the watches on :8007 (the launcher starts it with 
 So the one you do have to start by hand is the motion lab:
 
 ```bash
-cd ../hannah-motion-lab && .venv/bin/python -m uvicorn serve.main:app --port 8005
+cd ../motion-model && .venv/bin/python -m uvicorn serve.main:app --port 8005
 ```
 
 ### Ports
@@ -500,7 +500,7 @@ shebang broke when the repo changed paths. Keep it that way.
 |---|---|---|
 | `sidecar/tts/kokoro-v1.0.onnx` + `voices-v1.0.bin` | Voice | **Yes**, without them she does not speak |
 | `sidecar/vision/yolov8n.pt` | Object detection | Only with `VISION_PROVIDER=yolo` |
-| `../hannah-motion-lab/runs/*/latest.pt` | Co-speech gestures | Yes, for her to gesture |
+| `../motion-model/runs/*/latest.pt` | Co-speech gestures | Yes, for her to gesture |
 | faster-whisper | Local ASR | Downloads itself on first start |
 
 ---

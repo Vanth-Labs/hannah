@@ -29,7 +29,7 @@
     ],
     "extraResources": [
       {
-        "from": "../hannah-frontend/dist",
+        "from": "../frontend/dist",
         "to": "frontend",
         "filter": [
           "**/*"
@@ -83,5 +83,5 @@
     "name": "pedrochgdev",
     "email": "gabrielchg6@gmail.com"
   },
-  "homepage": "https://hannah-motion-lab.github.io/site/"
+  "homepage": "https://vanthlabs.org"
 }

@@ -1,4 +1,4 @@
-# hannah-frontend
+# frontend
 
 Hannah's client: React + Vite + react-three-fiber. It renders the **VRoid/VRM** avatar, captures
 microphone and camera, and turns whatever arrives from the backend into **voice synced to mouth,
@@ -166,7 +166,7 @@ the browser, absolute in Electron): **every `fetch` has to use it**.
   (FBX Binary, Without Skin, 30fps) and bake with `node scripts/bake_mixamo.mjs` → it regenerates
   `public/animations/baked/*.json` (those do get committed).
 - `public/smplx_avatar.glb` — for debugging only, and no longer rendered. It is regenerated with
-  `hannah-backend/sidecar/motion/build_avatar.py` if it is ever needed.
+  `backend/sidecar/motion/build_avatar.py` if it is ever needed.
 
-See also `../README.md` (workspace map) and `../hannah-backend/README.md` (the other side of the
+See also `../README.md` (workspace map) and `../backend/README.md` (the other side of the
 WebSocket).

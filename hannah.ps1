@@ -8,9 +8,9 @@ param([string]$Command = 'up', [string]$Arg = '', [switch]$KeepOllama, [switch]$
 $ErrorActionPreference = 'Continue'
 $Root = $PSScriptRoot
 $Tools = Join-Path $Root '.tools'
-$Back = Join-Path $Root 'hannah-backend'
-$Agent = Join-Path $Root 'hannah-agent'
-$Lab = Join-Path $Root 'hannah-motion-lab'
+$Back = Join-Path $Root 'backend'; if (-not (Test-Path $Back)) { $Back = Join-Path $Root 'hannah-backend' }
+$Agent = Join-Path $Root 'agent'; if (-not (Test-Path $Agent)) { $Agent = Join-Path $Root 'hannah-agent' }
+$Lab = Join-Path $Root 'motion-model'; if (-not (Test-Path $Lab)) { $Lab = Join-Path $Root 'hannah-motion-lab' }
 function Find-HannahExe {
   $default = Join-Path $env:LOCALAPPDATA 'Programs\Hannah\Hannah.exe'
   if (Test-Path $default) { return $default }

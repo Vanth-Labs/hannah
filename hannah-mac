@@ -12,9 +12,9 @@ set -u
 # `readlink -f`; a symlink target may be relative to the link's own folder).
 self="$0"; while [ -L "$self" ]; do t="$(readlink "$self")"; case "$t" in /*) self="$t" ;; *) self="$(dirname "$self")/$t" ;; esac; done
 ROOT="$(cd "$(dirname "$self")" && pwd)"
-BACK="$ROOT/hannah-backend"
-AGENT="$ROOT/hannah-agent"
-LAB="$ROOT/hannah-motion-lab"
+BACK="$ROOT/backend"; [ -d "$BACK" ] || BACK="$ROOT/hannah-backend"
+AGENT="$ROOT/agent"; [ -d "$AGENT" ] || AGENT="$ROOT/hannah-agent"
+LAB="$ROOT/motion-model"; [ -d "$LAB" ] || LAB="$ROOT/hannah-motion-lab"
 APP="${HANNAH_APP:-$HOME/Applications/Hannah.app}"
 LOG="$ROOT/.hannah-launch.log"
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:$ROOT/.tools/node/bin:$PATH"

@@ -1,9 +1,9 @@
-# Sub-proyectos (son sus propios repos)
-hannah-backend/
-hannah-frontend/
+# Repos hermanos que viven dentro de esta carpeta cuando Hannah esta instalada (no son parte de este repo)
+motion-model/
+agent/
 hannah-motion-lab/
-hannah-desktop/
 hannah-agent/
+site/
 hannah-site/
 # venv del motion sidecar
 .venv/
