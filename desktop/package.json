@@ -1,0 +1,87 @@
+{
+  "name": "hannah-desktop",
+  "version": "1.0.16",
+  "description": "Hannah — overlay de escritorio universal (Electron: Windows/Mac/Linux)",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node scripts/run.js",
+    "start:dev": "node scripts/run.js --dev",
+    "build:linux": "electron-builder --linux AppImage deb",
+    "build:win": "electron-builder --win nsis",
+    "build:mac": "electron-builder --mac dmg",
+    "lint": "eslint main.js preload.js scripts/run.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "eslint": "^10.8.1",
+    "globals": "^17.11.0"
+  },
+  "build": {
+    "appId": "ai.hannah.desktop",
+    "productName": "Hannah",
+    "artifactName": "Hannah-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
+    "extraResources": [
+      {
+        "from": "../hannah-frontend/dist",
+        "to": "frontend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "executableArgs": [
+        "--no-sandbox",
+        "--in-process-gpu",
+        "--ozone-platform=x11"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities",
+      "identity": "-",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Hannah listens when you talk to her.",
+        "NSCameraUsageDescription": "Hannah looks through the camera when you ask her to."
+      }
+    },
+    "afterSign": "build/sign-mac.js"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  },
+  "author": {
+    "name": "pedrochgdev",
+    "email": "gabrielchg6@gmail.com"
+  },
+  "homepage": "https://hannah-motion-lab.github.io/site/"
+}
