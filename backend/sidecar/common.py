@@ -25,11 +25,12 @@ def preload_cuda_libs() -> int:
     instaladas en el sistema; el venv de la raíz del workspace sí las trae. Se cargan con
     RTLD_GLOBAL ANTES de crear el modelo. Devuelve cuántas librerías cargó.
     """
-    # Donde puede haber un torch con CUDA: el venv raiz del workspace (EMAGE, solo en desarrollo)
-    # y el del modelo de gestos (hannah-motion-lab, lo crea el instalador; en un checkout de
-    # desarrollo se llama motion-model). Se usa el primero que tenga las librerias.
-    root = Path(__file__).resolve().parents[2]
-    candidates = [root / ".venv", root / "hannah-motion-lab" / ".venv", root / "motion-model" / ".venv"]
+    # Donde puede haber un torch con CUDA: el venv del sidecar de gestos (sidecar/gestures, lo
+    # crea el instalador), el venv raiz del workspace (EMAGE, solo en desarrollo) y los nombres
+    # del layout viejo (hannah-motion-lab / motion-model junto al backend). El primero con librerias gana.
+    here = Path(__file__).resolve().parent          # backend/sidecar
+    root = here.parents[1]                          # la carpeta que contiene backend/
+    candidates = [here / "gestures" / ".venv", root / ".venv", root / "hannah-motion-lab" / ".venv", root / "motion-model" / ".venv"]
     libs = []
     for venv in candidates:
         for pkg in _CUDA_PKGS:
