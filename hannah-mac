@@ -14,7 +14,7 @@ self="$0"; while [ -L "$self" ]; do t="$(readlink "$self")"; case "$t" in /*) se
 ROOT="$(cd "$(dirname "$self")" && pwd)"
 BACK="$ROOT/backend"; [ -d "$BACK" ] || BACK="$ROOT/hannah-backend"
 AGENT="$ROOT/agent"; [ -d "$AGENT" ] || AGENT="$ROOT/hannah-agent"
-LAB="$ROOT/motion-model"; [ -d "$LAB" ] || LAB="$ROOT/hannah-motion-lab"
+LAB="$BACK/sidecar/gestures"   # the gesture model, installed as a package; weights in runs/
 APP="${HANNAH_APP:-$HOME/Applications/Hannah.app}"
 LOG="$ROOT/.hannah-launch.log"
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:$ROOT/.tools/node/bin:$PATH"
@@ -211,7 +211,7 @@ PY="$BACK/sidecar/.venv/bin/python"
 up 8002 || ( cd "$BACK/sidecar/tts" && TTS_DEVICE=cpu nohup "$PY" -m uvicorn main:app --port 8002 >>"$LOG" 2>&1 & )
 up 8001 || ( cd "$BACK/sidecar/asr" && ASR_DEVICE=cpu nohup "$PY" -m uvicorn main:app --port 8001 >>"$LOG" 2>&1 & )
 # gestures: Apple's GPU (MPS) if there is one, else the CPU - never skipped
-up 8005 || ( cd "$LAB" && [ -x .venv/bin/python ] && MOTION_DEVICE=auto PYTHONPATH="$LAB/src" nohup .venv/bin/python -m uvicorn serve.main:app --port 8005 >>"$LOG" 2>&1 & )
+up 8005 || ( cd "$LAB" && [ -x .venv/bin/python ] && MOTION_DEVICE=auto MOTIONLAB_RUNS="$LAB/runs" nohup .venv/bin/python -m motionlab.serve --port 8005 >>"$LOG" 2>&1 & )
 # the watches, before the backend so its capability probe finds them
 if sense_on && [ -x "$BACK/sidecar/sense/.venv/bin/python" ]; then
   up 8007 || ( cd "$BACK/sidecar/sense" && export HANNAH_SENSE_TOKEN="$(sense_token)" SENSE_MAX_WATCHES="$(envval SENSE_MAX_WATCHES)" SENSE_MIN_PERIOD_MS="$(envval SENSE_MIN_PERIOD_MS)" SENSE_DEBOUNCE_N="$(envval SENSE_DEBOUNCE_N)" SENSE_BLIND_MS="$(envval SENSE_BLIND_MS)" && nohup .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8007 >>"$LOG" 2>&1 & )

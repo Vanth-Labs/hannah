@@ -1,0 +1,9 @@
+# Gesture sidecar (:8005): Hannah's own text -> motion model, installed as a package.
+# The code lives in Vanth-Labs/motion-model (pinned to a tag: a new commit there never changes an
+# install by itself); the weights go in ./runs (vae/latest.pt, flow/latest.pt) from that repo's
+# `models` release. torch is installed FIRST, on its own, from the index that fits the machine:
+#   NVIDIA (any OS):        --index-url https://download.pytorch.org/whl/cu128   (RTX 50xx needs cu128)
+#   macOS:                  plain PyPI (MPS / CPU build)
+#   CPU-only Linux/Windows: --index-url https://download.pytorch.org/whl/cpu
+torch
+motionlab[serve] @ git+https://github.com/Vanth-Labs/motion-model.git@v0.1.0

@@ -11,7 +11,7 @@ Whisper, Kokoro, YOLO/VLM). It can also **use the internet** and **a real termin
 |-----|--------|----------|
 | `backend/` | WS gateway + REST: orchestrates ASR→LLM→TTS→lip-sync + Python sidecars (Whisper, Kokoro, YOLO/VLM). Tools (internet, terminal), memory, window control. | Node (ESM) |
 | `frontend/` | React + three.js client: VRoid/VRM avatar, mic, camera, HUD, terminal panel. | React/Vite |
-| `motion-model/` | text→motion model (gestures) served on :8005. | Python |
+| `backend/sidecar/gestures/` | the text→motion model (gestures) on :8005: [Vanth-Labs/motion-model](https://github.com/Vanth-Labs/motion-model) installed as a package into a venv, plus its weights. | Python |
 | `backend/sidecar/sense/` | **hannah-sense** on :8007: the watches. Keeps looking at a process, a log or a port after the conversation ends and says when it stops. Observes only — it never touches the machine. Off by default (`SENSE_ENABLED`). | Python |
 | `desktop/` | **Electron desktop app** (universal overlay Win/Mac/Linux). | Electron |
 | `hannah-site/` | Landing page + Ollama-style installer (live at [vanthlabs.org](https://vanthlabs.org/)). | Static HTML |
@@ -35,7 +35,7 @@ Whisper, Kokoro, YOLO/VLM). It can also **use the internet** and **a real termin
 | Backend (API + WS) | 3001 | listens on **127.0.0.1** (env `HOST`) |
 | Frontend (Vite) | 5173 | listens on `0.0.0.0` — this is how your phone gets in |
 | ASR · TTS · Vision | 8001 · 8002 · 8003 | local sidecars |
-| Motion (lab, default) | 8005 | `motion-model` · EMAGE on 8004 (fallback) |
+| Motion (lab, default) | 8005 | `backend/sidecar/gestures` · EMAGE on 8004 (fallback) |
 | Ollama | 11434 | LLM + embeddings |
 | Agent (hannah-agent) | 8006 | **127.0.0.1** · the "hands", off by default (`AGENT_ENABLED`) |
 | Sense (hannah-sense) | 8007 | **127.0.0.1** · the watches, off by default (`SENSE_ENABLED`). Bearer on every route but `/health`; any request carrying an `Origin` is refused |

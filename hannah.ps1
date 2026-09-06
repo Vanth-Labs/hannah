@@ -10,7 +10,7 @@ $Root = $PSScriptRoot
 $Tools = Join-Path $Root '.tools'
 $Back = Join-Path $Root 'backend'; if (-not (Test-Path $Back)) { $Back = Join-Path $Root 'hannah-backend' }
 $Agent = Join-Path $Root 'agent'; if (-not (Test-Path $Agent)) { $Agent = Join-Path $Root 'hannah-agent' }
-$Lab = Join-Path $Root 'motion-model'; if (-not (Test-Path $Lab)) { $Lab = Join-Path $Root 'hannah-motion-lab' }
+$Lab = Join-Path $Back 'sidecar\gestures'   # the gesture model, installed as a package; weights in runs\
 function Find-HannahExe {
   $default = Join-Path $env:LOCALAPPDATA 'Programs\Hannah\Hannah.exe'
   if (Test-Path $default) { return $default }
@@ -199,7 +199,7 @@ if (-not (Up 8002)) { StartBg 'tts' (Join-Path $Back 'sidecar\tts') $py '-m uvic
 if (-not (Up 8001)) { StartBg 'asr' (Join-Path $Back 'sidecar\asr') $py '-m uvicorn main:app --port 8001' @{ ASR_DEVICE = 'cpu' } }
 # gestures: the NVIDIA card if there is one, else the CPU , never skipped
 $mpy = Join-Path $Lab '.venv\Scripts\python.exe'
-if (-not (Up 8005) -and (Test-Path $mpy)) { StartBg 'motion' $Lab $mpy '-m uvicorn serve.main:app --port 8005' @{ MOTION_DEVICE = 'auto'; PYTHONPATH = (Join-Path $Lab 'src') } }
+if (-not (Up 8005) -and (Test-Path $mpy)) { StartBg 'motion' $Lab $mpy '-m motionlab.serve --port 8005' @{ MOTION_DEVICE = 'auto'; MOTIONLAB_RUNS = (Join-Path $Lab 'runs') } }
 # the watches, before the backend so its capability probe finds them
 $spy = Join-Path $Back 'sidecar\sense\.venv\Scripts\python.exe'
 if ((SenseOn) -and (Test-Path $spy) -and -not (Up 8007)) { StartBg 'sense' (Join-Path $Back 'sidecar\sense') $spy '-m uvicorn main:app --host 127.0.0.1 --port 8007' @{ HANNAH_SENSE_TOKEN = (SenseToken); SENSE_MAX_WATCHES = (EnvVal 'SENSE_MAX_WATCHES'); SENSE_MIN_PERIOD_MS = (EnvVal 'SENSE_MIN_PERIOD_MS'); SENSE_DEBOUNCE_N = (EnvVal 'SENSE_DEBOUNCE_N'); SENSE_BLIND_MS = (EnvVal 'SENSE_BLIND_MS') } }

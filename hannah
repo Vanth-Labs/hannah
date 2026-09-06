@@ -16,11 +16,11 @@ ROOT="$(cd "$(dirname "$SELF")" && pwd)"
 # primero en el PATH, el del sistema no se toca.
 [ -x "$ROOT/.tools/node/bin/node" ] && export PATH="$ROOT/.tools/node/bin:$PATH"
 # Cada repo hermano tiene DOS nombres y puede estar en DOS sitios, y hay que probar los cuatro:
-#   - nombre: el repo trae backend/, frontend/, desktop/; el instalador clona motion-model/ y agent/ al lado; un
-#     checkout de desarrollo conserva los de upstream (backend/, frontend/, motion-model/…).
+#   - nombre: el repo trae backend/, frontend/, desktop/; el agente lo clona `hannah hands on` al lado; un
+#     checkout de desarrollo conserva los nombres viejos (hannah-backend/, hannah-frontend/…).
 #   - sitio: instalado, los hermanos quedan JUNTO a este script; en desarrollo el launcher vive
 #     dentro de workspace/, o sea un nivel por DEBAJO de ellos.
-# Gana el primero que exista. Sin esto, en un checkout de desarrollo BACK/FRONT/LAB/DESK/AGENT
+# Gana el primero que exista. Sin esto, en un checkout de desarrollo BACK/FRONT/DESK/AGENT
 # apuntaban todos a carpetas inexistentes: cada `cd "$BACK"` fallaba y el servicio no arrancaba
 # sin decir por qué. `cd -P` porque la ruta se compara luego contra /proc/<pid>/cwd, que viene
 # con los symlinks ya resueltos.
@@ -35,7 +35,8 @@ sibling() {   # sibling <instalado> <dev> [optional]: con "optional" no avisa si
 }
 BACK="$(sibling backend hannah-backend)"
 FRONT="$(sibling frontend hannah-frontend optional)"   # opcional: el AppImage lleva su frontend
-LAB="$(sibling motion-model hannah-motion-lab)"
+# los gestos: un sidecar del backend (venv + pesos en runs/); el modelo se instala como paquete, no se clona
+LAB="$BACK/sidecar/gestures"
 LOG="$ROOT/.hannah-launch.log"
 PROFILE="${HANNAH_PROFILE:-$HOME/.hannah-browser}"     # perfil Firefox/Zen (Gecko)
 MONITOR="${HANNAH_MONITOR:-}"                            # vacío = autodetectar el enfocado
@@ -224,7 +225,7 @@ doctor() {
   echo
   printf '  repos      :'
   local r n d
-  for r in "backend:$BACK" "frontend:$FRONT" "motion:$LAB" "desktop:$DESK" "agent:$AGENT"; do
+  for r in "backend:$BACK" "frontend:$FRONT" "desktop:$DESK" "agent:$AGENT"; do
     n="${r%%:*}"; d="${r#*:}"
     if [ -d "$d" ]; then printf ' %s✓' "$n"
     elif [ "$n" = frontend ] && ! needs_vite; then printf ' frontend–'
@@ -336,7 +337,7 @@ esac
 # viejo no reconocía ni uno: `hannah stop` los daba por AJENOS y no apagaba nada. Se listan los
 # repos uno a uno en vez de subir a $ROOT/..: el padre puede ser $HOME, y ensanchar ahí el radio
 # de la matanza es justo lo que is_safe_target/argv0_in_project existen para impedir.
-PROJECT_DIRS=("$ROOT" "$BACK" "$FRONT" "$LAB" "$DESK" "$AGENT")
+PROJECT_DIRS=("$ROOT" "$BACK" "$FRONT" "$DESK" "$AGENT")
 in_project() {
   local p="$1" d
   for d in "${PROJECT_DIRS[@]}"; do case "$p" in "$d"|"$d"/*) return 0 ;; esac; done
@@ -683,10 +684,10 @@ _drift="$(catalog_check)"
 has ollama && ! pgrep -x ollama >/dev/null 2>&1 && { nohup ollama serve >>"$LOG" 2>&1 & } 9>&-
 up 8002 || ( cd "$BACK" && nohup npm run sidecar:tts >>"$LOG" 2>&1 & ) 9>&-
 up 8001 || ( cd "$BACK" && nohup npm run sidecar:asr >>"$LOG" 2>&1 & ) 9>&-
-# gestos: CUDA si hay, si no CPU (MOTION_DEVICE=auto); PYTHONPATH por si el venv no tiene el paquete editable
+# gestos: CUDA si hay, si no CPU (MOTION_DEVICE=auto); los pesos en $LAB/runs
 # `exec`: sin el, bash deja un envoltorio vivo (por las asignaciones delante del comando no hace
 # el exec implicito) que al morir el hijo en `hannah stop` imprime "Terminated ..." en la terminal.
-up 8005 || ( cd "$LAB"  && MOTION_DEVICE="${MOTION_DEVICE:-auto}" PYTHONPATH="$LAB/src" exec nohup .venv/bin/python -m uvicorn serve.main:app --port 8005 >>"$LOG" 2>&1 & ) 9>&-
+up 8005 || ( cd "$LAB"  && MOTION_DEVICE="${MOTION_DEVICE:-auto}" MOTIONLAB_RUNS="$LAB/runs" exec nohup .venv/bin/python -m motionlab.serve --port 8005 >>"$LOG" 2>&1 & ) 9>&-
 # Las "manos" (hannah-agent, :8006): SOLO si AGENT_ENABLED=true en el .env del backend. Se
 # arranca ANTES que el backend para que su health-check inicial lo encuentre vivo.
 if agent_on; then

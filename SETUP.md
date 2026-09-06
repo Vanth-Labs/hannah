@@ -11,8 +11,8 @@ are `pacman`; on other distros change only that part).
 
 ## 0. Expected structure
 
-Everything lives under one folder: this repo, plus the gesture model (its own repo) cloned
-beside the code. The folder names matter: the launcher and the venvs assume them.
+Everything lives under one folder: this repo. The folder names matter: the launcher and the
+venvs assume them.
 
 ```
 hannah/                   ← this repo
@@ -20,14 +20,13 @@ hannah/                   ← this repo
 ├── backend/              ← WS gateway, REST, sidecars
 ├── frontend/             ← the avatar (React + three.js)
 ├── desktop/              ← the Electron overlay
-├── motion-model/         ← repo Vanth-Labs/motion-model, cloned here (optional but recommended)
+├── backend/sidecar/gestures/ ← the gesture model as an installed package + its weights (optional but recommended)
 ├── agent/                ← repo Vanth-Labs/agent, cloned by `hannah hands on` (optional)
 └── .venv/                ← EMAGE sidecar venv (only if you use MOTION_PROVIDER=emage)
 ```
 
 ```bash
 git clone https://github.com/Vanth-Labs/hannah.git && cd hannah
-git clone https://github.com/Vanth-Labs/motion-model.git motion-model
 ```
 
 ---
@@ -142,24 +141,28 @@ The avatar (`public/avatar.glb`) and the gesture clips already ship in the repo.
 
 ## 5. Gesture model (so she moves while speaking)
 
+The model is its own project, [Vanth-Labs/motion-model](https://github.com/Vanth-Labs/motion-model)
+(training, evaluation, research). Hannah only needs the inference package, installed into the
+sidecar's venv, pinned to a tag:
+
 ```bash
-cd motion-model
+cd backend/sidecar/gestures
 uv venv .venv --python 3.12
-uv pip install -r requirements.txt
+uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cu128   # NVIDIA; see requirements.txt for CPU / macOS
+uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
-**The trained weights are NOT in git** (`runs/` is gitignored). Without them the motion sidecar
-doesn't start and Hannah speaks **without co-speech gestures** (everything else works normally).
-
-You need these two files, copied from the machine where it was trained:
+**The trained weights are NOT in git.** Without them the sidecar doesn't start and Hannah speaks
+**without co-speech gestures** (everything else works normally). Download them from the
+[`models` release](https://github.com/Vanth-Labs/motion-model/releases/tag/models) into:
 
 ```
-motion-model/runs/vae/latest.pt     (~175 MB)
-motion-model/runs/flow/latest.pt    (~214 MB)
+backend/sidecar/gestures/runs/vae/latest.pt     (~175 MB)
+backend/sidecar/gestures/runs/flow/latest.pt    (~214 MB)
 ```
 
-(They can be re-trained with the scripts in `src/motionlab/train/`, but it takes hours of GPU time.)
-The paths can be changed with the `VAE_CKPT` / `FLOW_CKPT` env vars.
+(`MOTIONLAB_RUNS` points elsewhere if you keep them somewhere else; `VAE_CKPT` / `FLOW_CKPT`
+override each file. Re-training is documented in the motion-model repo and takes hours of GPU time.)
 
 ---
 
@@ -239,7 +242,7 @@ bind = SUPER, H, exec, /path/to/Hannah-Motion/hannah
 cd backend && npm run sidecar:tts     # :8002  (voice — essential)
 cd backend && npm run sidecar:asr     # :8001  (listening)
 cd backend && npm run sidecar:sense   # :8007  (the watches)
-cd motion-model && .venv/bin/python -m uvicorn serve.main:app --port 8005   # gestures
+cd backend && npm run sidecar:gestures  # :8005  gestures
 cd backend && npm run dev             # :3001  backend
 cd frontend && npm run dev            # :5173  UI  → open it in the browser
 ```
@@ -435,7 +438,7 @@ the rest of the stack goes in your user folder:
   wheel — swap it for `onnxruntime` (`sed 's/onnxruntime-gpu==.*/onnxruntime/' requirements.txt > req-cpu.txt`)
   and run the TTS with `TTS_DEVICE=cpu`. Whisper runs on CPU as is. Expect ~1–2 s per sentence
   for the voice on Apple Silicon.
-- **Gestures on any device**: `motion-model` with `requirements-serve.txt` (torch from PyPI on
+- **Gestures on any device**: `backend/sidecar/gestures` (torch from PyPI on
   macOS, from the cu128 or cpu index elsewhere) and the weights from the `models` release; the
   server picks CUDA → MPS → CPU by itself.
 - **Run it** (four terminals from `backend`): `TTS_DEVICE=cpu npm run sidecar:tts`,

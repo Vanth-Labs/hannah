@@ -14,6 +14,7 @@
     "test:sense": "cd sidecar/sense && .venv/bin/python -m pytest tests -q",
     "sidecar:asr": "cd sidecar/asr && ../.venv/bin/python -m uvicorn main:app --port 8001 --reload",
     "sidecar:tts": "cd sidecar/tts && ../.venv/bin/python -m uvicorn main:app --port 8002 --reload",
+    "sidecar:gestures": "cd sidecar/gestures && MOTIONLAB_RUNS=runs MOTION_DEVICE=${MOTION_DEVICE:-auto} .venv/bin/python -m motionlab.serve --port 8005",
     "sidecar:vision": "cd sidecar/vision && ../.venv/bin/python -m uvicorn main:app --port 8003 --reload",
     "sidecar:motion": "cd sidecar/motion && ../../../.venv/bin/python -m uvicorn main:app --port 8004",
     "sidecar:sense": "cd sidecar/sense && .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8007",
