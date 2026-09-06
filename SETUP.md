@@ -152,17 +152,15 @@ uv pip install --python .venv/bin/python torch --index-url https://download.pyto
 uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
-**The trained weights are NOT in git.** Without them the sidecar doesn't start and Hannah speaks
-**without co-speech gestures** (everything else works normally). Download them from the
-[`models` release](https://github.com/Vanth-Labs/motion-model/releases/tag/models) into:
-
-```
-backend/sidecar/gestures/runs/vae/latest.pt     (~175 MB)
-backend/sidecar/gestures/runs/flow/latest.pt    (~214 MB)
-```
+**The trained weights are NOT in git.** They live on the Hub,
+[huggingface.co/Vanth-Labs/hannah-motion](https://huggingface.co/Vanth-Labs/hannah-motion), and the
+sidecar downloads them into `backend/sidecar/gestures/runs/` the first time it starts (or now, with
+`.venv/bin/python -m motionlab.serve --download-only`; ~390 MB). Without them Hannah speaks
+**without co-speech gestures**; everything else works normally.
 
 (`MOTIONLAB_RUNS` points elsewhere if you keep them somewhere else; `VAE_CKPT` / `FLOW_CKPT`
-override each file. Re-training is documented in the motion-model repo and takes hours of GPU time.)
+override each file; `MOTIONLAB_HF_REVISION` pins the revision. Re-training is documented in the
+motion-model repo and takes hours of GPU time.)
 
 ---
 
@@ -439,7 +437,7 @@ the rest of the stack goes in your user folder:
   and run the TTS with `TTS_DEVICE=cpu`. Whisper runs on CPU as is. Expect ~1–2 s per sentence
   for the voice on Apple Silicon.
 - **Gestures on any device**: `backend/sidecar/gestures` (torch from PyPI on
-  macOS, from the cu128 or cpu index elsewhere) and the weights from the `models` release; the
+  macOS, from the cu128 or cpu index elsewhere) and the weights from the Hub; the
   server picks CUDA → MPS → CPU by itself.
 - **Run it** (four terminals from `backend`): `TTS_DEVICE=cpu npm run sidecar:tts`,
   `npm run sidecar:asr`, `npm run dev`; then `HANNAH_HTTP=1 npm run dev` in `frontend`

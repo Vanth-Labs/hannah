@@ -11,7 +11,7 @@ Whisper, Kokoro, YOLO/VLM). It can also **use the internet** and **a real termin
 |-----|--------|----------|
 | `backend/` | WS gateway + REST: orchestrates ASR→LLM→TTS→lip-sync + Python sidecars (Whisper, Kokoro, YOLO/VLM). Tools (internet, terminal), memory, window control. | Node (ESM) |
 | `frontend/` | React + three.js client: VRoid/VRM avatar, mic, camera, HUD, terminal panel. | React/Vite |
-| `backend/sidecar/gestures/` | the text→motion model (gestures) on :8005: [Vanth-Labs/motion-model](https://github.com/Vanth-Labs/motion-model) installed as a package into a venv, plus its weights. | Python |
+| `backend/sidecar/gestures/` | the text→motion model (gestures) on :8005: [Vanth-Labs/motion-model](https://github.com/Vanth-Labs/motion-model) installed as a package into a venv; weights from [huggingface.co/Vanth-Labs/hannah-motion](https://huggingface.co/Vanth-Labs/hannah-motion). | Python |
 | `backend/sidecar/sense/` | **hannah-sense** on :8007: the watches. Keeps looking at a process, a log or a port after the conversation ends and says when it stops. Observes only — it never touches the machine. Off by default (`SENSE_ENABLED`). | Python |
 | `desktop/` | **Electron desktop app** (universal overlay Win/Mac/Linux). | Electron |
 | `hannah-site/` | Landing page + Ollama-style installer (live at [vanthlabs.org](https://vanthlabs.org/)). | Static HTML |
